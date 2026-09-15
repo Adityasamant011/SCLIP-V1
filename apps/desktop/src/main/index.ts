@@ -1057,7 +1057,75 @@ app.whenReady().then(async () => {
   const { callClipComputeTool, readMediaFrameDataUrl, readMediaDescription } = await import('./mcp/server.js')
   const { AUDIO_FX_CHANNELS, CLIP_COMPUTE_CHANNELS } = await import('./state/router.js')
 
+  const { MCP_TOOL_DEFS } = await import('./state/mcp-commands.js')
+  const { MOTIF_TOOL_DEFS } = await import('./mcp/motifToolDefs.js')
+  const { SclipSessionStore } = await import('./sclip/sessionStore.js')
+  const {
+    configureHermesBridge,
+    getHermesStatus,
+    listProjectSessions,
+    createProjectSession,
+    activateProjectSession,
+    renameProjectSession,
+    archiveProjectSession,
+    startHermesRun,
+    stopHermesRun,
+    approveHermesRun,
+    getHermesRun,
+  } = await import('./sclip/hermesBridge.js')
+  // The gateway key is an app credential: it belongs in Electron safeStorage,
+  // never in a project document, renderer state, or a Hermes config checked in
+  // alongside source. The gateway itself is an optional sidecar for now, so a
+  // missing key results in an honest disconnected state rather than a fake run.
+  const SCLIP_GATEWAY_KEY_TAG = 'sclip_hermes_gateway'
+  configureHermesBridge({
+    gatewayUrl: process.env.SCLIP_HERMES_GATEWAY_URL ?? 'http://127.0.0.1:8642',
+    getGatewayToken: () => loadAllKeys()[SCLIP_GATEWAY_KEY_TAG] ?? '',
+    getMcpStatus: () => {
+      const info = mcpHost.getInfo()
+      return {
+        port: Number(new URL(info.url).port),
+        // Tools and resources are distinct MCP capabilities. The native catalog
+        // snapshot has 9 resources; the TS-owned Motif surface contributes one.
+        tools: MCP_TOOL_DEFS.length + MOTIF_TOOL_DEFS.length,
+        resources: 10,
+      }
+    },
+    sessions: new SclipSessionStore(path.join(app.getPath('userData'), 'sclip_hermes_sessions.json')),
+  })
+
   ipcMain.handle('backend:invoke', async (_e, { channel, args }) => {
+    if (channel === 'sclip_get_hermes_status') return getHermesStatus()
+    if (channel === 'sclip_start_hermes_run') return startHermesRun(args as { prompt: string; projectId: string; sessionId: string })
+    if (channel === 'sclip_stop_hermes_run') {
+      const { runId } = (args ?? {}) as { runId: string }
+      return stopHermesRun(runId)
+    }
+    if (channel === 'sclip_approve_hermes_run') {
+      const { runId, choice } = (args ?? {}) as { runId: string; choice: 'once' | 'session' | 'always' | 'deny' }
+      return approveHermesRun(runId, choice)
+    }
+    if (channel === 'sclip_get_run_status') {
+      const { runId } = (args ?? {}) as { runId: string }
+      return getHermesRun(runId)
+    }
+    if (channel === 'sclip_list_project_sessions') return listProjectSessions((args as { projectId: string }).projectId)
+    if (channel === 'sclip_create_project_session') {
+      const { projectId, name } = args as { projectId: string; name: string }
+      return createProjectSession(projectId, name)
+    }
+    if (channel === 'sclip_activate_project_session') {
+      const { projectId, sessionId } = args as { projectId: string; sessionId: string }
+      return activateProjectSession(projectId, sessionId)
+    }
+    if (channel === 'sclip_rename_project_session') {
+      const { projectId, sessionId, name } = args as { projectId: string; sessionId: string; name: string }
+      return renameProjectSession(projectId, sessionId, name)
+    }
+    if (channel === 'sclip_archive_project_session') {
+      const { projectId, sessionId } = args as { projectId: string; sessionId: string }
+      return archiveProjectSession(projectId, sessionId)
+    }
     if (channel === 'agent_connections') return mcpHost.connectionSnapshot()
     if (channel === 'agent_activity_snapshot' || channel === 'agent_session_get' || channel === 'agent_unlock_history') {
       return tsHost!.handleInvoke(channel, args ?? {})

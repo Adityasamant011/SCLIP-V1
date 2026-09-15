@@ -49,6 +49,15 @@ Desktop.ini
 .env.*.local
 *.pem
 *.key
+**/api_key.txt
+**/mcp_auth.json
+**/gateway.pid
+**/gateway.lock
+**/state.db*
+**/response_store.db*
+**/kanban.db*
+hermes/
+sclip-hermes/
 
 # Logs
 *.log
@@ -73,3 +82,6 @@ apps/desktop/e2e/bench-results/
 
 # Local spec-related docs
 .scratch/
+
+# Sclip runtime/session state (Electron userData only, never project source)
+sclip_hermes_sessions.json
