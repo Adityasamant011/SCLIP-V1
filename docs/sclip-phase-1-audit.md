@@ -36,14 +36,70 @@ count. Hermes built-in/imported counts were not measured because the Hermes
 gateway was not running during this audit; do not claim a total model-visible
 count until querying a live registry.
 
-## Current limitation
+## Phase 1 remediation completed
 
-The repository does not package or start Hermes. The revised UI honestly shows
-the service as offline until a configured gateway is available, and it expects
-the gateway credential in Electron safeStorage under `sclip_hermes_gateway`.
-It intentionally does not read the old plaintext profile key. Sidecar
-provisioning, secure profile migration, dynamic WeftCut MCP registration, and
-live end-to-end validation remain required before Phase 1 can be marked ready.
+- The repository now has a reviewable baseline at upstream WeftCut
+  `9283c8bea952debd2fa8f0e0b51ba4b429e37c78`; Sclip work lives on
+  `sclip/phase1` in discrete commits.
+- `HermesRuntime` owns one child gateway. It resolves a packaged binary or an
+  explicit development override, creates an app-userData-only profile, chooses
+  a non-fixed loopback port, waits for `/health`, reports crash/failure state,
+  restarts after WeftCut MCP bearer rotation, and terminates its owned child at
+  Electron shutdown. It never uses a developer home-directory path.
+- The generated profile contains only `${SCLIP_MCP_URL}` and
+  `${SCLIP_MCP_TOKEN}` references. The exact live WeftCut MCP URL/token and
+  gateway credential are passed only in the child environment. Provider keys
+  are read from Electron safeStorage and never copied into the profile.
+- Hermes refuses to start when OS-backed Electron safeStorage is unavailable;
+  it does not fall back to plaintext storage. The UI now gives a visible
+  disconnected reason.
+- The project-bound session mapping remains metadata-only. The right panel has
+  session-isolated Chat, API transcript Terminal, and structured Activity views.
+  Hermes Gateway does not expose a faithful interactive CLI stdin protocol, so
+  a PTY/xterm was deliberately not introduced; all editor control remains MCP.
+
+## Verified local development environment
+
+The pinned source successfully built with Node 24, the Rust toolchain plus the
+`wasm32-unknown-unknown` target, macOS Clang/Xcode command-line tools, and the
+project's generated LGPL FFmpeg bundle. Required commands were:
+
+```text
+npm ci
+npm --workspace apps/desktop run ffmpeg:fetch-lgpl
+npm --workspace apps/desktop run napi:build
+npm --workspace apps/desktop run napi:build:decode
+npm --workspace apps/desktop run electron:install
+```
+
+`npm run typecheck`, the production desktop build, all three documented Rust
+test commands, the session-store tests, and AgentPanel tests passed. Rust totals:
+59 evaluation tests, 607 native tests (one documented live test skipped), and
+60 decode tests (one benchmark skipped). Electron launched and rendered the
+normal WeftCut editor/timeline successfully.
+
+The full Vitest suite is not clean in this sandbox: 7,649 passed; 12 failed.
+The remaining failures are baseline/environment-sensitive: loopback bind is
+denied with `EPERM`, CLI fake-app port setup consequently fails, and two
+model-download tests reject the sandbox path as unsafe. The Sclip-caused
+AgentPanel default-tab failures were corrected; that focused suite now passes.
+
+## Release blockers — Phase 1 is not ready
+
+- The macOS keychain request was cancelled during the live launch. Secure
+  storage is therefore unavailable, so Hermes correctly did not start. Re-enable
+  keychain access before attempting a live sidecar/session run.
+- The pre-existing development Hermes profile contains plaintext gateway and
+  MCP credentials. Treat every credential in it as exposed and rotate it; do
+  not migrate the plaintext profile wholesale. The application intentionally
+  does not read it.
+- No live provider-backed Hermes run could therefore execute against the live
+  MCP host. Session isolation across real gateway history, approvals, stop,
+  crash recovery, synchronization after manual edits, and the requested real
+  media edit matrix remain unverified.
+- A real media import/decode/preview and a full clean Vitest run must still be
+  performed in a host that permits loopback test servers. Retiming remains
+  explicitly unsupported; export MCP commands are still absent.
 
 ## Additional product gaps
 
