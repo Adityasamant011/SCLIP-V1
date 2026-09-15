@@ -51,6 +51,13 @@
   color: var(--weft-fg-muted, #8b909a);
 }
 
+.sclip-runtime-error {
+  margin: 6px 0 0;
+  color: #fca5a5;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
 .sclip-status-pill {
   display: inline-flex;
   align-items: center;
@@ -251,6 +258,33 @@
   justify-content: space-between;
   background: var(--weft-bg-surface, #18191d);
   border-bottom: 1px solid var(--weft-border-subtle, #26282e);
+}
+
+.sclip-view-tabs {
+  display: flex;
+  gap: 3px;
+  padding: 8px 10px 0;
+  border-top: 1px solid var(--border, #2b303b);
+}
+
+.sclip-view-tabs button {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--muted-foreground, #9ca3af);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 5px 9px;
+}
+
+.sclip-view-tabs button.active {
+  border-bottom-color: #818cf8;
+  color: #e5e7eb;
+}
+
+.sclip-terminal-view {
+  background: #0b0d12;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
 .sclip-events-list {

@@ -7,6 +7,8 @@ export interface HermesStatus {
   online: boolean
   version?: string
   gatewayUrl: string
+  runtimeState?: 'stopped' | 'starting' | 'ready' | 'failed'
+  runtimeDetail?: string
   mcpPort?: number
   mcpTools: number
   mcpResources: number
@@ -19,6 +21,7 @@ export interface HermesSessionView extends SclipSession {
 interface BridgeConfig {
   getGatewayUrl: () => string
   getGatewayToken: () => string
+  getRuntimeStatus?: () => { state: 'stopped' | 'starting' | 'ready' | 'failed'; detail?: string }
   getMcpStatus: () => { port?: number; tools: number; resources: number }
   sessions: SclipSessionStore
 }
@@ -61,6 +64,7 @@ async function responseError(response: Response): Promise<string> {
 
 export async function getHermesStatus(): Promise<HermesStatus> {
   const mcp = bridge().getMcpStatus()
+  const runtime = bridge().getRuntimeStatus?.()
   let online = false
   let version = ''
   try {
@@ -73,7 +77,11 @@ export async function getHermesStatus(): Promise<HermesStatus> {
   } catch {
     // Offline is a normal, visible state; never fake readiness from config.
   }
-  return { online, version, gatewayUrl: bridge().getGatewayUrl(), mcpPort: mcp.port, mcpTools: mcp.tools, mcpResources: mcp.resources }
+  return {
+    online, version, gatewayUrl: bridge().getGatewayUrl(),
+    ...(runtime ? { runtimeState: runtime.state, ...(runtime.detail ? { runtimeDetail: runtime.detail } : {}) } : {}),
+    mcpPort: mcp.port, mcpTools: mcp.tools, mcpResources: mcp.resources,
+  }
 }
 
 export async function listProjectSessions(projectId: string): Promise<{ activeSessionId: string | null; sessions: HermesSessionView[] }> {

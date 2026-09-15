@@ -1089,6 +1089,10 @@ app.whenReady().then(async () => {
   const gatewayToken = () => {
     const existing = loadAllKeys()[SCLIP_GATEWAY_KEY_TAG]
     if (existing) return existing
+    // A local loopback gateway is still a privileged control plane. Refuse to
+    // fall back to the plaintext safeStorage backend when the OS keyring is
+    // unavailable or its approval prompt was dismissed.
+    if (!encryptionAvailable()) throw new Error('Secure OS key storage is required before Hermes can start')
     const generated = randomBytes(32).toString('hex')
     setKey(SCLIP_GATEWAY_KEY_TAG, generated)
     return generated
@@ -1115,6 +1119,10 @@ app.whenReady().then(async () => {
   configureHermesBridge({
     getGatewayUrl: () => hermesRuntime?.snapshot().gatewayUrl ?? '',
     getGatewayToken: gatewayToken,
+    getRuntimeStatus: () => {
+      const status = hermesRuntime?.snapshot()
+      return status ? { state: status.state, ...(status.detail ? { detail: status.detail } : {}) } : { state: 'stopped' }
+    },
     getMcpStatus: () => {
       const info = mcpHost.getInfo()
       return {
@@ -1129,7 +1137,10 @@ app.whenReady().then(async () => {
   })
   // Hermes is optional for editing, but when available Sclip owns exactly this
   // child and reports a truthful failed/offline state instead of a fake URL.
-  void hermesRuntime.start()
+  if (encryptionAvailable()) void hermesRuntime.start()
+  else broadcastEvent(BrowserWindow.getAllWindows(), 'sclip:hermes_runtime', {
+    state: 'failed', gatewayUrl: '', detail: 'Secure OS key storage is required before Hermes can start',
+  })
 
   ipcMain.handle('backend:invoke', async (_e, { channel, args }) => {
     if (channel === 'sclip_get_hermes_status') return getHermesStatus()

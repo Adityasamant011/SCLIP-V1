@@ -4,6 +4,8 @@ export interface HermesStatus {
   online: boolean
   version?: string
   gatewayUrl: string
+  runtimeState?: 'stopped' | 'starting' | 'ready' | 'failed'
+  runtimeDetail?: string
   mcpPort?: number
   mcpTools: number
   mcpResources: number

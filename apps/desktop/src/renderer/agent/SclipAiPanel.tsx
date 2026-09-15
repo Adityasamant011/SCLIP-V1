@@ -26,6 +26,8 @@ interface SclipEvent {
   approval?: { runId: string; choices: Array<'once' | 'session' | 'always' | 'deny'> } | undefined
 }
 
+type SclipView = 'chat' | 'terminal' | 'activity'
+
 const PRESET_PROMPTS = ['Inspect the current timeline and describe what is here.', 'Create a checkpoint before making changes.', 'Find pauses in the active composition.', 'Explain the next safe edit to make.']
 
 function eventFromPayload(payload: Record<string, unknown>): SclipEvent {
@@ -49,6 +51,7 @@ export function SclipAiPanel() {
   const [running, setRunning] = useState(false)
   const [currentRunId, setCurrentRunId] = useState<string | null>(null)
   const [events, setEvents] = useState<SclipEvent[]>([])
+  const [view, setView] = useState<SclipView>('chat')
   const [busyAction, setBusyAction] = useState<string | null>(null)
   const eventsEndRef = useRef<HTMLDivElement>(null)
   const activeSession = sessions.sessions.find(session => session.id === sessions.activeSessionId) ?? null
@@ -156,7 +159,8 @@ export function SclipAiPanel() {
   return <div className="sclip-ai-panel">
     <header className="sclip-header">
       <div className="sclip-title-row"><div className="sclip-title"><Sparkles size={16} color="#818cf8" /><span>Sclip AI</span></div><button type="button" className="sclip-btn-secondary" title="Refresh" onClick={() => { void refreshStatus(); void refreshSessions() }}><RefreshCw size={12} /></button></div>
-      <div className="sclip-status-row"><span className="sclip-status-pill"><i className={`sclip-dot ${status?.online ? 'online' : ''}`} />Hermes: <strong>{status?.online ? 'connected' : 'offline'}</strong></span><span className="sclip-status-pill"><Cpu size={12} />MCP: <strong>{status?.mcpTools ?? 0} tools · {status?.mcpResources ?? 0} resources</strong></span></div>
+      <div className="sclip-status-row"><span className="sclip-status-pill" title={status?.runtimeDetail}><i className={`sclip-dot ${status?.online ? 'online' : ''}`} />Hermes: <strong>{status?.online ? 'connected' : status?.runtimeState === 'starting' ? 'starting' : 'offline'}</strong></span><span className="sclip-status-pill"><Cpu size={12} />MCP: <strong>{status?.mcpTools ?? 0} tools · {status?.mcpResources ?? 0} resources</strong></span></div>
+      {status?.runtimeDetail && <p className="sclip-runtime-error" role="status">{status.runtimeDetail}</p>}
       <div className="sclip-session-row"><span title={summary?.name ?? ''}>Project: <strong>{summary?.name ?? 'No project open'}</strong></span><div><select aria-label="Hermes session" value={sessions.activeSessionId ?? ''} disabled={!projectId || running} onChange={event => void changeSession(event.target.value)}><option value="" disabled>{projectId ? 'Create a session' : 'No project'}</option>{sessions.sessions.map(session => <option key={session.id} value={session.id}>{session.name}</option>)}</select><button type="button" className="sclip-icon-button" title="New session" disabled={!status?.online || !projectId || busyAction !== null} onClick={() => void createSession()}><Plus size={13} /></button>{activeSession && <><button type="button" className="sclip-icon-button" title="Rename session" disabled={running} onClick={() => void renameSession()}><Pencil size={12} /></button><button type="button" className="sclip-icon-button" title="Archive session" disabled={running} onClick={() => void archiveSession()}><Archive size={12} /></button></>}</div></div>
     </header>
     <section className="sclip-prompt-section">
@@ -164,7 +168,21 @@ export function SclipAiPanel() {
       <textarea className="sclip-textarea" rows={3} placeholder={activeSession ? 'Ask Hermes about the current WeftCut project…' : 'Create a Hermes session to begin.'} disabled={!activeSession || !status?.online || running} value={prompt} onChange={event => setPrompt(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void startRun() } }} />
       <div className="sclip-actions-row"><div>{running ? <button type="button" className="sclip-btn-danger" onClick={() => void stopRun()}><Square size={13} fill="currentColor" />Stop</button> : <button type="button" className="sclip-btn-primary" disabled={!prompt.trim() || !activeSession || !status?.online} onClick={() => void startRun()}><Play size={13} fill="currentColor" />Send</button>}</div><div className="sclip-editor-actions"><button type="button" className="sclip-btn-secondary" disabled={busyAction !== null} onClick={() => void editorAction('checkpoint', () => projectCreateCheckpoint(`Manual checkpoint ${new Date().toLocaleTimeString()}`))}><Bookmark size={12} />Checkpoint</button><button type="button" className="sclip-btn-secondary" disabled={busyAction !== null} title="Undo" onClick={() => void editorAction('undo', projectUndo)}><Undo2 size={12} /></button><button type="button" className="sclip-btn-secondary" disabled={busyAction !== null} title="Redo" onClick={() => void editorAction('redo', projectRedo)}><Redo2 size={12} /></button></div></div>
     </section>
-    <div className="sclip-events-header"><span>Session terminal</span><span>{activeSession?.name ?? 'No session'}</span></div>
-    <div className="sclip-events-list">{events.length === 0 ? <div className="sclip-empty-events"><Bot size={24} /><p>{activeSession ? 'This Hermes session has no messages yet.' : 'Choose a project and create a session.'}</p></div> : events.map(event => <article key={event.id} className={`sclip-event-card ${event.status === 'error' ? 'event-failed' : event.status === 'success' ? 'event-success' : ''}`}><div className="sclip-event-meta"><strong>{event.status === 'running' && <Loader2 size={12} className="agent-spin" />} {event.status === 'success' && <CheckCircle2 size={12} />} {event.title}</strong></div>{event.detail && <div className="sclip-event-detail">{event.detail}</div>}{event.approval && <div className="sclip-approval-actions"><ShieldCheck size={13} />{event.approval.choices.map(choice => <button type="button" key={choice} className={choice === 'deny' ? 'sclip-btn-secondary' : 'sclip-btn-primary'} onClick={() => void resolveApproval(event, choice)}>{choice}</button>)}</div>}</article>)}<div ref={eventsEndRef} /></div>
+    <div className="sclip-view-tabs" role="tablist" aria-label="Sclip workspace">
+      {(['chat', 'terminal', 'activity'] as const).map(key => <button key={key} type="button" role="tab" aria-selected={view === key} className={view === key ? 'active' : ''} onClick={() => setView(key)}>{key === 'chat' ? 'Chat' : key === 'terminal' ? 'Terminal' : 'Activity'}</button>)}
+    </div>
+    <div className="sclip-events-header"><span>{view === 'chat' ? 'Conversation' : view === 'terminal' ? 'Hermes API terminal' : 'Structured activity'}</span><span>{activeSession?.name ?? 'No session'}</span></div>
+    <div className={`sclip-events-list ${view === 'terminal' ? 'sclip-terminal-view' : ''}`}>{(() => {
+      // Gateway exposes session messages and streamed run/tool events, but not a
+      // faithful interactive CLI stdin channel. This terminal is deliberately a
+      // session-isolated API transcript; editor control still travels via MCP.
+      const visible = view === 'chat'
+        ? events.filter(event => event.title === 'You' || event.title === 'Hermes')
+        : view === 'activity'
+          ? events.filter(event => event.title !== 'You' && event.title !== 'Hermes')
+          : events
+      if (visible.length === 0) return <div className="sclip-empty-events"><Bot size={24} /><p>{activeSession ? view === 'activity' ? 'No tool activity for this session yet.' : 'This Hermes session has no messages yet.' : 'Choose a project and create a session.'}</p></div>
+      return <>{visible.map(event => <article key={event.id} className={`sclip-event-card ${event.status === 'error' ? 'event-failed' : event.status === 'success' ? 'event-success' : ''}`}><div className="sclip-event-meta"><strong>{event.status === 'running' && <Loader2 size={12} className="agent-spin" />} {event.status === 'success' && <CheckCircle2 size={12} />} {event.title}</strong></div>{event.detail && <div className="sclip-event-detail">{event.detail}</div>}{event.approval && <div className="sclip-approval-actions"><ShieldCheck size={13} />{event.approval.choices.map(choice => <button type="button" key={choice} className={choice === 'deny' ? 'sclip-btn-secondary' : 'sclip-btn-primary'} onClick={() => void resolveApproval(event, choice)}>{choice}</button>)}</div>}</article>)}<div ref={eventsEndRef} /></>
+    })()}</div>
   </div>
 }
