@@ -18,6 +18,9 @@ function activity(patch: Partial<AgentActivity> = {}): AgentActivity {
 function seed(activities: AgentActivity[], patch: Partial<AgentActivitySnapshot> = {}) {
   useAgentActivity.getState().receive({ workspace_id: 'project', revision: 1, session: null, sessions: [], activities, evicted: 0, lock_reason: null, checkpoints: [], ...patch })
 }
+function openActivityLog() {
+  fireEvent.click(screen.getByRole('button', { name: 'Activity Log' }))
+}
 beforeEach(async () => {
   await i18n.changeLanguage('en-US')
   mocks.invoke.mockReset().mockResolvedValue({ available: true, url: 'http://127.0.0.1:1234/mcp', connections: [] })
@@ -29,6 +32,7 @@ describe('AgentPanel', () => {
   it('shows readable objects, failures, and connection facts without navigation in agent mode', async () => {
     seed([activity({ state: 'error', error: 'The media file is unavailable' })])
     render(<AgentPanel />)
+    openActivityLog()
     expect(screen.getByText('Interview A')).toBeTruthy()
     expect(screen.getByText('The media file is unavailable')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: /Analyze clip/ }))
@@ -41,9 +45,11 @@ describe('AgentPanel', () => {
   it('keeps expansion when switching layouts and disables navigation for missing objects', () => {
     seed([activity()])
     const first = render(<AgentPanel />)
+    openActivityLog()
     fireEvent.click(screen.getByRole('button', { name: /Analyze clip/ }))
     first.unmount()
     render(<AgentPanel editor />)
+    openActivityLog()
     expect(screen.getByRole('button', { name: 'Object no longer exists' }).hasAttribute('disabled')).toBe(true)
     expect(screen.getByText('analyze_clip')).toBeTruthy()
   })
@@ -51,6 +57,7 @@ describe('AgentPanel', () => {
   it('never offers a stale or locked checkpoint restore', () => {
     seed([activity({ kind: 'checkpoint', checkpoint_id: 'cp', message: 'Before edit' })], { checkpoints: [{ id: 'cp', label: 'Before edit' }], lock_reason: '' })
     const first = render(<AgentPanel />)
+    openActivityLog()
     expect(screen.getByRole('button', { name: 'Restore' }).hasAttribute('disabled')).toBe(true)
     expect(screen.getByRole('button', { name: 'Unlock undo' })).toBeTruthy()
     act(() => useAgentActivity.getState().receive({ ...useAgentActivity.getState().snapshot!, revision: 2, lock_reason: null, checkpoints: [] }))
@@ -62,6 +69,7 @@ describe('AgentPanel', () => {
     const session = { id: 'work', connection_id: 'c', client: 'Client', reason: 'Cut interview', started_at: '', ended_at: null, end_reason: null, checkpoint_id: 'cp' }
     seed([activity({ session_id: 'work' })], { session, sessions: [session] })
     render(<AgentPanel />)
+    openActivityLog()
     fireEvent.click(screen.getByRole('button', { name: 'End work session' }))
     await vi.waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith('agent_session_end'))
     act(() => useAgentActivity.getState().receive({ ...useAgentActivity.getState().snapshot!, revision: 2, session: null, sessions: [{ ...session, ended_at: 'now', end_reason: 'user' }] }))
