@@ -83,6 +83,9 @@ The remaining failures are baseline/environment-sensitive: loopback bind is
 denied with `EPERM`, CLI fake-app port setup consequently fails, and two
 model-download tests reject the sandbox path as unsafe. The Sclip-caused
 AgentPanel default-tab failures were corrected; that focused suite now passes.
+The independent script suite reached 83 passing tests out of 84; its sole
+browser-backed popup-layering test aborted when managed-environment headless
+Chrome was denied permission to kill its own process (`EPERM`).
 
 ## Release blockers — Phase 1 is not ready
 
