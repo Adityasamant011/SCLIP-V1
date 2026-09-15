@@ -17,7 +17,7 @@ export interface HermesSessionView extends SclipSession {
 }
 
 interface BridgeConfig {
-  gatewayUrl: string
+  getGatewayUrl: () => string
   getGatewayToken: () => string
   getMcpStatus: () => { port?: number; tools: number; resources: number }
   sessions: SclipSessionStore
@@ -28,7 +28,7 @@ const activeRuns = new Map<string, { projectId: string; sessionId: string }>()
 
 /** Called once by Electron main after its user-data stores are available. */
 export function configureHermesBridge(next: BridgeConfig): void {
-  config = { ...next, gatewayUrl: next.gatewayUrl.replace(/\/$/, '') }
+  config = next
 }
 
 function bridge(): BridgeConfig {
@@ -43,10 +43,12 @@ function headers(json = false): Record<string, string> {
 }
 
 async function request(path: string, init: RequestInit = {}): Promise<Response> {
+  const gatewayUrl = bridge().getGatewayUrl().replace(/\/$/, '')
+  if (!gatewayUrl) throw new Error('Hermes sidecar is not running')
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 8_000)
   try {
-    return await fetch(`${bridge().gatewayUrl}${path}`, { ...init, signal: controller.signal })
+    return await fetch(`${gatewayUrl}${path}`, { ...init, signal: controller.signal })
   } finally {
     clearTimeout(timeout)
   }
@@ -71,7 +73,7 @@ export async function getHermesStatus(): Promise<HermesStatus> {
   } catch {
     // Offline is a normal, visible state; never fake readiness from config.
   }
-  return { online, version, gatewayUrl: bridge().gatewayUrl, mcpPort: mcp.port, mcpTools: mcp.tools, mcpResources: mcp.resources }
+  return { online, version, gatewayUrl: bridge().getGatewayUrl(), mcpPort: mcp.port, mcpTools: mcp.tools, mcpResources: mcp.resources }
 }
 
 export async function listProjectSessions(projectId: string): Promise<{ activeSessionId: string | null; sessions: HermesSessionView[] }> {

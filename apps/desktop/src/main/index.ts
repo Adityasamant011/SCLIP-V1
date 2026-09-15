@@ -49,7 +49,7 @@ import {
   type MigrationFs,
 } from './dataRootMigration.js'
 import type { DataRootMigrateResult, DataRootProgress } from '../shared/data-root.js'
-import { randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { CONTENT_CATALOG } from '../shared/content-catalog.js'
 import { contentPlatformKey } from '../shared/content-download.js'
 import { downloadItem, itemStatus, speechAutofillPlan, vlmAutofillPlan, sweepStalePartials, type ContentDeps } from './contentDownload.js'
@@ -110,6 +110,7 @@ let windowGeometryStore: import('./windowGeometry.js').WindowGeometryStore | nul
 // The content download queue, module-scoped so before-quit can abort the
 // in-flight transfer (its partial stays; the persisted queue resumes it next boot).
 let contentQueue: ContentQueue | null = null
+let hermesRuntime: import('./sclip/hermesRuntime.js').HermesRuntime | null = null
 
 const isDev = !!process.env['ELECTRON_RENDERER_URL']
 
@@ -1003,7 +1004,13 @@ app.whenReady().then(async () => {
   }
 
   ipcMain.handle('get_mcp_info', () => ({ ...mcpHost.getInfo(), ...stdioInfo() }))
-  ipcMain.handle('reset_mcp_token', () => mcpHost.resetToken())
+  ipcMain.handle('reset_mcp_token', () => {
+    const token = mcpHost.resetToken()
+    // The running sidecar inherited the old token; reconnect it to this exact
+    // host instead of leaving a silently unauthorized MCP client behind.
+    void hermesRuntime?.restart()
+    return token
+  })
   // Re-run the startup refresh on demand, from the Agent panel. Every fault
   // that can reach a packaged user is one an outside actor can clear without
   // touching WeftCut — a full disk emptied, an antivirus quarantine undone, a
@@ -1073,14 +1080,41 @@ app.whenReady().then(async () => {
     approveHermesRun,
     getHermesRun,
   } = await import('./sclip/hermesBridge.js')
+  const { HermesRuntime } = await import('./sclip/hermesRuntime.js')
   // The gateway key is an app credential: it belongs in Electron safeStorage,
   // never in a project document, renderer state, or a Hermes config checked in
   // alongside source. The gateway itself is an optional sidecar for now, so a
   // missing key results in an honest disconnected state rather than a fake run.
   const SCLIP_GATEWAY_KEY_TAG = 'sclip_hermes_gateway'
+  const gatewayToken = () => {
+    const existing = loadAllKeys()[SCLIP_GATEWAY_KEY_TAG]
+    if (existing) return existing
+    const generated = randomBytes(32).toString('hex')
+    setKey(SCLIP_GATEWAY_KEY_TAG, generated)
+    return generated
+  }
+  hermesRuntime = new HermesRuntime({
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    userDataPath: app.getPath('userData'),
+    executableOverride: process.env.SCLIP_HERMES_EXECUTABLE,
+    sourceOverride: process.env.SCLIP_HERMES_SOURCE,
+    getGatewayToken: gatewayToken,
+    getMcpInfo: () => mcpHost.getInfo(),
+    // Provider values are encrypted in Electron safeStorage. Do not add them to
+    // config.yaml: Hermes expands these only in its child process at launch.
+    getProviderEnvironment: () => {
+      const keys = loadAllKeys()
+      return {
+        ...(keys.openai ? { OPENAI_API_KEY: keys.openai } : {}),
+        ...(keys.anthropic ? { ANTHROPIC_API_KEY: keys.anthropic } : {}),
+      }
+    },
+    onStatus: status => broadcastEvent(BrowserWindow.getAllWindows(), 'sclip:hermes_runtime', status),
+  })
   configureHermesBridge({
-    gatewayUrl: process.env.SCLIP_HERMES_GATEWAY_URL ?? 'http://127.0.0.1:8642',
-    getGatewayToken: () => loadAllKeys()[SCLIP_GATEWAY_KEY_TAG] ?? '',
+    getGatewayUrl: () => hermesRuntime?.snapshot().gatewayUrl ?? '',
+    getGatewayToken: gatewayToken,
     getMcpStatus: () => {
       const info = mcpHost.getInfo()
       return {
@@ -1093,6 +1127,9 @@ app.whenReady().then(async () => {
     },
     sessions: new SclipSessionStore(path.join(app.getPath('userData'), 'sclip_hermes_sessions.json')),
   })
+  // Hermes is optional for editing, but when available Sclip owns exactly this
+  // child and reports a truthful failed/offline state instead of a fake URL.
+  void hermesRuntime.start()
 
   ipcMain.handle('backend:invoke', async (_e, { channel, args }) => {
     if (channel === 'sclip_get_hermes_status') return getHermesStatus()
@@ -2353,11 +2390,14 @@ app.on('before-quit', (event) => {
   // (covering macOS ⌘W, which never quits); this covers quitting via the app
   // menu / Cmd+Q, where before-quit precedes the window close.
   windowGeometryStore?.flush()
-  if (quitFlushed || !tsHost) return
+  if (quitFlushed || !tsHost) {
+    void hermesRuntime?.stop()
+    return
+  }
   event.preventDefault()
   quitFlushed = true
-  void tsHost
-    .handleInvoke('project_save', {})
-    .catch((e) => console.warn('[main] autosave quit-flush failed', e))
-    .finally(() => app.quit())
+  void Promise.all([
+    tsHost.handleInvoke('project_save', {}).catch((e) => console.warn('[main] autosave quit-flush failed', e)),
+    hermesRuntime?.stop(),
+  ]).finally(() => app.quit())
 })
