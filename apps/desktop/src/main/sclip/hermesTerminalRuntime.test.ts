@@ -99,6 +99,12 @@ describe('HermesTerminalRuntime', () => {
 
     await runtime.input('proj-123', 'sess-456', 'hello\n')
     expect(ptyWriteMock).toHaveBeenCalledWith('hello\n')
+
+    expect(onExitCallback).toBeDefined()
+    onExitCallback!({ exitCode: 0 })
+    expect(exitEvents).toEqual([
+      { projectId: 'proj-123', sessionId: 'sess-456', code: 0 },
+    ])
   })
 
   it('enforces session assertion before spawning or sending input', async () => {
