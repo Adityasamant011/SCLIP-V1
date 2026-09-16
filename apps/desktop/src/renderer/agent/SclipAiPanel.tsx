@@ -58,7 +58,7 @@ export function SclipAiPanel() {
   const [showSetup, setShowSetup] = useState(false)
   const [setupError, setSetupError] = useState('')
   const [busyAction, setBusyAction] = useState<string | null>(null)
-  const eventsEndRef = useRef<HTMLDivElement>(null)
+  const eventsListRef = useRef<HTMLDivElement>(null)
   const activeSession = sessions.sessions.find(session => session.id === sessions.activeSessionId) ?? null
 
   const refreshStatus = useCallback(async () => {
@@ -87,7 +87,13 @@ export function SclipAiPanel() {
     return () => clearInterval(timer)
   }, [refreshStatus])
   useEffect(() => { void refreshSessions() }, [refreshSessions])
-  useEffect(() => { eventsEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [events])
+  // Scroll only the transcript. `scrollIntoView` walks every scroll ancestor,
+  // which can move the whole editor below the viewport when this panel is in a
+  // docked workspace.
+  useEffect(() => {
+    const list = eventsListRef.current
+    if (list) list.scrollTop = list.scrollHeight
+  }, [events])
 
   useEffect(() => {
     if (typeof window.api?.on !== 'function') return undefined
@@ -192,7 +198,7 @@ export function SclipAiPanel() {
       {(['chat', 'terminal', 'activity'] as const).map(key => <button key={key} type="button" role="tab" aria-selected={view === key} className={view === key ? 'active' : ''} onClick={() => setView(key)}>{key === 'chat' ? 'Chat' : key === 'terminal' ? 'Terminal' : 'Activity'}</button>)}
     </div>
     <div className="sclip-events-header"><span>{view === 'chat' ? 'Conversation' : view === 'terminal' ? 'Hermes API terminal' : 'Structured activity'}</span><span>{activeSession?.name ?? 'No session'}</span></div>
-    <div className={`sclip-events-list ${view === 'terminal' ? 'sclip-terminal-view' : ''}`}>{(() => {
+    <div ref={eventsListRef} className={`sclip-events-list ${view === 'terminal' ? 'sclip-terminal-view' : ''}`}>{(() => {
       // Gateway exposes session messages and streamed run/tool events, but not a
       // faithful interactive CLI stdin channel. This terminal is deliberately a
       // session-isolated API transcript; editor control still travels via MCP.
@@ -202,7 +208,7 @@ export function SclipAiPanel() {
           ? events.filter(event => event.title !== 'You' && event.title !== 'Hermes')
           : events
       if (visible.length === 0) return <div className="sclip-empty-events"><Bot size={24} /><p>{activeSession ? view === 'activity' ? 'No tool activity for this session yet.' : 'This Hermes session has no messages yet.' : 'Choose a project and create a session.'}</p></div>
-      return <>{visible.map(event => <article key={event.id} className={`sclip-event-card ${event.status === 'error' ? 'event-failed' : event.status === 'success' ? 'event-success' : ''}`}><div className="sclip-event-meta"><strong>{event.status === 'running' && <Loader2 size={12} className="agent-spin" />} {event.status === 'success' && <CheckCircle2 size={12} />} {event.title}</strong></div>{event.detail && <div className="sclip-event-detail">{event.detail}</div>}{event.approval && <div className="sclip-approval-actions"><ShieldCheck size={13} />{event.approval.choices.map(choice => <button type="button" key={choice} className={choice === 'deny' ? 'sclip-btn-secondary' : 'sclip-btn-primary'} onClick={() => void resolveApproval(event, choice)}>{choice}</button>)}</div>}</article>)}<div ref={eventsEndRef} /></>
+      return <>{visible.map(event => <article key={event.id} className={`sclip-event-card ${event.status === 'error' ? 'event-failed' : event.status === 'success' ? 'event-success' : ''}`}><div className="sclip-event-meta"><strong>{event.status === 'running' && <Loader2 size={12} className="agent-spin" />} {event.status === 'success' && <CheckCircle2 size={12} />} {event.title}</strong></div>{event.detail && <div className="sclip-event-detail">{event.detail}</div>}{event.approval && <div className="sclip-approval-actions"><ShieldCheck size={13} />{event.approval.choices.map(choice => <button type="button" key={choice} className={choice === 'deny' ? 'sclip-btn-secondary' : 'sclip-btn-primary'} onClick={() => void resolveApproval(event, choice)}>{choice}</button>)}</div>}</article>)}</>
     })()}</div>
   </div>
 }
