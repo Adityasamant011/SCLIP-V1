@@ -21,6 +21,8 @@ export interface HermesSessionView extends SclipSession {
 interface BridgeConfig {
   getGatewayUrl: () => string
   getGatewayToken: () => string
+  /** Reads the Project Actor's current project, never renderer-owned state. */
+  getActiveProjectId: () => Promise<string>
   getRuntimeStatus?: () => { state: 'stopped' | 'starting' | 'ready' | 'failed'; detail?: string }
   getMcpStatus: () => { port?: number; tools: number; resources: number }
   sessions: SclipSessionStore
@@ -112,11 +114,14 @@ export async function activateProjectSession(projectId: string, sessionId: strin
 }
 
 export async function renameProjectSession(projectId: string, sessionId: string, name: string): Promise<void> {
-  bridge().sessions.rename(projectId, sessionId, name)
+  // Validate ownership before contacting Hermes, but only persist the new name
+  // after Hermes has accepted it so the two titles cannot silently diverge.
+  if (!bridge().sessions.owns(projectId, sessionId)) throw new Error('Session does not belong to this project')
   const response = await request(`/api/sessions/${encodeURIComponent(sessionId)}`, {
     method: 'PATCH', headers: headers(true), body: JSON.stringify({ title: name.trim().slice(0, 120) }),
   })
   if (!response.ok) throw new Error(await responseError(response))
+  bridge().sessions.rename(projectId, sessionId, name)
 }
 
 /** Archive locally rather than delete Hermes history; this is recoverable. */
@@ -126,6 +131,14 @@ export async function archiveProjectSession(projectId: string, sessionId: string
 
 export async function startHermesRun(input: { prompt: string; projectId: string; sessionId: string }): Promise<{ ok: boolean; runId?: string; status?: string; error?: string }> {
   if (!input.prompt.trim() || !input.projectId || !input.sessionId) return { ok: false, error: 'A project, session, and prompt are required' }
+  const activeProjectId = await bridge().getActiveProjectId()
+  if (!activeProjectId) return { ok: false, error: 'No WeftCut project is currently open' }
+  if (activeProjectId !== input.projectId) {
+    return { ok: false, error: 'The selected Hermes session is not bound to the currently open project' }
+  }
+  if (!bridge().sessions.owns(input.projectId, input.sessionId)) {
+    return { ok: false, error: 'The selected Hermes session does not belong to the current project' }
+  }
   try {
     // Hermes owns conversation identity. WeftCut remains the authority for all video state via MCP.
     const response = await request('/v1/runs', {

@@ -8,7 +8,12 @@ function within(root: string, file: string): boolean {
   const relative = path.relative(root, file);
   return relative === "" || !relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative);
 }
-function real(file: string): string { try { return fs.realpathSync(file); } catch { return path.resolve(file); } }
+function real(file: string): string {
+  try { return fs.realpathSync(file); } catch {
+    const parent = path.dirname(file);
+    return parent === file ? path.resolve(file) : path.join(real(parent), path.basename(file));
+  }
+}
 
 export function createModelDownloads(content: ContentDeps) {
   const root = path.resolve(content.downloadsDir);

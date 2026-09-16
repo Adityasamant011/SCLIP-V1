@@ -69,6 +69,12 @@ protocol.registerSchemesAsPrivileged([
 const require_ = createRequire(import.meta.url)
 const { Backend } = require_('@weftcut/core') as typeof import('@weftcut/core')
 
+// Integration runs may opt into a disposable Electron data directory. Normal
+// launches retain Electron's default path; this avoids test sessions changing a
+// user's persisted editor or keychain metadata.
+const sclipUserDataOverride = process.env.SCLIP_USER_DATA_DIR
+if (sclipUserDataOverride) app.setPath('userData', path.resolve(sclipUserDataOverride))
+
 let backend: import('@weftcut/core').Backend | null = null
 let mainWindow: BrowserWindow | null = null
 
@@ -1087,12 +1093,12 @@ app.whenReady().then(async () => {
   // missing key results in an honest disconnected state rather than a fake run.
   const SCLIP_GATEWAY_KEY_TAG = 'sclip_hermes_gateway'
   const gatewayToken = () => {
-    const existing = loadAllKeys()[SCLIP_GATEWAY_KEY_TAG]
-    if (existing) return existing
     // A local loopback gateway is still a privileged control plane. Refuse to
     // fall back to the plaintext safeStorage backend when the OS keyring is
     // unavailable or its approval prompt was dismissed.
     if (!encryptionAvailable()) throw new Error('Secure OS key storage is required before Hermes can start')
+    const existing = loadAllKeys()[SCLIP_GATEWAY_KEY_TAG]
+    if (existing) return existing
     const generated = randomBytes(32).toString('hex')
     setKey(SCLIP_GATEWAY_KEY_TAG, generated)
     return generated
@@ -1112,6 +1118,7 @@ app.whenReady().then(async () => {
       return {
         ...(keys.openai ? { OPENAI_API_KEY: keys.openai } : {}),
         ...(keys.anthropic ? { ANTHROPIC_API_KEY: keys.anthropic } : {}),
+        ...(keys.sclip_openrouter ? { OPENROUTER_API_KEY: keys.sclip_openrouter } : {}),
       }
     },
     onStatus: status => broadcastEvent(BrowserWindow.getAllWindows(), 'sclip:hermes_runtime', status),
@@ -1119,7 +1126,12 @@ app.whenReady().then(async () => {
   configureHermesBridge({
     getGatewayUrl: () => hermesRuntime?.snapshot().gatewayUrl ?? '',
     getGatewayToken: gatewayToken,
+    getActiveProjectId: async () => {
+      const summary = await tsHost!.handleInvoke('project_summary', {}) as { project_id?: unknown }
+      return typeof summary?.project_id === 'string' ? summary.project_id : ''
+    },
     getRuntimeStatus: () => {
+      if (!encryptionAvailable()) return { state: 'failed', detail: 'Allow macOS Keychain access, then reconnect Hermes.' }
       const status = hermesRuntime?.snapshot()
       return status ? { state: status.state, ...(status.detail ? { detail: status.detail } : {}) } : { state: 'stopped' }
     },
@@ -1143,6 +1155,14 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.handle('backend:invoke', async (_e, { channel, args }) => {
+    if (channel === 'sclip_restart_hermes') return hermesRuntime?.restart()
+    if (channel === 'sclip_set_openrouter_key') {
+      if (!encryptionAvailable()) throw new Error('Allow macOS Keychain access before saving the OpenRouter key.')
+      const key = (args as { key?: unknown })?.key
+      if (typeof key !== 'string' || !key.trim()) throw new Error('An OpenRouter API key is required')
+      setKey('sclip_openrouter', key.trim())
+      return hermesRuntime?.restart()
+    }
     if (channel === 'sclip_get_hermes_status') return getHermesStatus()
     if (channel === 'sclip_start_hermes_run') return startHermesRun(args as { prompt: string; projectId: string; sessionId: string })
     if (channel === 'sclip_stop_hermes_run') {

@@ -29,4 +29,16 @@ describe('SclipSessionStore', () => {
     sessions.add('project-a', { id: 'a1', name: 'A', createdAt: now, updatedAt: now, archived: false })
     expect(() => sessions.activate('project-b', 'a1')).toThrow('does not belong')
   })
+
+  it('recognizes ownership only for the owning project and active sessions', () => {
+    const sessions = store()
+    const now = '2026-09-15T12:00:00.000Z'
+    sessions.add('project-a', { id: 'a1', name: 'A1', createdAt: now, updatedAt: now, archived: false })
+    sessions.add('project-b', { id: 'b1', name: 'B1', createdAt: now, updatedAt: now, archived: false })
+
+    expect(sessions.owns('project-a', 'a1')).toBe(true)
+    expect(sessions.owns('project-b', 'a1')).toBe(false)
+    sessions.archive('project-a', 'a1')
+    expect(sessions.owns('project-a', 'a1')).toBe(false)
+  })
 })

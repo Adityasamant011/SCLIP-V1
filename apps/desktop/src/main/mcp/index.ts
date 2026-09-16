@@ -1,5 +1,4 @@
 import express from 'express'
-import { app } from 'electron'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
@@ -187,17 +186,7 @@ export async function startMcpHost(backend: Backend, opts: McpHostOptions = {}):
   // this row exists only because the producer-side deferred queue holds it until
   // a workspace opens (`src/main/deferredLog.ts`).
   emitLifecycle('info', { kind: 'System' }, `MCP host listening on 127.0.0.1:${port}`, { port })
-  // The connect snippet embeds the bearer token. Print it ONLY in unpackaged
-  // (dev / e2e) runs — never in a packaged build, where stdout/log capture on a
-  // shared machine could leak the token. The token is always available to the
-  // UI via the get_mcp_info IPC.
-  if (!app.isPackaged) {
-    console.log(
-      `[mcp] connect: ${JSON.stringify({
-        mcpServers: { weftcut: { url, headers: { Authorization: `Bearer ${auth.token}` } } },
-      })}`,
-    )
-  }
+  // Credentials are available through the connection settings, never logs.
 
   return {
     connectionSnapshot(): AgentConnectionSnapshot {

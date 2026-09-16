@@ -1,5 +1,8 @@
 import { invoke } from '@/bridge/ipc'
 
+export const sclipRestartHermes = () => invoke('sclip_restart_hermes')
+export const sclipSetOpenRouterKey = (key: string) => invoke('sclip_set_openrouter_key', { key })
+
 export interface HermesStatus {
   online: boolean
   version?: string

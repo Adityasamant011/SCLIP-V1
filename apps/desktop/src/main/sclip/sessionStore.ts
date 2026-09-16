@@ -56,6 +56,12 @@ export class SclipSessionStore {
     this.save()
   }
 
+  /** True only for a current, non-archived session owned by this project. */
+  owns(projectId: string, sessionId: string): boolean {
+    if (!projectId || !sessionId) return false
+    return Boolean(this.state.projects[projectId]?.sessions.some(session => session.id === sessionId && !session.archived))
+  }
+
   rename(projectId: string, sessionId: string, name: string): void {
     const session = this.session(projectId, sessionId)
     const trimmed = name.trim()

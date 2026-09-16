@@ -10,6 +10,8 @@ import {
   sclipRenameProjectSession,
   sclipStartRun,
   sclipStopRun,
+  sclipRestartHermes,
+  sclipSetOpenRouterKey,
   type HermesProjectSessions,
   type HermesStatus,
 } from '../ipc/sclip'
@@ -52,6 +54,9 @@ export function SclipAiPanel() {
   const [currentRunId, setCurrentRunId] = useState<string | null>(null)
   const [events, setEvents] = useState<SclipEvent[]>([])
   const [view, setView] = useState<SclipView>('chat')
+  const [apiKey, setApiKey] = useState('')
+  const [showSetup, setShowSetup] = useState(false)
+  const [setupError, setSetupError] = useState('')
   const [busyAction, setBusyAction] = useState<string | null>(null)
   const eventsEndRef = useRef<HTMLDivElement>(null)
   const activeSession = sessions.sessions.find(session => session.id === sessions.activeSessionId) ?? null
@@ -155,12 +160,27 @@ export function SclipAiPanel() {
     setBusyAction(key)
     try { await tryMutate(action, key) } finally { setBusyAction(null) }
   }
+  const configure = async (save: boolean) => {
+    setBusyAction('setup'); setSetupError('')
+    try {
+      if (save) { await sclipSetOpenRouterKey(apiKey); setApiKey(''); setShowSetup(false) }
+      else await sclipRestartHermes()
+      await refreshStatus()
+    } catch (error) { setSetupError(error instanceof Error ? error.message : String(error)) }
+    finally { setBusyAction(null) }
+  }
 
   return <div className="sclip-ai-panel">
     <header className="sclip-header">
       <div className="sclip-title-row"><div className="sclip-title"><Sparkles size={16} color="#818cf8" /><span>Sclip AI</span></div><button type="button" className="sclip-btn-secondary" title="Refresh" onClick={() => { void refreshStatus(); void refreshSessions() }}><RefreshCw size={12} /></button></div>
       <div className="sclip-status-row"><span className="sclip-status-pill" title={status?.runtimeDetail}><i className={`sclip-dot ${status?.online ? 'online' : ''}`} />Hermes: <strong>{status?.online ? 'connected' : status?.runtimeState === 'starting' ? 'starting' : 'offline'}</strong></span><span className="sclip-status-pill"><Cpu size={12} />MCP: <strong>{status?.mcpTools ?? 0} tools · {status?.mcpResources ?? 0} resources</strong></span></div>
       {status?.runtimeDetail && <p className="sclip-runtime-error" role="status">{status.runtimeDetail}</p>}
+      <div className="sclip-actions-row">
+        <button type="button" className="sclip-btn-secondary" disabled={busyAction !== null || running} onClick={() => void configure(false)}>Reconnect Hermes</button>
+        <button type="button" className="sclip-btn-secondary" onClick={() => setShowSetup(!showSetup)}>OpenRouter setup</button>
+      </div>
+      {showSetup && <div className="sclip-provider-setup"><p>OpenRouter · <code>dots-studio/dots-3-note-preview:free</code></p><label htmlFor="sclip-openrouter-key">OpenRouter API key</label><div><input id="sclip-openrouter-key" aria-label="OpenRouter API key" type="password" autoComplete="off" value={apiKey} onChange={event => setApiKey(event.target.value)} /><button type="button" className="sclip-btn-primary" disabled={!apiKey.trim() || busyAction !== null} onClick={() => void configure(true)}>Save to Keychain</button></div></div>}
+      {setupError && <p className="sclip-runtime-error" role="alert">{setupError}</p>}
       <div className="sclip-session-row"><span title={summary?.name ?? ''}>Project: <strong>{summary?.name ?? 'No project open'}</strong></span><div><select aria-label="Hermes session" value={sessions.activeSessionId ?? ''} disabled={!projectId || running} onChange={event => void changeSession(event.target.value)}><option value="" disabled>{projectId ? 'Create a session' : 'No project'}</option>{sessions.sessions.map(session => <option key={session.id} value={session.id}>{session.name}</option>)}</select><button type="button" className="sclip-icon-button" title="New session" disabled={!status?.online || !projectId || busyAction !== null} onClick={() => void createSession()}><Plus size={13} /></button>{activeSession && <><button type="button" className="sclip-icon-button" title="Rename session" disabled={running} onClick={() => void renameSession()}><Pencil size={12} /></button><button type="button" className="sclip-icon-button" title="Archive session" disabled={running} onClick={() => void archiveSession()}><Archive size={12} /></button></>}</div></div>
     </header>
     <section className="sclip-prompt-section">

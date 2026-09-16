@@ -184,6 +184,27 @@
   gap: 8px;
 }
 
+.sclip-provider-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--weft-fg-muted, #8b909a);
+}
+
+.sclip-provider-setup p { margin: 0; }
+.sclip-provider-setup code { color: var(--weft-fg-default, #e1e4ea); }
+.sclip-provider-setup > div { display: flex; gap: 6px; }
+.sclip-provider-setup input {
+  min-width: 0;
+  flex: 1;
+  color: var(--weft-fg-default, #e1e4ea);
+  background: var(--weft-bg-input, #0d0e11);
+  border: 1px solid var(--weft-border-input, #2a2d36);
+  border-radius: 5px;
+  padding: 6px 8px;
+}
+
 .sclip-btn-primary {
   display: inline-flex;
   align-items: center;
