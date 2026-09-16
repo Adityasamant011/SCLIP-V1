@@ -1,4 +1,4 @@
-# Sclip Phase 1 audit — 2026-09-15
+# Sclip Phase 1 audit — 2026-09-16
 
 ## Actual architecture
 
@@ -36,7 +36,7 @@ count. Hermes built-in/imported counts were not measured because the Hermes
 gateway was not running during this audit; do not claim a total model-visible
 count until querying a live registry.
 
-## Phase 1 remediation completed
+## Phase 1 remediation implemented
 
 - The repository now has a reviewable baseline at upstream WeftCut
   `9283c8bea952debd2fa8f0e0b51ba4b429e37c78`; Sclip work lives on
@@ -53,6 +53,23 @@ count until querying a live registry.
 - Hermes refuses to start when OS-backed Electron safeStorage is unavailable;
   it does not fall back to plaintext storage. The UI now gives a visible
   disconnected reason.
+- Sidecar start, stop, and reconnect are serialized, so concurrent UI actions
+  cannot create competing owned gateways. Startup authenticates against the
+  gateway session API (rather than its public health route), detects a child
+  exit, and leaves a usable reconnect path without touching the editor.
+- Before a run is sent, Sclip asks the Project Actor for the current project
+  id and verifies that the selected non-archived session belongs to it. A
+  renderer-supplied stale or cross-project session is rejected before Hermes
+  receives a request. The session-store tests cover Project A / Project B
+  ownership and an archived session cannot be reused.
+- Development MCP connection logging no longer prints bearer credentials. The
+  Electron MCP integration test gets its temporary connection through the
+  existing renderer bridge instead, preserving coverage without token output.
+- The panel provides an OpenRouter setup control for
+  `dots-studio/dots-3-note-preview:free`. It sends a key only to the main
+  process, which trims and stores it in Electron safeStorage, then performs a
+  serialized reconnect. It never writes the provider key to profile YAML,
+  session metadata, project data, or logs.
 - The project-bound session mapping remains metadata-only. The right panel has
   session-isolated Chat, API transcript Terminal, and structured Activity views.
   Hermes Gateway does not expose a faithful interactive CLI stdin protocol, so
@@ -78,20 +95,27 @@ test commands, the session-store tests, and AgentPanel tests passed. Rust totals
 60 decode tests (one benchmark skipped). Electron launched and rendered the
 normal WeftCut editor/timeline successfully.
 
-The full Vitest suite is not clean in this sandbox: 7,649 passed; 12 failed.
-The remaining failures are baseline/environment-sensitive: loopback bind is
-denied with `EPERM`, CLI fake-app port setup consequently fails, and two
-model-download tests reject the sandbox path as unsafe. The Sclip-caused
-AgentPanel default-tab failures were corrected; that focused suite now passes.
-The independent script suite reached 83 passing tests out of 84; its sole
-browser-backed popup-layering test aborted when managed-environment headless
-Chrome was denied permission to kill its own process (`EPERM`).
+After the lifecycle fixes, `npm run build` passed and the focused desktop
+Vitest command covering model downloads, MCP lifecycle/bind, CLI integration,
+AgentPanel, and session storage passed **27/27** when granted ordinary local
+loopback binding. The managed sandbox rejects the same bind with `EPERM`.
+The independent script suite previously reached 83 passing tests out of 84;
+its sole browser-backed popup-layering test aborted when managed-environment
+headless Chrome was denied permission to kill its own process (`EPERM`).
+
+The real Electron MCP test was updated to avoid the removed token log. Its
+first run was blocked because the host FFmpeg lacked `drawtext`; fetching the
+repository's verified FFmpeg bundle provided that filter and generated real
+local fixtures. The isolated built Electron app then passed the MCP test:
+it created a workspace, connected an MCP client, read project state, performed
+a real Project Actor mutation, and read the changed project back. Hermes
+provider validation remains outstanding below.
 
 ## Release blockers — Phase 1 is not ready
 
-- The macOS keychain request was cancelled during the live launch. Secure
-  storage is therefore unavailable, so Hermes correctly did not start. Re-enable
-  keychain access before attempting a live sidecar/session run.
+- A human must approve macOS Keychain access and enter an OpenRouter API key in
+  the Sclip panel. No credential was supplied to this task, so a real model
+  run cannot be performed or claimed.
 - The pre-existing development Hermes profile contains plaintext gateway and
   MCP credentials. Treat every credential in it as exposed and rotate it; do
   not migrate the plaintext profile wholesale. The application intentionally
@@ -100,9 +124,11 @@ Chrome was denied permission to kill its own process (`EPERM`).
   MCP host. Session isolation across real gateway history, approvals, stop,
   crash recovery, synchronization after manual edits, and the requested real
   media edit matrix remain unverified.
-- A real media import/decode/preview and a full clean Vitest run must still be
-  performed in a host that permits loopback test servers. Retiming remains
-  explicitly unsupported; export MCP commands are still absent.
+- A real media import/decode/preview and the mandatory model-driven edit matrix
+  still need execution in the integrated Sclip instance. The prior visible GUI
+  evidence was a standalone WeftCut app and is deliberately not accepted as
+  Sclip/Hermes evidence. Retiming remains explicitly unsupported; export MCP
+  commands are still absent.
 
 ## Additional product gaps
 

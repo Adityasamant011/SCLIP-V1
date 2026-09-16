@@ -9,37 +9,24 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const MAIN = path.resolve(__dirname, '../../out/main/index.js')
 
-// Parse the `[mcp] connect: {…}` line the host logs in unpackaged runs (mcp/index.ts).
-function parseConnect(line: string): { url: string; token: string } | null {
-  const m = line.match(/\[mcp\] connect: (\{.*\})/)
-  if (!m) return null
-  const cfg = JSON.parse(m[1]) as { mcpServers: { weftcut: { url: string; headers: { Authorization: string } } } }
-  const s = cfg.mcpServers.weftcut
-  return { url: s.url, token: s.headers.Authorization.replace(/^Bearer /, '') }
-}
-
 test('TS actor: MCP mutate → resource read reflects it; blocked tool rejects', async () => {
   const ws = tmpDir('wc-mcp-flip-')
-  // Raw electron.launch (not launchApp): the stdout listener for the
-  // `[mcp] connect:` log line must attach synchronously right after launch,
-  // before firstWindow resolves — launchApp awaits firstWindow internally and
-  // the listener could miss the line. Still boot over an isolated userData.
+  // Raw electron.launch keeps this test's launch contract explicit while still
+  // booting over isolated user data. MCP credentials are read through the
+  // existing renderer bridge, never copied to a development log.
   const userDataDir = tmpDir('wc-mcp-flip-userdata-')
-  let connect: { url: string; token: string } | null = null
   const app = await electron.launch({
     args: [...GL_SWITCHES, `--user-data-dir=${userDataDir}`, MAIN],
     env: { ...process.env, WEFTCUT_SUPPRESS_ELEVATION_NOTICE: '1' } as Record<string, string>,
   })
-  app.process().stdout!.on('data', (b: Buffer) => { const c = parseConnect(b.toString()); if (c) connect = c })
   try {
     const page = await app.firstWindow({ timeout: 60_000 })
     await page.waitForLoadState('domcontentloaded')
     await page.waitForFunction(() => !!(window as any).api?.backend?.invoke, undefined, { timeout: 30_000 })
     // New workspace (TS orchestrator) so there's a project + tracks.
     await page.evaluate(([ws]) => (window as any).api.backend.invoke('project_new_workspace', { parentFolder: ws, name: 'mcp', width: 1920, height: 1080, fpsNum: 30, fpsDen: 1 }), [ws])
-    // Wait for the connect log, then open an MCP client.
-    await expect.poll(() => connect, { timeout: 15_000 }).not.toBeNull()
-    const transport = new StreamableHTTPClientTransport(new URL(connect!.url), { requestInit: { headers: { Authorization: `Bearer ${connect!.token}` } } })
+    const connect = await page.evaluate(() => (window as any).api.mcp.getInfo()) as { url: string; bearer_token: string }
+    const transport = new StreamableHTTPClientTransport(new URL(connect.url), { requestInit: { headers: { Authorization: `Bearer ${connect.bearer_token}` } } })
     const client = new Client({ name: 'e2e', version: '0.0.0' })
     await client.connect(transport)
     try {
