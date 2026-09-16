@@ -1,5 +1,6 @@
 import path from 'node:path'
 import fs from 'node:fs'
+import { createHash } from 'node:crypto'
 import * as pty from 'node-pty'
 
 const EDITOR_TOOLSETS = 'web,vision,skills,todo,memory,clarify,sclip-editor'
@@ -48,7 +49,10 @@ export class HermesTerminalRuntime {
     const terminal = pty.spawn(launch.command, [
       ...launch.args,
       'chat', '--toolsets', EDITOR_TOOLSETS,
-      '--continue', `sclip:${projectId}:${sessionId}`,
+      // Hermes limits session titles to 100 chars; renderer-generated project
+      // and session ids can be longer than that. Hash the ownership pair into
+      // a stable, opaque title instead of leaking ids or failing to start.
+      '--continue', this.hermesSessionTitle(projectId, sessionId),
       '--create-if-missing', '--no-restore-cwd', '--ignore-rules', '--source', 'tool', '--cli',
     ], {
       name: 'xterm-256color',
@@ -102,6 +106,9 @@ export class HermesTerminalRuntime {
   }
 
   private key(projectId: string, sessionId: string): string { return `${projectId}\u0000${sessionId}` }
+  private hermesSessionTitle(projectId: string, sessionId: string): string {
+    return `sclip-${createHash('sha256').update(this.key(projectId, sessionId)).digest('hex').slice(0, 32)}`
+  }
   private dimension(value: number, fallback: number): number {
     return Number.isInteger(value) && value >= 2 && value <= 500 ? value : fallback
   }
