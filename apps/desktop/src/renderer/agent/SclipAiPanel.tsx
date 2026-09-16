@@ -18,6 +18,7 @@ import {
 import { projectCreateCheckpoint, projectRedo, projectUndo } from '../ipc'
 import { tryMutate } from '../errors/tryMutate'
 import { useProjectStore } from '../state/projectStore'
+import { HermesTerminal } from './HermesTerminal'
 import './sclip.css'
 
 interface SclipEvent {
@@ -197,11 +198,12 @@ export function SclipAiPanel() {
     <div className="sclip-view-tabs" role="tablist" aria-label="Sclip workspace">
       {(['chat', 'terminal', 'activity'] as const).map(key => <button key={key} type="button" role="tab" aria-selected={view === key} className={view === key ? 'active' : ''} onClick={() => setView(key)}>{key === 'chat' ? 'Chat' : key === 'terminal' ? 'Terminal' : 'Activity'}</button>)}
     </div>
-    <div className="sclip-events-header"><span>{view === 'chat' ? 'Conversation' : view === 'terminal' ? 'Hermes API terminal' : 'Structured activity'}</span><span>{activeSession?.name ?? 'No session'}</span></div>
-    <div ref={eventsListRef} className={`sclip-events-list ${view === 'terminal' ? 'sclip-terminal-view' : ''}`}>{(() => {
-      // Gateway exposes session messages and streamed run/tool events, but not a
-      // faithful interactive CLI stdin channel. This terminal is deliberately a
-      // session-isolated API transcript; editor control still travels via MCP.
+    <div className="sclip-events-header"><span>{view === 'chat' ? 'Conversation' : view === 'terminal' ? 'Hermes terminal' : 'Structured activity'}</span><span>{activeSession?.name ?? 'No session'}</span></div>
+    {view === 'terminal' ? (
+      activeSession && projectId
+        ? <HermesTerminal projectId={projectId} sessionId={activeSession.id} />
+        : <div className="sclip-empty-events"><Bot size={24} /><p>Create a Hermes session before opening its terminal.</p></div>
+    ) : <div ref={eventsListRef} className="sclip-events-list">{(() => {
       const visible = view === 'chat'
         ? events.filter(event => event.title === 'You' || event.title === 'Hermes')
         : view === 'activity'
@@ -209,6 +211,6 @@ export function SclipAiPanel() {
           : events
       if (visible.length === 0) return <div className="sclip-empty-events"><Bot size={24} /><p>{activeSession ? view === 'activity' ? 'No tool activity for this session yet.' : 'This Hermes session has no messages yet.' : 'Choose a project and create a session.'}</p></div>
       return <>{visible.map(event => <article key={event.id} className={`sclip-event-card ${event.status === 'error' ? 'event-failed' : event.status === 'success' ? 'event-success' : ''}`}><div className="sclip-event-meta"><strong>{event.status === 'running' && <Loader2 size={12} className="agent-spin" />} {event.status === 'success' && <CheckCircle2 size={12} />} {event.title}</strong></div>{event.detail && <div className="sclip-event-detail">{event.detail}</div>}{event.approval && <div className="sclip-approval-actions"><ShieldCheck size={13} />{event.approval.choices.map(choice => <button type="button" key={choice} className={choice === 'deny' ? 'sclip-btn-secondary' : 'sclip-btn-primary'} onClick={() => void resolveApproval(event, choice)}>{choice}</button>)}</div>}</article>)}</>
-    })()}</div>
+    })()}</div>}
   </div>
 }

@@ -309,6 +309,35 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
+.sclip-live-terminal {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  background: #0b0d12;
+}
+
+.sclip-terminal-host {
+  position: absolute;
+  inset: 0;
+  padding: 10px;
+}
+
+.sclip-terminal-host .xterm { height: 100%; }
+.sclip-terminal-host .xterm-viewport { overflow-y: auto !important; }
+.sclip-terminal-error {
+  position: absolute;
+  z-index: 2;
+  top: 8px;
+  left: 8px;
+  right: 8px;
+  color: #fecaca;
+  background: rgba(127, 29, 29, .9);
+  border: 1px solid rgba(252, 165, 165, .5);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 11px;
+}
+
 .sclip-events-list {
   flex: 1;
   min-height: 0;

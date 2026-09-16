@@ -117,6 +117,7 @@ let windowGeometryStore: import('./windowGeometry.js').WindowGeometryStore | nul
 // in-flight transfer (its partial stays; the persisted queue resumes it next boot).
 let contentQueue: ContentQueue | null = null
 let hermesRuntime: import('./sclip/hermesRuntime.js').HermesRuntime | null = null
+let hermesTerminalRuntime: import('./sclip/hermesTerminalRuntime.js').HermesTerminalRuntime | null = null
 
 const isDev = !!process.env['ELECTRON_RENDERER_URL']
 
@@ -1087,6 +1088,7 @@ app.whenReady().then(async () => {
     getHermesRun,
   } = await import('./sclip/hermesBridge.js')
   const { HermesRuntime } = await import('./sclip/hermesRuntime.js')
+  const { HermesTerminalRuntime } = await import('./sclip/hermesTerminalRuntime.js')
   // The gateway key is an app credential: it belongs in Electron safeStorage,
   // never in a project document, renderer state, or a Hermes config checked in
   // alongside source. The gateway itself is an optional sidecar for now, so a
@@ -1147,6 +1149,33 @@ app.whenReady().then(async () => {
     },
     sessions: new SclipSessionStore(path.join(app.getPath('userData'), 'sclip_hermes_sessions.json')),
   })
+  hermesTerminalRuntime = new HermesTerminalRuntime({
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    userDataPath: app.getPath('userData'),
+    executableOverride: process.env.SCLIP_HERMES_EXECUTABLE,
+    sourceOverride: process.env.SCLIP_HERMES_SOURCE,
+    getProviderEnvironment: () => {
+      const keys = loadAllKeys()
+      return {
+        ...(keys.openai ? { OPENAI_API_KEY: keys.openai } : {}),
+        ...(keys.anthropic ? { ANTHROPIC_API_KEY: keys.anthropic } : {}),
+        ...(keys.sclip_openrouter ? { OPENROUTER_API_KEY: keys.sclip_openrouter } : {}),
+      }
+    },
+    assertSession: async (projectId, sessionId) => {
+      if (hermesRuntime?.snapshot().state !== 'ready') throw new Error('Reconnect Hermes before opening its terminal')
+      const activeProjectId = await (async () => {
+        const summary = await tsHost!.handleInvoke('project_summary', {}) as { project_id?: unknown }
+        return typeof summary?.project_id === 'string' ? summary.project_id : ''
+      })()
+      if (!projectId || activeProjectId !== projectId) throw new Error('The Hermes terminal is limited to the active WeftCut project')
+      const sessions = await listProjectSessions(projectId)
+      if (!sessions.sessions.some(session => session.id === sessionId)) throw new Error('Hermes terminal session does not belong to this project')
+    },
+    onOutput: event => broadcastEvent(BrowserWindow.getAllWindows(), 'sclip:terminal_output', event),
+    onExit: event => broadcastEvent(BrowserWindow.getAllWindows(), 'sclip:terminal_exit', event),
+  })
   // Hermes is optional for editing, but when available Sclip owns exactly this
   // child and reports a truthful failed/offline state instead of a fake URL.
   if (encryptionAvailable()) void hermesRuntime.start()
@@ -1164,6 +1193,21 @@ app.whenReady().then(async () => {
       return hermesRuntime?.restart()
     }
     if (channel === 'sclip_get_hermes_status') return getHermesStatus()
+    if (channel === 'sclip_open_terminal') {
+      const { projectId, sessionId, cols, rows } = args as { projectId: string; sessionId: string; cols?: number; rows?: number }
+      return hermesTerminalRuntime?.ensure(projectId, sessionId, cols, rows) ?? ''
+    }
+    if (channel === 'sclip_terminal_input') {
+      const { projectId, sessionId, data } = args as { projectId: string; sessionId: string; data: string }
+      if (typeof data !== 'string') throw new Error('Terminal input must be text')
+      await hermesTerminalRuntime?.input(projectId, sessionId, data)
+      return null
+    }
+    if (channel === 'sclip_terminal_resize') {
+      const { projectId, sessionId, cols, rows } = args as { projectId: string; sessionId: string; cols: number; rows: number }
+      await hermesTerminalRuntime?.resize(projectId, sessionId, cols, rows)
+      return null
+    }
     if (channel === 'sclip_start_hermes_run') return startHermesRun(args as { prompt: string; projectId: string; sessionId: string })
     if (channel === 'sclip_stop_hermes_run') {
       const { runId } = (args ?? {}) as { runId: string }
@@ -2422,6 +2466,7 @@ app.on('before-quit', (event) => {
   // menu / Cmd+Q, where before-quit precedes the window close.
   windowGeometryStore?.flush()
   if (quitFlushed || !tsHost) {
+    hermesTerminalRuntime?.stopAll()
     void hermesRuntime?.stop()
     return
   }

@@ -74,3 +74,16 @@ export async function sclipRenameProjectSession(projectId: string, sessionId: st
 export async function sclipArchiveProjectSession(projectId: string, sessionId: string): Promise<void> {
   return invoke<void>('sclip_archive_project_session', { projectId, sessionId })
 }
+
+/** Opens the project-scoped interactive Hermes PTY and returns its in-memory replay buffer. */
+export async function sclipOpenTerminal(projectId: string, sessionId: string, cols: number, rows: number): Promise<string> {
+  return invoke<string>('sclip_open_terminal', { projectId, sessionId, cols, rows })
+}
+
+export async function sclipTerminalInput(projectId: string, sessionId: string, data: string): Promise<void> {
+  return invoke<void>('sclip_terminal_input', { projectId, sessionId, data })
+}
+
+export async function sclipTerminalResize(projectId: string, sessionId: string, cols: number, rows: number): Promise<void> {
+  return invoke<void>('sclip_terminal_resize', { projectId, sessionId, cols, rows })
+}

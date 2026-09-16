@@ -45,6 +45,7 @@ files:
   - "**/node_modules/@weftcut/native-decode/*.dylib"
 asarUnpack:
   - "**/*.node"
+  - "**/node_modules/node-pty/**"
   # $ORIGIN/@loader_path resolves against the .node's on-disk directory, which
   # only exists once the shared objects are unpacked out of the asar archive
   # beside it — inside app.asar there is no real directory for the loader to
