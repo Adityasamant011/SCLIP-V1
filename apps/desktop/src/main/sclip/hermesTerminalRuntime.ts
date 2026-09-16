@@ -3,7 +3,10 @@ import fs from 'node:fs'
 import { createHash } from 'node:crypto'
 import * as pty from 'node-pty'
 
-const EDITOR_TOOLSETS = 'web,vision,skills,todo,memory,clarify,sclip-editor'
+// The WeftCut editor tools arrive through the authenticated MCP server in the
+// generated Hermes profile. `sclip-editor` was an old-app label, not a Hermes
+// toolset, so do not pass it to the CLI (it only produces a startup warning).
+const EDITOR_TOOLSETS = 'web,vision,skills,todo,memory,clarify'
 const MAX_HISTORY_BYTES = 256 * 1024
 const MAX_INPUT_BYTES = 64 * 1024
 
