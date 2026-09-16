@@ -4,12 +4,10 @@ import { createHash } from 'node:crypto'
 import * as pty from 'node-pty'
 
 // The WeftCut editor tools arrive through the authenticated MCP server in the
-// generated Hermes profile. Hermes registers a configured server named
-// `weftcut` as the runtime toolset `mcp-weftcut`. `sclip-editor` was an old-app
-// label, not a Hermes toolset, so do not pass it to the CLI (it only produces a
-// startup warning). Keep the MCP toolset explicit: an explicit --toolsets list
-// otherwise filters every discovered MCP tool back out of the chat session.
-const EDITOR_TOOLSETS = 'web,vision,skills,todo,memory,clarify,mcp-weftcut'
+// generated Hermes profile. In Hermes CLI, passing the configured MCP server name
+// `weftcut` matches CLI_CONFIG.mcp_servers and dynamically aliases to `mcp-weftcut`,
+// ensuring all 93 WeftCut tools are enabled without triggering startup warnings.
+const EDITOR_TOOLSETS = 'web,vision,skills,todo,memory,clarify,weftcut'
 const MAX_HISTORY_BYTES = 256 * 1024
 const MAX_INPUT_BYTES = 64 * 1024
 

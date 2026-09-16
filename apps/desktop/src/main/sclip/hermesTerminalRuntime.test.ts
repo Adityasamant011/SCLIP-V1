@@ -49,7 +49,7 @@ describe('HermesTerminalRuntime', () => {
     rmSync(tmpDir, { recursive: true, force: true })
   })
 
-  it('spawns Hermes CLI with explicit mcp-weftcut toolset and MCP connection env vars', async () => {
+  it('spawns Hermes CLI with explicit weftcut toolset and MCP connection env vars', async () => {
     const runtime = new HermesTerminalRuntime({
       isPackaged: false,
       resourcesPath: '/test/resources',
@@ -67,7 +67,7 @@ describe('HermesTerminalRuntime', () => {
     expect(spawnedArgs).toContain('chat')
     const toolsetsIdx = spawnedArgs.indexOf('--toolsets')
     expect(toolsetsIdx).toBeGreaterThan(-1)
-    expect(spawnedArgs[toolsetsIdx + 1]).toContain('mcp-weftcut')
+    expect(spawnedArgs[toolsetsIdx + 1]).toContain('weftcut')
 
     expect(spawnedEnv.SCLIP_MCP_URL).toBe('http://127.0.0.1:44555/mcp')
     expect(spawnedEnv.SCLIP_MCP_TOKEN).toBe('secret-token-123')
