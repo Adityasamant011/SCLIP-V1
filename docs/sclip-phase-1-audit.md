@@ -99,9 +99,8 @@ After the lifecycle fixes, `npm run build` passed and the focused desktop
 Vitest command covering model downloads, MCP lifecycle/bind, CLI integration,
 AgentPanel, and session storage passed **27/27** when granted ordinary local
 loopback binding. The managed sandbox rejects the same bind with `EPERM`.
-The independent script suite previously reached 83 passing tests out of 84;
-its sole browser-backed popup-layering test aborted when managed-environment
-headless Chrome was denied permission to kill its own process (`EPERM`).
+The independent script/E2E helper suite now passes **84/84** after the
+repository FFmpeg bundle was installed.
 
 The real Electron MCP test was updated to avoid the removed token log. Its
 first run was blocked because the host FFmpeg lacked `drawtext`; fetching the
@@ -110,6 +109,11 @@ local fixtures. The isolated built Electron app then passed the MCP test:
 it created a workspace, connected an MCP client, read project state, performed
 a real Project Actor mutation, and read the changed project back. Hermes
 provider validation remains outstanding below.
+
+The live panel reproduced a transcript-scroll defect: the first conversation
+event called browser-wide `scrollIntoView`, moving the whole editor below the
+viewport. Commit `7f13efad` confines scrolling to the panel's own message
+list; TypeScript and focused panel/session tests pass after the fix.
 
 ## Release blockers — Phase 1 is not ready
 

@@ -14,7 +14,10 @@
   binding permitted. The project FFmpeg bundle was fetched to replace a host
   FFmpeg missing `drawtext`, allowing real fixture generation. The isolated
   built Electron MCP test then passed: MCP read → Project Actor mutation →
-  project readback.
+  project readback. `npm run test:scripts` now passes 84/84.
+- Follow-up fix: a live panel run exposed whole-editor scrolling from the
+  transcript's `scrollIntoView`; commit `7f13efad` scrolls only the transcript
+  container. Typecheck and focused panel/session tests pass.
 - Still blocked on human-only input: approve macOS Keychain access and enter
   an OpenRouter key in Sclip before a genuine Hermes/OpenRouter/MCP media edit,
   approvals, stop, and crash/restart matrix can be verified. Phase 2 was not
