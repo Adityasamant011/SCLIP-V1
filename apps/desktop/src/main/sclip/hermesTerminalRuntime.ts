@@ -4,9 +4,12 @@ import { createHash } from 'node:crypto'
 import * as pty from 'node-pty'
 
 // The WeftCut editor tools arrive through the authenticated MCP server in the
-// generated Hermes profile. `sclip-editor` was an old-app label, not a Hermes
-// toolset, so do not pass it to the CLI (it only produces a startup warning).
-const EDITOR_TOOLSETS = 'web,vision,skills,todo,memory,clarify'
+// generated Hermes profile. Hermes registers a configured server named
+// `weftcut` as the runtime toolset `mcp-weftcut`. `sclip-editor` was an old-app
+// label, not a Hermes toolset, so do not pass it to the CLI (it only produces a
+// startup warning). Keep the MCP toolset explicit: an explicit --toolsets list
+// otherwise filters every discovered MCP tool back out of the chat session.
+const EDITOR_TOOLSETS = 'web,vision,skills,todo,memory,clarify,mcp-weftcut'
 const MAX_HISTORY_BYTES = 256 * 1024
 const MAX_INPUT_BYTES = 64 * 1024
 
@@ -16,6 +19,7 @@ export interface HermesTerminalOptions {
   userDataPath: string
   executableOverride?: string
   sourceOverride?: string
+  getMcpInfo: () => { url: string; bearer_token: string }
   getProviderEnvironment: () => Record<string, string>
   /** Reject stale renderer/project/session combinations before a PTY is created. */
   assertSession: (projectId: string, sessionId: string) => Promise<void>
@@ -49,6 +53,7 @@ export class HermesTerminalRuntime {
     const launch = this.resolveLaunch()
     const home = path.join(this.options.userDataPath, 'sclip-hermes')
     fs.mkdirSync(home, { recursive: true, mode: 0o700 })
+    const mcp = this.options.getMcpInfo()
     const terminal = pty.spawn(launch.command, [
       ...launch.args,
       'chat', '--toolsets', EDITOR_TOOLSETS,
@@ -68,6 +73,8 @@ export class HermesTerminalRuntime {
         HERMES_HOME: home,
         SCLIP_ACTIVE_PROJECT_ID: projectId,
         SCLIP_PROJECT_ID: projectId,
+        SCLIP_MCP_URL: mcp.url,
+        SCLIP_MCP_TOKEN: mcp.bearer_token,
         TERM: 'xterm-256color',
       },
     })

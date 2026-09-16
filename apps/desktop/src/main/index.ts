@@ -1155,6 +1155,7 @@ app.whenReady().then(async () => {
     userDataPath: app.getPath('userData'),
     executableOverride: process.env.SCLIP_HERMES_EXECUTABLE,
     sourceOverride: process.env.SCLIP_HERMES_SOURCE,
+    getMcpInfo: () => mcpHost.getInfo(),
     getProviderEnvironment: () => {
       const keys = loadAllKeys()
       return {
