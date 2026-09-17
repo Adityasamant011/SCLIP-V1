@@ -430,6 +430,15 @@ export function App({ onCloseProject }: AppProps) {
     setSettingsOpen(true);
   }, []);
 
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const custom = e as CustomEvent<{ category?: SettingsCategory }>;
+      openSettings(custom.detail?.category ?? "agent");
+    };
+    window.addEventListener("sclip:open_settings", handler);
+    return () => window.removeEventListener("sclip:open_settings", handler);
+  }, [openSettings]);
+
   // Capability notices are current state first, but they also belong in the
   // workspace's System log as an auditable session event. The backend log bus
   // does not exist before a workspace opens, so mirror them once it is ready.

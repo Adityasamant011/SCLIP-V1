@@ -5,10 +5,14 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import { sclipOpenTerminal, sclipTerminalInput, sclipTerminalResize } from '../ipc/sclip'
 import '@xterm/xterm/css/xterm.css'
 
-interface Props { projectId: string; sessionId: string }
+interface Props {
+  projectId: string
+  sessionId: string
+  onTerminalReady?: (actions: { clear: () => void }) => void
+}
 
 /** The real PTY surface. Its process is Hermes-only; it is not a system shell. */
-export function HermesTerminal({ projectId, sessionId }: Props) {
+export function HermesTerminal({ projectId, sessionId, onTerminalReady }: Props) {
   const host = useRef<HTMLDivElement>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -29,6 +33,7 @@ export function HermesTerminal({ projectId, sessionId }: Props) {
     terminal.loadAddon(new WebLinksAddon())
     terminal.open(node)
     fit.fit()
+    onTerminalReady?.({ clear: () => terminal.clear() })
 
     const writeOutput = (payload: unknown) => {
       const event = payload as { projectId?: unknown; sessionId?: unknown; data?: unknown }

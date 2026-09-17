@@ -87,3 +87,42 @@ export async function sclipTerminalInput(projectId: string, sessionId: string, d
 export async function sclipTerminalResize(projectId: string, sessionId: string, cols: number, rows: number): Promise<void> {
   return invoke<void>('sclip_terminal_resize', { projectId, sessionId, cols, rows })
 }
+
+export interface HermesConfigView {
+  provider: string
+  model: string
+  customBaseUrl?: string
+  maxIterations: number
+  configuredKeys: {
+    anthropic: boolean
+    openai: boolean
+    openrouter: boolean
+    groq: boolean
+    deepseek: boolean
+    gemini: boolean
+  }
+}
+
+export interface HermesConfigUpdate {
+  provider?: string | undefined
+  model?: string | undefined
+  customBaseUrl?: string | undefined
+  maxIterations?: number | undefined
+  apiKey?: string | undefined
+}
+
+export async function sclipGetHermesConfig(): Promise<HermesConfigView> {
+  return invoke<HermesConfigView>('sclip_get_hermes_config')
+}
+
+export async function sclipSetHermesConfig(update: HermesConfigUpdate): Promise<{ ok: boolean }> {
+  return invoke<{ ok: boolean }>('sclip_set_hermes_config', update as unknown as Record<string, unknown>)
+}
+
+export async function sclipRestartTerminal(projectId: string, sessionId: string, cols = 100, rows = 30): Promise<string> {
+  return invoke<string>('sclip_restart_terminal', { projectId, sessionId, cols, rows })
+}
+
+export function openSclipSettings(category = 'agent'): void {
+  window.dispatchEvent(new CustomEvent('sclip:open_settings', { detail: { category } }))
+}

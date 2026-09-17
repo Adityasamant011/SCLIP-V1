@@ -149,29 +149,10 @@ export class HermesRuntime {
     return { command: python, args: ['-m', 'hermes_cli.main', 'gateway', 'run', '--external-supervisor'], cwd: source }
   }
 
+  getPort(): number { return this.port }
+
   private writeProfile(home: string): void {
-    const target = path.join(home, 'config.yaml')
-    let modelProvider = 'openrouter'
-    let modelDefault = 'dots-studio/dots-3-note-preview:free'
-    if (fs.existsSync(target)) {
-      try {
-        const existing = fs.readFileSync(target, 'utf8')
-        const providerMatch = existing.match(/^\s*provider:\s*([^\s#]+)/m)
-        const defaultMatch = existing.match(/^\s*default:\s*([^\s#]+)/m)
-        if (providerMatch?.[1]) modelProvider = providerMatch[1]
-        if (defaultMatch?.[1]) modelDefault = defaultMatch[1]
-      } catch { /* use defaults on read error */ }
-    }
-    const config = [
-      'model:', `  provider: ${modelProvider}`, `  default: ${modelDefault}`,
-      'platforms:', '  api_server:', '    enabled: true', '    extra:', '      host: "127.0.0.1"', `      port: ${this.port}`,
-      'mcp_servers:', '  weftcut:', '    url: "${SCLIP_MCP_URL}"', '    headers:', '      Authorization: "Bearer ${SCLIP_MCP_TOKEN}"', '    timeout: 120',
-      'terminal:', '  cwd: "."',
-      'agent:', '  max_iterations: 30', '',
-    ].join('\n')
-    fs.writeFileSync(`${target}.tmp`, config, { encoding: 'utf8', mode: 0o600 })
-    fs.renameSync(`${target}.tmp`, target)
-    try { fs.chmodSync(target, 0o600) } catch { /* Windows lacks POSIX modes. */ }
+    writeHermesProfile(home, this.port)
   }
 
   private async choosePort(): Promise<number> {
@@ -205,4 +186,80 @@ export class HermesRuntime {
 
   private childFailed(detail: string): void { this.publish({ state: 'failed', gatewayUrl: this.status.gatewayUrl, detail }) }
   private publish(status: HermesRuntimeStatus): void { this.status = status; this.options.onStatus?.(this.snapshot()) }
+}
+
+export interface HermesProfileConfig {
+  provider: string
+  model: string
+  customBaseUrl?: string
+  maxIterations: number
+}
+
+export function readHermesProfile(home: string): HermesProfileConfig {
+  const target = path.join(home, 'config.yaml')
+  let provider = 'openrouter'
+  let model = 'dots-studio/dots-3-note-preview:free'
+  let customBaseUrl: string | undefined = undefined
+  let maxIterations = 30
+  if (fs.existsSync(target)) {
+    try {
+      const existing = fs.readFileSync(target, 'utf8')
+      const providerMatch = existing.match(/^\s*provider:\s*([^\s#]+)/m)
+      const defaultMatch = existing.match(/^\s*default:\s*([^\s#]+)/m)
+      const baseUrlMatch = existing.match(/^\s*base_url:\s*["']?([^"'\s#]+)["']?/m)
+      const maxIterMatch = existing.match(/^\s*max_iterations:\s*(\d+)/m)
+      if (providerMatch?.[1]) provider = providerMatch[1].trim()
+      if (defaultMatch?.[1]) model = defaultMatch[1].trim()
+      if (baseUrlMatch?.[1]) customBaseUrl = baseUrlMatch[1].trim()
+      if (maxIterMatch?.[1]) maxIterations = parseInt(maxIterMatch[1], 10)
+    } catch { /* use defaults on read error */ }
+  }
+  return { provider, model, customBaseUrl, maxIterations }
+}
+
+export function writeHermesProfile(
+  home: string,
+  port: number,
+  params?: Partial<HermesProfileConfig>
+): void {
+  const current = readHermesProfile(home)
+  const provider = params?.provider ?? current.provider
+  const model = params?.model ?? current.model
+  const customBaseUrl = params?.customBaseUrl !== undefined ? params.customBaseUrl : current.customBaseUrl
+  const maxIterations = params?.maxIterations ?? current.maxIterations
+
+  const modelLines = [
+    'model:',
+    `  provider: ${provider}`,
+    `  default: ${model}`,
+  ]
+  if (customBaseUrl) {
+    modelLines.push(`  base_url: "${customBaseUrl}"`)
+  }
+
+  const config = [
+    ...modelLines,
+    'platforms:',
+    '  api_server:',
+    '    enabled: true',
+    '    extra:',
+    '      host: "127.0.0.1"',
+    `      port: ${port}`,
+    'mcp_servers:',
+    '  weftcut:',
+    '    url: "${SCLIP_MCP_URL}"',
+    '    headers:',
+    '      Authorization: "Bearer ${SCLIP_MCP_TOKEN}"',
+    '    timeout: 120',
+    'terminal:',
+    '  cwd: "."',
+    'agent:',
+    `  max_iterations: ${maxIterations}`,
+    '',
+  ].join('\n')
+
+  const target = path.join(home, 'config.yaml')
+  fs.writeFileSync(`${target}.tmp`, config, { encoding: 'utf8', mode: 0o600 })
+  fs.renameSync(`${target}.tmp`, target)
+  try { fs.chmodSync(target, 0o600) } catch { /* Windows lacks POSIX modes. */ }
 }

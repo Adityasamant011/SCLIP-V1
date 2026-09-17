@@ -1,4 +1,139 @@
 /* Sclip is intentionally a single-purpose Hermes terminal dock. */
+.sclip-dock-wrapper {
+  height: 100%;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  background: #0b0d12;
+  overflow: hidden;
+}
+
+.sclip-agent-header {
+  height: 36px;
+  min-height: 36px;
+  background: #111319;
+  border-bottom: 1px solid #1e222d;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px;
+  user-select: none;
+  z-index: 10;
+}
+
+.sclip-agent-model-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #181b24;
+  border: 1px solid #282d3c;
+  border-radius: 6px;
+  padding: 3px 8px;
+  font: 11px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: #d1d5db;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+  max-width: 65%;
+  overflow: hidden;
+}
+
+.sclip-agent-model-badge:hover {
+  background: #202432;
+  border-color: #3b4256;
+  color: #ffffff;
+}
+
+.sclip-agent-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.sclip-agent-status-dot.online {
+  background: #10b981;
+  box-shadow: 0 0 6px rgba(16, 185, 129, 0.6);
+}
+
+.sclip-agent-status-dot.offline {
+  background: #ef4444;
+}
+
+.sclip-agent-bot-icon {
+  color: #818cf8;
+  flex-shrink: 0;
+}
+
+.sclip-agent-provider-tag {
+  font-weight: 600;
+  color: #93c5fd;
+  text-transform: capitalize;
+}
+
+.sclip-agent-separator {
+  color: #4b5563;
+}
+
+.sclip-agent-model-tag {
+  color: #e5e7eb;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sclip-agent-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sclip-agent-action-btn {
+  background: transparent;
+  border: none;
+  color: #9ca3af;
+  padding: 5px;
+  border-radius: 5px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.sclip-agent-action-btn:hover:not(:disabled) {
+  background: #1f2430;
+  color: #f3f4f6;
+}
+
+.sclip-agent-action-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.sclip-agent-settings-btn {
+  color: #a5b4fc;
+}
+
+.sclip-agent-settings-btn:hover {
+  background: rgba(99, 102, 241, 0.15) !important;
+  color: #c7d2fe !important;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.sclip-agent-action-btn.spinning svg {
+  animation: spin 0.8s linear infinite;
+}
+
+.sclip-dock-content {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+
 .sclip-live-terminal {
   height: 100%;
   min-height: 0;
@@ -9,7 +144,7 @@
 .sclip-terminal-host {
   position: absolute;
   inset: 0;
-  padding: 10px;
+  padding: 8px 10px;
 }
 
 .sclip-terminal-host .xterm { height: 100%; }
@@ -39,4 +174,341 @@
   border-radius: 4px;
   padding: 6px 8px;
   font-size: 11px;
+}
+
+/* Hermes Settings Modal Styles */
+.sclip-settings-root {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 720px;
+  margin: 0 auto;
+  color: #e5e7eb;
+}
+
+.sclip-settings-mode-switch {
+  display: flex;
+  gap: 8px;
+  border-bottom: 1px solid #27272a;
+  padding-bottom: 8px;
+}
+
+.sclip-settings-mode-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: #9ca3af;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.sclip-settings-mode-tab:hover {
+  color: #f3f4f6;
+  background: #18181b;
+}
+
+.sclip-settings-mode-tab.active {
+  color: #a5b4fc;
+  background: rgba(99, 102, 241, 0.12);
+  border-color: rgba(99, 102, 241, 0.3);
+}
+
+.sclip-settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.sclip-settings-header-card {
+  background: #12141c;
+  border: 1px solid #232734;
+  border-radius: 8px;
+  padding: 12px 16px;
+}
+
+.sclip-settings-header-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.sclip-settings-status-pill {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.sclip-settings-status-pill.online {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.sclip-settings-status-pill.offline {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.sclip-settings-status-mcp {
+  font-size: 11px;
+  color: #9ca3af;
+}
+
+.sclip-settings-header-sub {
+  margin: 0;
+  font-size: 12px;
+  color: #9ca3af;
+  line-height: 1.4;
+}
+
+.sclip-settings-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #d1d5db;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-top: 4px;
+}
+
+.sclip-provider-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 8px;
+}
+
+.sclip-provider-card {
+  background: #131620;
+  border: 1px solid #242938;
+  border-radius: 8px;
+  padding: 10px 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sclip-provider-card:hover {
+  background: #1a1e2c;
+  border-color: #3b4256;
+}
+
+.sclip-provider-card.selected {
+  background: #181d2e;
+  border-color: #6366f1;
+  box-shadow: 0 0 0 1px #6366f1;
+}
+
+.sclip-provider-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sclip-provider-card-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: #f3f4f6;
+}
+
+.sclip-provider-card-badge {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  background: #242938;
+  color: #9ca3af;
+  padding: 2px 5px;
+  border-radius: 4px;
+}
+
+.sclip-provider-card.selected .sclip-provider-card-badge {
+  background: rgba(99, 102, 241, 0.2);
+  color: #a5b4fc;
+}
+
+.sclip-provider-card-desc {
+  font-size: 11px;
+  color: #9ca3af;
+  line-height: 1.3;
+}
+
+.sclip-provider-saved-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: #34d399;
+  margin-top: 4px;
+}
+
+.sclip-provider-form-box {
+  background: #12141c;
+  border: 1px solid #232734;
+  border-radius: 8px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.sclip-form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sclip-form-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: #e5e7eb;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sclip-key-status-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  color: #10b981;
+  background: rgba(16, 185, 129, 0.1);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+.sclip-form-control-col {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sclip-select-input {
+  background: #181b26;
+  border: 1px solid #2d3345;
+  border-radius: 6px;
+  color: #f3f4f6;
+  font-size: 12px;
+  padding: 7px 10px;
+  outline: none;
+  width: 100%;
+}
+
+.sclip-select-input:focus {
+  border-color: #6366f1;
+}
+
+.sclip-custom-model-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.sclip-api-key-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sclip-api-key-wrapper > div {
+  flex: 1;
+}
+
+.sclip-key-eye-btn {
+  background: #181b26;
+  border: 1px solid #2d3345;
+  color: #9ca3af;
+  padding: 6px 9px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sclip-key-eye-btn:hover {
+  color: #f3f4f6;
+  border-color: #3b4256;
+}
+
+.sclip-input-hint {
+  font-size: 11px;
+  color: #6b7280;
+}
+
+.sclip-iterations-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.sclip-iterations-hint {
+  font-size: 11px;
+  color: #6b7280;
+}
+
+.sclip-form-alert {
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sclip-form-alert.error {
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: #fca5a5;
+}
+
+.sclip-form-alert.success {
+  background: rgba(16, 185, 129, 0.15);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  color: #6ee7b7;
+}
+
+.sclip-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+.sclip-save-btn {
+  background: #4f46e5 !important;
+  color: #ffffff !important;
+  font-size: 12px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 16px;
+}
+
+.sclip-save-btn:hover:not(:disabled) {
+  background: #4338ca !important;
+}
+
+.sclip-settings-loading {
+  padding: 40px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: #9ca3af;
+  font-size: 13px;
 }

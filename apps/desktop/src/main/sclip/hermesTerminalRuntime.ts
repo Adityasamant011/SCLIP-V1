@@ -104,6 +104,16 @@ export class HermesTerminalRuntime {
     return session.history
   }
 
+  async restartSession(projectId: string, sessionId: string, cols = 100, rows = 30): Promise<string> {
+    const key = this.key(projectId, sessionId)
+    const existing = this.sessions.get(key)
+    if (existing) {
+      try { existing.pty.kill() } catch { /* already gone */ }
+      this.sessions.delete(key)
+    }
+    return this.ensure(projectId, sessionId, cols, rows)
+  }
+
   async input(projectId: string, sessionId: string, data: string): Promise<void> {
     await this.options.assertSession(projectId, sessionId)
     if (Buffer.byteLength(data, 'utf8') > MAX_INPUT_BYTES) throw new Error('Terminal input is too large')

@@ -125,4 +125,24 @@ describe('HermesTerminalRuntime', () => {
     await expect(runtime.ensure('forbidden-proj', 'sess-1')).rejects.toThrow('Session does not belong')
     await expect(runtime.input('forbidden-proj', 'sess-1', 'hi')).rejects.toThrow('Session does not belong')
   })
+
+  it('kills previous PTY and spawns a new one on restartSession', async () => {
+    ptyKillMock.mockClear()
+    const runtime = new HermesTerminalRuntime({
+      isPackaged: false,
+      resourcesPath: '/test/resources',
+      userDataPath: tmpDir,
+      executableOverride: '/usr/bin/python3',
+      getMcpInfo: () => ({ url: 'http://127.0.0.1:44555/mcp', bearer_token: 'secret-token-123' }),
+      getProviderEnvironment: () => ({}),
+      assertSession: async () => {},
+      onOutput: () => {},
+      onExit: () => {},
+    })
+
+    await runtime.ensure('proj-1', 'sess-1')
+    expect(ptyKillMock).not.toHaveBeenCalled()
+    await runtime.restartSession('proj-1', 'sess-1')
+    expect(ptyKillMock).toHaveBeenCalledTimes(1)
+  })
 })

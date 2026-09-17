@@ -72,7 +72,7 @@ descriptions:
 - Before `describe_clip`, `analyze_clip`, or a frame request, read the layer
   and media metadata. Use only the layer's legal source/timeline range; do not
   repeatedly guess invalid windows.
-- For visual sampling, read `media://{media_id}/frame/{t_us}` through WeftCut,
+- For visual sampling, read the media frame resource (media://{media_id}/frame/{t_us}) through WeftCut,
   then send the returned image to vision analysis. Do not assume direct video
   file inspection is available.
 - Linked video and audio stay synchronized by default. Do not set

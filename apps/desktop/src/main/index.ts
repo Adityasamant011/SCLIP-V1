@@ -1087,7 +1087,7 @@ app.whenReady().then(async () => {
     approveHermesRun,
     getHermesRun,
   } = await import('./sclip/hermesBridge.js')
-  const { HermesRuntime } = await import('./sclip/hermesRuntime.js')
+  const { HermesRuntime, readHermesProfile, writeHermesProfile } = await import('./sclip/hermesRuntime.js')
   const { HermesTerminalRuntime } = await import('./sclip/hermesTerminalRuntime.js')
   // The gateway key is an app credential: it belongs in Electron safeStorage,
   // never in a project document, renderer state, or a Hermes config checked in
@@ -1113,18 +1113,22 @@ app.whenReady().then(async () => {
     sourceOverride: process.env.SCLIP_HERMES_SOURCE,
     getGatewayToken: gatewayToken,
     getMcpInfo: () => mcpHost.getInfo(),
-    // Provider values are encrypted in Electron safeStorage. Do not add them to
-    // config.yaml: Hermes expands these only in its child process at launch.
-    getProviderEnvironment: () => {
-      const keys = loadAllKeys()
-      return {
-        ...(keys.openai ? { OPENAI_API_KEY: keys.openai } : {}),
-        ...(keys.anthropic ? { ANTHROPIC_API_KEY: keys.anthropic } : {}),
-        ...(keys.sclip_openrouter ? { OPENROUTER_API_KEY: keys.sclip_openrouter } : {}),
-      }
-    },
+    getProviderEnvironment: () => resolveProviderEnvironment(),
     onStatus: status => broadcastEvent(BrowserWindow.getAllWindows(), 'sclip:hermes_runtime', status),
   })
+  const resolveProviderEnvironment = () => {
+    const keys = loadAllKeys()
+    return {
+      ...(keys.openai ? { OPENAI_API_KEY: keys.openai } : {}),
+      ...(keys.anthropic ? { ANTHROPIC_API_KEY: keys.anthropic } : {}),
+      ...(keys.openrouter ? { OPENROUTER_API_KEY: keys.openrouter } : {}),
+      ...(keys.sclip_openrouter ? { OPENROUTER_API_KEY: keys.sclip_openrouter } : {}),
+      ...(keys.groq ? { GROQ_API_KEY: keys.groq } : {}),
+      ...(keys.deepseek ? { DEEPSEEK_API_KEY: keys.deepseek } : {}),
+      ...(keys.gemini ? { GEMINI_API_KEY: keys.gemini } : {}),
+      ...(keys.custom_base_url ? { OPENAI_BASE_URL: keys.custom_base_url } : {}),
+    }
+  }
   configureHermesBridge({
     getGatewayUrl: () => hermesRuntime?.snapshot().gatewayUrl ?? '',
     getGatewayToken: gatewayToken,
@@ -1156,14 +1160,7 @@ app.whenReady().then(async () => {
     executableOverride: process.env.SCLIP_HERMES_EXECUTABLE,
     sourceOverride: process.env.SCLIP_HERMES_SOURCE,
     getMcpInfo: () => mcpHost.getInfo(),
-    getProviderEnvironment: () => {
-      const keys = loadAllKeys()
-      return {
-        ...(keys.openai ? { OPENAI_API_KEY: keys.openai } : {}),
-        ...(keys.anthropic ? { ANTHROPIC_API_KEY: keys.anthropic } : {}),
-        ...(keys.sclip_openrouter ? { OPENROUTER_API_KEY: keys.sclip_openrouter } : {}),
-      }
-    },
+    getProviderEnvironment: () => resolveProviderEnvironment(),
     assertSession: async (projectId, sessionId) => {
       if (hermesRuntime?.snapshot().state !== 'ready') throw new Error('Reconnect Hermes before opening its terminal')
       const activeProjectId = await (async () => {
@@ -1186,6 +1183,53 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('backend:invoke', async (_e, { channel, args }) => {
     if (channel === 'sclip_restart_hermes') return hermesRuntime?.restart()
+    if (channel === 'sclip_get_hermes_config') {
+      const home = path.join(app.getPath('userData'), 'sclip-hermes')
+      const profile = readHermesProfile(home)
+      const keys = loadAllKeys()
+      return {
+        provider: profile.provider,
+        model: profile.model,
+        customBaseUrl: profile.customBaseUrl,
+        maxIterations: profile.maxIterations,
+        configuredKeys: {
+          anthropic: !!keys.anthropic,
+          openai: !!keys.openai,
+          openrouter: !!(keys.openrouter || keys.sclip_openrouter),
+          groq: !!keys.groq,
+          deepseek: !!keys.deepseek,
+          gemini: !!keys.gemini,
+        },
+      }
+    }
+    if (channel === 'sclip_set_hermes_config') {
+      const { provider, model, customBaseUrl, maxIterations, apiKey } = (args ?? {}) as {
+        provider?: string
+        model?: string
+        customBaseUrl?: string
+        maxIterations?: number
+        apiKey?: string
+      }
+      if (apiKey !== undefined && provider) {
+        if (apiKey.trim()) {
+          if (!encryptionAvailable()) throw new Error('Allow macOS Keychain access before saving API keys.')
+          setKey(provider, apiKey.trim())
+          if (provider === 'openrouter') setKey('sclip_openrouter', apiKey.trim())
+        }
+      }
+      if (customBaseUrl !== undefined && provider === 'custom') {
+        if (customBaseUrl.trim()) {
+          setKey('custom_base_url', customBaseUrl.trim())
+        } else {
+          clearKey('custom_base_url')
+        }
+      }
+      const home = path.join(app.getPath('userData'), 'sclip-hermes')
+      const port = hermesRuntime?.getPort() ?? 0
+      writeHermesProfile(home, port, { provider, model, customBaseUrl, maxIterations })
+      void hermesRuntime?.restart()
+      return { ok: true }
+    }
     if (channel === 'sclip_set_openrouter_key') {
       if (!encryptionAvailable()) throw new Error('Allow macOS Keychain access before saving the OpenRouter key.')
       const key = (args as { key?: unknown })?.key
@@ -1197,6 +1241,10 @@ app.whenReady().then(async () => {
     if (channel === 'sclip_open_terminal') {
       const { projectId, sessionId, cols, rows } = args as { projectId: string; sessionId: string; cols?: number; rows?: number }
       return hermesTerminalRuntime?.ensure(projectId, sessionId, cols, rows) ?? ''
+    }
+    if (channel === 'sclip_restart_terminal') {
+      const { projectId, sessionId, cols, rows } = args as { projectId: string; sessionId: string; cols?: number; rows?: number }
+      return hermesTerminalRuntime?.restartSession(projectId, sessionId, cols, rows) ?? ''
     }
     if (channel === 'sclip_terminal_input') {
       const { projectId, sessionId, data } = args as { projectId: string; sessionId: string; data: string }

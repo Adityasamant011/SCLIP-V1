@@ -1,7 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useProjectStore } from '../state/projectStore'
-import { sclipActivateProjectSession, sclipCreateProjectSession, sclipGetHermesStatus, sclipListProjectSessions } from '../ipc/sclip'
+import {
+  sclipActivateProjectSession,
+  sclipCreateProjectSession,
+  sclipGetHermesStatus,
+  sclipListProjectSessions,
+  sclipRestartTerminal,
+} from '../ipc/sclip'
 import { HermesTerminal } from './HermesTerminal'
+import { AgentPanelHeader } from './AgentPanelHeader'
 import './sclip.css'
 
 type TerminalState =
@@ -13,6 +20,24 @@ type TerminalState =
 export function SclipAiPanel() {
   const projectId = useProjectStore(state => state.summary?.project_id ?? null)
   const [terminal, setTerminal] = useState<TerminalState>({ kind: 'opening' })
+  const [restartNonce, setRestartNonce] = useState(0)
+  const [isRestarting, setIsRestarting] = useState(false)
+  const terminalActions = useRef<{ clear: () => void } | null>(null)
+
+  const handleRestart = async () => {
+    if (!projectId || terminal.kind !== 'ready') return
+    setIsRestarting(true)
+    try {
+      await sclipRestartTerminal(projectId, terminal.sessionId)
+      setRestartNonce(n => n + 1)
+    } finally {
+      setIsRestarting(false)
+    }
+  }
+
+  const handleClear = () => {
+    terminalActions.current?.clear()
+  }
 
   useEffect(() => {
     let active = true
@@ -40,6 +65,27 @@ export function SclipAiPanel() {
     return () => { active = false }
   }, [projectId])
 
-  if (terminal.kind === 'ready' && projectId) return <HermesTerminal projectId={projectId} sessionId={terminal.sessionId} />
-  return <div className="sclip-terminal-empty" role="status">{terminal.kind === 'error' ? terminal.message : 'Starting Hermes terminal…'}</div>
+  return (
+    <div className="sclip-dock-wrapper">
+      <AgentPanelHeader
+        onRestartTerminal={terminal.kind === 'ready' && projectId ? handleRestart : undefined}
+        onClearTerminal={terminal.kind === 'ready' && projectId ? handleClear : undefined}
+        isRestarting={isRestarting}
+      />
+      <div className="sclip-dock-content">
+        {terminal.kind === 'ready' && projectId ? (
+          <HermesTerminal
+            key={`${terminal.sessionId}-${restartNonce}`}
+            projectId={projectId}
+            sessionId={terminal.sessionId}
+            onTerminalReady={actions => { terminalActions.current = actions }}
+          />
+        ) : (
+          <div className="sclip-terminal-empty" role="status">
+            {terminal.kind === 'error' ? terminal.message : 'Starting Hermes terminal…'}
+          </div>
+        )}
+      </div>
+    </div>
+  )
 }

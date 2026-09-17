@@ -28,7 +28,7 @@ import { AppSlider } from "../components/AppSlider";
 import { AppSwitch } from "../components/AppSwitch";
 import { Button } from "@/components/ui/button";
 import { KeybindingPanel } from "./KeybindingPanel";
-import { AgentSection } from "./AgentSection";
+import { HermesSettingsSection } from "./HermesSettingsSection";
 import { PreviewSection } from "./PreviewSection";
 import { ModelSection } from "./ModelSection";
 import { VlmSection } from "./VlmSection";
@@ -376,7 +376,7 @@ export function SettingsPanel({
             hidden={category !== "agent"}
             className="settings-pane"
           >
-            <AgentSection />
+            <HermesSettingsSection />
           </div>
         </div>
       </div>
