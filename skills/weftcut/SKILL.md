@@ -63,6 +63,24 @@ descriptions:
   segments — `ripple_delete_layers` instead of `delete_layer` when the gap a
   cut leaves should close behind it.
 
+## Evidence and sync rules
+
+- Never invent spoken dialogue, quotations, captions, or subtitles. Caption
+  text must come from `transcribe_clip`'s returned transcript/SRT or text the
+  user supplied. If transcription is unavailable or fails, report that and
+  stop caption generation.
+- Before `describe_clip`, `analyze_clip`, or a frame request, read the layer
+  and media metadata. Use only the layer's legal source/timeline range; do not
+  repeatedly guess invalid windows.
+- For visual sampling, read `media://{media_id}/frame/{t_us}` through WeftCut,
+  then send the returned image to vision analysis. Do not assume direct video
+  file inspection is available.
+- Linked video and audio stay synchronized by default. Do not set
+  `escape_link=true` during a trim unless the user explicitly wants to unlink
+  them; after trimming, re-read both linked bounds before continuing.
+- If an edit call fails, inspect the error and current project state before
+  attempting another mutation. Do not repeat an identical destructive call.
+
 ## Motifs (animated overlays)
 
 To author or update a Motif, first read `motif-authoring.md` next to this file

@@ -65,21 +65,23 @@ export class HermesRuntime {
       const mcp = this.options.getMcpInfo()
       const token = this.options.getGatewayToken()
       if (!token) throw new Error('Hermes gateway credential is unavailable from secure storage')
+      const env: Record<string, string | undefined> = {
+        ...process.env,
+        ...this.options.getProviderEnvironment(),
+        HERMES_HOME: home,
+        API_SERVER_ENABLED: '1',
+        API_SERVER_HOST: '127.0.0.1',
+        API_SERVER_PORT: String(this.port),
+        API_SERVER_KEY: token,
+        SCLIP_MCP_URL: mcp.url,
+        SCLIP_MCP_TOKEN: mcp.bearer_token,
+      }
+      delete env.TERMINAL_CWD
       const child = spawn(launch.command, launch.args, {
         cwd: launch.cwd,
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe'],
-        env: {
-          ...process.env,
-          ...this.options.getProviderEnvironment(),
-          HERMES_HOME: home,
-          API_SERVER_ENABLED: '1',
-          API_SERVER_HOST: '127.0.0.1',
-          API_SERVER_PORT: String(this.port),
-          API_SERVER_KEY: token,
-          SCLIP_MCP_URL: mcp.url,
-          SCLIP_MCP_TOKEN: mcp.bearer_token,
-        },
+        env: env as NodeJS.ProcessEnv,
       })
       this.child = child
       // Drain output without forwarding possible secrets to app/debug logs.
@@ -152,6 +154,7 @@ export class HermesRuntime {
       'model:', '  provider: openrouter', '  default: dots-studio/dots-3-note-preview:free',
       'platforms:', '  api_server:', '    enabled: true', '    extra:', '      host: "127.0.0.1"', `      port: ${this.port}`,
       'mcp_servers:', '  weftcut:', '    url: "${SCLIP_MCP_URL}"', '    headers:', '      Authorization: "Bearer ${SCLIP_MCP_TOKEN}"', '    timeout: 120',
+      'terminal:', '  cwd: "."',
       'agent:', '  max_iterations: 30', '',
     ].join('\n')
     const target = path.join(home, 'config.yaml')

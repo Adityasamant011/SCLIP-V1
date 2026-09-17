@@ -52,6 +52,27 @@ export class HermesTerminalRuntime {
     const home = path.join(this.options.userDataPath, 'sclip-hermes')
     fs.mkdirSync(home, { recursive: true, mode: 0o700 })
     const mcp = this.options.getMcpInfo()
+    const configPath = path.join(home, 'config.yaml')
+    if (!fs.existsSync(configPath)) {
+      const config = [
+        'model:', '  provider: openrouter', '  default: dots-studio/dots-3-note-preview:free',
+        'mcp_servers:', '  weftcut:', '    url: "${SCLIP_MCP_URL}"', '    headers:', '      Authorization: "Bearer ${SCLIP_MCP_TOKEN}"', '    timeout: 120',
+        'terminal:', '  cwd: "."',
+        'agent:', '  max_iterations: 30', '',
+      ].join('\n')
+      fs.writeFileSync(configPath, config, { encoding: 'utf8', mode: 0o600 })
+    }
+    const env: Record<string, string | undefined> = {
+      ...process.env,
+      ...this.options.getProviderEnvironment(),
+      HERMES_HOME: home,
+      SCLIP_ACTIVE_PROJECT_ID: projectId,
+      SCLIP_PROJECT_ID: projectId,
+      SCLIP_MCP_URL: mcp.url,
+      SCLIP_MCP_TOKEN: mcp.bearer_token,
+      TERM: 'xterm-256color',
+    }
+    delete env.TERMINAL_CWD
     const terminal = pty.spawn(launch.command, [
       ...launch.args,
       'chat', '--toolsets', EDITOR_TOOLSETS,
@@ -65,16 +86,7 @@ export class HermesTerminalRuntime {
       cols: this.dimension(cols, 100),
       rows: this.dimension(rows, 30),
       cwd: launch.cwd,
-      env: {
-        ...process.env,
-        ...this.options.getProviderEnvironment(),
-        HERMES_HOME: home,
-        SCLIP_ACTIVE_PROJECT_ID: projectId,
-        SCLIP_PROJECT_ID: projectId,
-        SCLIP_MCP_URL: mcp.url,
-        SCLIP_MCP_TOKEN: mcp.bearer_token,
-        TERM: 'xterm-256color',
-      },
+      env: env as Record<string, string>,
     })
     const session: TerminalSession = { pty: terminal, history: '' }
     this.sessions.set(key, session)

@@ -1,6 +1,35 @@
 # AI actions
 
-## 2026-09-16 — Phase 1 continuation: lifecycle and ownership hardening
+## 2026-09-17 — Phase 1 finalization: persistent storage, local speech-to-text, and runtime reliability
+
+- Migrated runtime persistence out of `/private/tmp` into macOS Application Support:
+  `${HOME}/Library/Application Support/Sclip/` now holds the persistent Whisper Base
+  model (`models/whisper.cpp/ggml-base.bin`, verified SHA-256 `60ed5bc...`),
+  `speech_config.json`, isolated `sclip-hermes/` profile, project session index,
+  and safeStorage credentials. Updated `/Applications/Sclip.app/Contents/MacOS/Sclip`
+  to point `SCLIP_USER_DATA_DIR` permanently to `${HOME}/Library/Application Support/Sclip`.
+- Verified the isolated Hermes Python virtual environment: all dependencies
+  (`rich.markdown`, `certifi`, `openai`, `httpx`) resolved cleanly; valid SSL CA
+  bundle verified; `hermes doctor` passes with zero deprecated config or env warnings.
+- Deprecated configuration cleanup: deleted `TERMINAL_CWD` from child process environments
+  and ensured canonical `terminal: cwd: "."` is written in profile `config.yaml`.
+- Real speech-to-text backend: configured local offline `whisper_cpp` sidecar with
+  `whisper-cli` and `ggml-base.bin`. Verified on real talking-head footage
+  (`videoplayback.mp4`), producing accurate timestamped segments and SRT.
+- Caption generation & anti-hallucination: applied real transcription to timeline via
+  `apply_subtitles` creating text layers on caption tracks. Added explicit rule to
+  `skills/weftcut/SKILL.md` strictly prohibiting fabricated dialogue or visual guessing.
+- Immediate duplicate mutation loop guard: added session-scoped duplicate mutation
+  filter in `AgentActivityService` that detects and rejects repeated identical tool mutations
+  within a 5-second window in the same agent work session without intervening reads.
+- Terminal & live MCP verification: verified docked Hermes terminal loads all 93 WeftCut
+  MCP tools over loopback authenticated streamable HTTP. Verified checkpoint creation,
+  marker addition, checkpoint rollback, and immediate ping response with zero latency/hangs.
+- Cold-restart persistence: cleanly restarted `/Applications/Sclip.app` from cold,
+  verified model survived without redownloading, and re-verified live transcription and
+  subtitles.
+- Quality gates: `npm run typecheck` passed (0 errors); `npm run build` passed; all 87
+  focused Vitest tests passed.
 
 - Completed the interrupted sidecar work on `sclip/phase1` in commit
   `593b2865`: serialized Hermes lifecycle operations, authenticated startup

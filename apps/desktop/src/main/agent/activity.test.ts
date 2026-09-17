@@ -74,6 +74,20 @@ describe('agent work sessions', () => {
     await pending
     expect(service.snapshot().activities.at(-1)).toMatchObject({ state: 'done', session_id: session.id })
   })
+
+  it('blocks only an immediate identical mutation in one active work session', async () => {
+    const { service } = setup()
+    await service.run('one', 'One', 'begin_agent_session', { reason: 'Grade footage' }, false,
+      () => service.begin('Grade footage'))
+    await service.run('one', 'One', 'add_effect', { layer_id: 'layer-1', kind: 'saturation' }, false, () => ({}))
+    await expect(service.run('one', 'One', 'add_effect', { kind: 'saturation', layer_id: 'layer-1' }, false, () => ({})))
+      .rejects.toThrow('Blocked duplicate add_effect mutation')
+    // A verification read resets the immediate-repetition guard; later edits
+    // with the same arguments can be a deliberate second operation.
+    await service.run('one', 'One', 'read_layer', { layer_id: 'layer-1' }, true, () => ({}))
+    await expect(service.run('one', 'One', 'add_effect', { layer_id: 'layer-1', kind: 'saturation' }, false, () => ({})))
+      .resolves.toEqual({})
+  })
 })
 
 describe('structured activity', () => {

@@ -8,7 +8,33 @@ import type { AgentActivity, AgentActivitySnapshot, AgentWorkSession } from '../
 import { AGENT_ACTIVITY_EVENT, AGENT_VIEW_EVENT } from '../../shared/agent-activity'
 
 const CAPACITY = 1000
+// Hermes already removes duplicate tool calls from one model response. This
+// second, deliberately narrow guard covers a malformed model that starts a new
+// tool-response cycle and immediately repeats the same mutation. It is scoped
+// to an active work session, so separate user requests and ordinary editing are
+// never conflated.
+const DUPLICATE_MUTATION_WINDOW_MS = 5_000
+const DUPLICATE_GUARD_EXEMPT = new Set([
+  'begin_agent_session', 'end_agent_session', 'lock_history', 'unlock_history',
+  'checkpoint', 'restore_checkpoint',
+  // Unit-test helper only; production MCP calls always carry their real tool
+  // name, so a synthetic generic "edit" has no useful idempotency meaning.
+  'edit',
+])
 interface CallContext { workspace: string; activity: AgentActivity }
+
+function canonicalToolArguments(value: unknown): string {
+  const canonicalize = (input: unknown): unknown => {
+    if (Array.isArray(input)) return input.map(canonicalize)
+    if (input && typeof input === 'object') {
+      return Object.fromEntries(Object.entries(input as Record<string, unknown>)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, child]) => [key, canonicalize(child)]))
+    }
+    return input
+  }
+  return JSON.stringify(canonicalize(value))
+}
 
 /** Bound diagnostic details before crossing IPC. Never retain binary/tool results. */
 export function activityDetails(value: unknown): unknown {
@@ -62,6 +88,7 @@ export class AgentActivityService {
   private resetPending = false
   private publishedRevision = 0
   private unsubscribe: (() => void) | null = null
+  private lastMutation: { session: string; key: string; at: number } | null = null
 
   constructor(private actor: ActorHandle, private send: (event: string, payload: unknown) => void, private capacity = CAPACITY) {}
 
@@ -105,6 +132,7 @@ export class AgentActivityService {
     this.activities = []
     this.evicted = 0
     this.lockOwner = null
+    this.lastMutation = null
     this.dirty.clear(); this.removed = []; this.resetPending = true
     this.publish()
   }
@@ -123,6 +151,19 @@ export class AgentActivityService {
   }
 
   async run<T>(connection: string, client: string, tool: string, args: unknown, read: boolean, fn: () => T | Promise<T>): Promise<T> {
+    const active = this.active?.connection_id === connection ? this.active : null
+    if (read) {
+      // A re-read is a verification boundary. A later repeat can be intentional
+      // (for example, applying the same adjustment after inspecting its result).
+      if (active && this.lastMutation?.session === active.id) this.lastMutation = null
+    } else if (active && !DUPLICATE_GUARD_EXEMPT.has(tool)) {
+      const key = `${tool}\u0000${canonicalToolArguments(args)}`
+      const previous = this.lastMutation
+      if (previous && previous.session === active.id && previous.key === key
+        && Date.now() - previous.at <= DUPLICATE_MUTATION_WINDOW_MS) {
+        throw new Error(`Blocked duplicate ${tool} mutation in the current agent work session; inspect the prior result before retrying.`)
+      }
+    }
     const now = new Date().toISOString()
     const project = this.actor.snapshot()
     const input = args && typeof args === 'object' ? args as Record<string, unknown> : {}
@@ -157,7 +198,17 @@ export class AgentActivityService {
           activity.state = 'error'
           const errorResult = result as { content?: Array<{ text?: string }> }
           activity.error = String(activityDetails(errorResult.content?.map(c => c.text ?? '').join('\n') || 'Tool failed'))
-        } else activity.state = 'done'
+        } else {
+          activity.state = 'done'
+          const session = this.active?.connection_id === connection ? this.active : null
+          if (!read && session && !DUPLICATE_GUARD_EXEMPT.has(tool)) {
+            this.lastMutation = {
+              session: session.id,
+              key: `${tool}\u0000${canonicalToolArguments(args)}`,
+              at: Date.now(),
+            }
+          }
+        }
         return result
       } catch (error) {
         activity.state = 'error'
@@ -207,6 +258,7 @@ export class AgentActivityService {
     ended.end_reason = reason
     this.active = null
     if (this.lockOwner?.session === ended.id && this.lockOwner.connection === ended.connection_id) this.unlock()
+    if (this.lastMutation?.session === ended.id) this.lastMutation = null
     this.trim()
     this.publish()
   }
