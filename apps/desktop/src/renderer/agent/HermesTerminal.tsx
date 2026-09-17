@@ -45,15 +45,35 @@ export function HermesTerminal({ projectId, sessionId, onTerminalReady }: Props)
         if (active) setError(problem instanceof Error ? problem.message : String(problem))
       })
     })
+    let lastCols = terminal.cols
+    let lastRows = terminal.rows
+
     const resize = () => {
       if (!active) return
-      fit.fit()
-      void sclipTerminalResize(projectId, sessionId, terminal.cols, terminal.rows).catch(() => {})
+      try {
+        fit.fit()
+        if (terminal.cols !== lastCols || terminal.rows !== lastRows) {
+          lastCols = terminal.cols
+          lastRows = terminal.rows
+          void sclipTerminalResize(projectId, sessionId, terminal.cols, terminal.rows).catch(() => {})
+        }
+      } catch {
+        // ignore layout transition errors
+      }
     }
+
     const observer = new ResizeObserver(resize)
     observer.observe(node)
+
+    requestAnimationFrame(() => resize())
+    void document.fonts?.ready?.then(() => resize())
+
     void sclipOpenTerminal(projectId, sessionId, terminal.cols, terminal.rows).then(history => {
-      if (active && history) terminal.write(history)
+      if (active && history) {
+        terminal.write(history, () => {
+          terminal.scrollToBottom()
+        })
+      }
     }).catch(problem => {
       if (active) setError(problem instanceof Error ? problem.message : String(problem))
     })
