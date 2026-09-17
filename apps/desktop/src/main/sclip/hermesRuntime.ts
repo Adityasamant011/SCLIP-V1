@@ -150,14 +150,25 @@ export class HermesRuntime {
   }
 
   private writeProfile(home: string): void {
+    const target = path.join(home, 'config.yaml')
+    let modelProvider = 'openrouter'
+    let modelDefault = 'dots-studio/dots-3-note-preview:free'
+    if (fs.existsSync(target)) {
+      try {
+        const existing = fs.readFileSync(target, 'utf8')
+        const providerMatch = existing.match(/^\s*provider:\s*([^\s#]+)/m)
+        const defaultMatch = existing.match(/^\s*default:\s*([^\s#]+)/m)
+        if (providerMatch?.[1]) modelProvider = providerMatch[1]
+        if (defaultMatch?.[1]) modelDefault = defaultMatch[1]
+      } catch { /* use defaults on read error */ }
+    }
     const config = [
-      'model:', '  provider: openrouter', '  default: dots-studio/dots-3-note-preview:free',
+      'model:', `  provider: ${modelProvider}`, `  default: ${modelDefault}`,
       'platforms:', '  api_server:', '    enabled: true', '    extra:', '      host: "127.0.0.1"', `      port: ${this.port}`,
       'mcp_servers:', '  weftcut:', '    url: "${SCLIP_MCP_URL}"', '    headers:', '      Authorization: "Bearer ${SCLIP_MCP_TOKEN}"', '    timeout: 120',
       'terminal:', '  cwd: "."',
       'agent:', '  max_iterations: 30', '',
     ].join('\n')
-    const target = path.join(home, 'config.yaml')
     fs.writeFileSync(`${target}.tmp`, config, { encoding: 'utf8', mode: 0o600 })
     fs.renameSync(`${target}.tmp`, target)
     try { fs.chmodSync(target, 0o600) } catch { /* Windows lacks POSIX modes. */ }
