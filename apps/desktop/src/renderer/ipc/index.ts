@@ -842,6 +842,14 @@ export async function recentsRemove(path: string): Promise<void> {
   return invoke<void>("recents_remove", { path });
 }
 
+export async function projectTrash(path: string): Promise<'trashed' | 'missing'> {
+  return invoke<'trashed' | 'missing'>("project_trash", { path });
+}
+
+export async function projectReveal(path: string): Promise<void> {
+  return invoke<void>("project_reveal", { path });
+}
+
 export async function recentsMostRecent(): Promise<RecentEntry | null> {
   return invoke<RecentEntry | null>("recents_most_recent");
 }
@@ -3248,6 +3256,17 @@ export function exportVideoSinkCancel(): Promise<void> {
 /// to ffmpeg's input pipe; call in sequence to preserve muxer order.
 export function exportVideoSinkWrite(bytes: Uint8Array): Promise<void> {
   return window.api.videoSinkWrite(bytes);
+}
+
+export interface ExportAttributionSafetyReport {
+  can_export: boolean;
+  has_unresolved_obligations: boolean;
+  unresolved_count: number;
+  warnings: string[];
+}
+
+export async function checkExportAttributionSafety(): Promise<ExportAttributionSafetyReport> {
+  return invoke<ExportAttributionSafetyReport>("check_export_attribution_safety");
 }
 
 /// Caption restyle patch. Fields are snake_case to match the actor

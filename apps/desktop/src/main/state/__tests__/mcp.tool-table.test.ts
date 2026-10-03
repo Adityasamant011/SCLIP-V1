@@ -22,14 +22,15 @@ const EXPECTED_TOOL_NAMES = new Set<string>([
   // dedicated-exec tools — auto_split_by_shot and remove_pauses are TS-owned
   // HYBRID defs (they route 'hybrid', not to an actor arm) that carry a
   // parseDedicated for the bijection required-scalar gate.
-  'add_color_layer', 'add_video_layer', 'split_layer', 'add_marker',
+  'add_color_layer', 'add_media_layer', 'add_text_layer', 'add_video_layer', 'restyle_captions', 'split_layer', 'add_marker',
   'add_motif',
   'lock_history', 'unlock_history',
   'set_keyframe', 'get_param_track', 'remove_keyframe', 'retime_keyframe',
   'set_keyframe_easing', 'smooth_keyframes', 'clear_keyframes', 'set_param_track',
   'set_keyframe_tangents', 'set_extrapolation',
   'dry_run', 'checkpoint', 'list_checkpoints', 'restore_checkpoint', 'begin_agent_session', 'end_agent_session',
-  'auto_split_by_shot', 'remove_pauses',
+  'auto_split_by_shot', 'remove_pauses', 'apply_transcripts', 'validate_rough_cut_plan', 'apply_rough_cut_plan',
+  'get_timeline_context', 'inspect_timeline_frame', 'render_timeline_range', 'validate_rough_cut_review',
 ])
 
 describe('MCP tool table projections', () => {
@@ -66,7 +67,7 @@ describe('MCP tool table projections', () => {
 
   it('dedicated-exec defs have no parseArgs', () => {
     const dedicated = MCP_TOOL_DEFS.filter((d) => d.exec === 'dedicated')
-    expect(dedicated.length).toBe(25)
+    expect(dedicated.length).toBe(35)
     for (const d of dedicated) {
       expect(d.parseArgs, `${d.name} should not have parseArgs`).toBeUndefined()
     }

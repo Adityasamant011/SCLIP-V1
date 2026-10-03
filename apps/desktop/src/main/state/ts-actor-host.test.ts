@@ -81,6 +81,22 @@ describe('createTsActorHost — persistence-route integration', () => {
     return { deps, vfs, napiCalls, sent }
   }
 
+  it('attributes hybrid writes to MCP only on the MCP route', () => {
+    const { deps } = makeInMemoryDeps()
+    const host = createTsActorHost(deps)
+    host.start()
+    const origins: string[] = []
+    const unsubscribe = host.actor.subscribe((event) => origins.push(event.actor.kind))
+    try {
+      expect(host.mcpHybridDeps.actor.dispatch('add_track', { label: 'Agent lane' }).ok).toBe(true)
+      expect(host.hybridDeps.actor.dispatch('add_track', { label: 'User lane' }).ok).toBe(true)
+      expect(origins).toEqual(['Agent', 'User'])
+    } finally {
+      unsubscribe()
+      host.stop()
+    }
+  })
+
   it('project_open flushes pending edits to the current workspace before switching', async () => {
     vi.useFakeTimers()
     const { deps, vfs } = makeInMemoryDeps()

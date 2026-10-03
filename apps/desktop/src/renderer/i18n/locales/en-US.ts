@@ -76,9 +76,9 @@ const enUS = {
     conversion_note:'Only the chosen range is retained; outside it the result holds. XY is fitted to editable curves; temporal keys are added to meet the error target. Error is checked at frames, quarter-frames and key boundaries, not guaranteed continuously. Instantaneous position jumps are refused.',
   },
   app: {
-    title: "WeftCut",
+    title: "Sclip",
     core_status: "core: {{status}}",
-    window_title: "WeftCut — {{name}}",
+    window_title: "Sclip — {{name}}",
   },
   splash: {
     starting: "Starting system checks…",
@@ -176,24 +176,37 @@ const enUS = {
     subtitle: "Pick a project to open, or create a new one.",
     new_project: "New project",
     open_project: "Open project…",
-    open_dialog_title: "Open WeftCut project folder",
+    open_dialog_title: "Open Sclip project folder",
     recent_heading: "Recent",
     recent_loading: "Loading…",
     recent_empty: "No recent projects yet.",
-    recent_remove_hint: "Remove from list",
+    recent_remove_hint: "Remove from recent list",
+    recent_actions: "Manage",
+    recent_reveal: "Show project folder",
+    recent_removed: "Removed from the recent list. Project files were kept.",
+    recent_trash: "Move project to Trash…",
+    trash_title: 'Move “{{name}}” to Trash?',
+    trash_description: "This moves the entire project folder—including its project file, contained media, cache and backups—to your system Trash. Media stored outside this folder is not moved.",
+    trash_restore: "This is recoverable. Restore the folder from Trash, then use Open project to add it back.",
+    trash_confirm: "Move to Trash",
+    trash_cancel: "Cancel",
+    trash_busy: "Moving…",
+    trash_success: '“{{name}}” was moved to Trash. You can restore it there.',
+    trash_missing: '“{{name}}” is already missing. Its recent entry was removed.',
+    trash_failed: "Couldn't move project to Trash: {{detail}}",
     recent_show_all: "Show all ({{count}})",
     recent_show_less: "Show less",
     recent_open_failed: "Couldn't open project: {{detail}}",
     recents_load_failed: "Couldn't load the recent projects list: {{detail}}",
     not_project_folder:
-      "That folder isn't a WeftCut project. Pick a folder created by WeftCut, or start a new project.",
+      "That folder isn't a Sclip project. Pick a folder created by Sclip, or start a new project.",
     project_folder_missing:
       "That project folder no longer exists — it may have been moved, renamed, or deleted. It was removed from the recent list.",
-    // States the mismatch and stops. "Update WeftCut" is a guess that happens to
+    // States the mismatch and stops. "Update Sclip" is a guess that happens to
     // be wrong for the file this fires on most often — a project left behind by
     // a different build of this same repo.
     project_schema_too_new:
-      "That project was written by a different build of WeftCut (project format v{{found}}); this build reads v{{supported}}.",
+      "That project was written by a different build of Sclip (project format v{{found}}); this build reads v{{supported}}.",
     project_schema_unreadable:
       "That folder's project.json declares no project format version this build recognizes, so it can't be opened.",
     project_file_unreadable:
@@ -282,17 +295,17 @@ const enUS = {
     checking: 'Checking for updates…',
     current: 'You are up to date.',
     downloading: 'Downloading {{version}}… {{percent}}%',
-    ready: '{{version}} is ready. It will install when you exit WeftCut normally. Finish your exports before closing.',
+    ready: '{{version}} is ready. It will install when you exit Sclip normally. Finish your exports before closing.',
     error: 'Could not check for or download the update. Try again, or download it from the releases page.',
     releases: 'View Releases',
   },
   help: {
     check_updates: "Check for Updates…",
     report_issue: "Report an Issue…",
-    about: "About WeftCut",
+    about: "About Sclip",
     version: "Version {{version}}",
     developed_by: "Developed by UncleChair",
-    license_mit: "License: WeftCut is <mit>MIT</mit>-licensed.",
+    license_mit: "License: Sclip is <mit>MIT</mit>-licensed.",
     third_party:
       "Third-party components have their own licenses: <notices>THIRD-PARTY-NOTICES.md</notices>.",
     copy_version: "Copy Version Info",
@@ -875,8 +888,8 @@ const enUS = {
     close: "Close",
   },
   dialogs: {
-    save_title: "Save WeftCut project",
-    project_filter: "WeftCut project",
+    save_title: "Save Sclip project",
+    project_filter: "Sclip project",
     save_default_name: "untitled.vproj",
     import_title: "Import media",
     media_filter: "Media files",
@@ -1230,10 +1243,21 @@ const enUS = {
     "compare_frames": "Compare frames",
     "detect_pauses": "Detect pauses",
     "import_media": "Import media",
+    "add_media_layer": "Add media clip",
+    "add_text_layer": "Add text layer",
+    "restyle_captions": "Restyle captions",
     "synthesize_speech": "Synthesize speech",
     "apply_subtitles": "Apply subtitles",
+    "apply_transcripts": "Apply timed captions",
+    "validate_rough_cut_plan": "Validate rough cut plan",
+    "apply_rough_cut_plan": "Apply rough cut plan",
+    "get_timeline_context": "Read timeline context",
+    "inspect_timeline_frame": "Inspect timeline frame",
+    "render_timeline_range": "Render timeline range preview",
+    "validate_rough_cut_review": "Validate rough cut review",
     "auto_split_by_shot": "Split into shots",
     "remove_pauses": "Remove pauses",
+    "get_media_context": "Read media context",
     "ping": "Check connection",
     "resources/read": "Read resource",
     "resources/list": "List resources",
@@ -1447,7 +1471,7 @@ const enUS = {
     reveal_mac: "Reveal in Finder",
     reveal_linux: "Show in folder",
     reveal_hint: "Open the folder containing the exported file.",
-    render_play_title: "WeftCut — Render & Play",
+    render_play_title: "Sclip — Render & Play",
     notify_done_title: "Export finished",
     notify_done_body: "Saved to {{path}}",
     notify_failed_title: "Export failed",
@@ -1579,12 +1603,12 @@ const enUS = {
     },
     agent_skill_unavailable: {
       title: "Agent Skill missing",
-      body: "The Skill that teaches a connected agent how to drive WeftCut did not install, so there is nothing to hand to your agent. Reinstall the app to restore it.",
+      body: "The Skill that teaches a connected agent how to drive Sclip did not install, so there is nothing to hand to your agent. Reinstall the app to restore it.",
       action: "Open agent settings",
     },
     agent_skill_stale: {
       title: "Agent Skill not up to date",
-      body: "WeftCut could not refresh its agent Skill, so the copy on offer is one an earlier version left behind. An agent using it may call tools this version no longer has.",
+      body: "Sclip could not refresh its agent Skill, so the copy on offer is one an earlier version left behind. An agent using it may call tools this version no longer has.",
       action: "Open agent settings",
     },
   },
@@ -1606,7 +1630,7 @@ const enUS = {
   },
   connect: {
     blurb:
-      "Connect an external agent to WeftCut's local MCP server so it can read and edit your project directly.",
+      "Connect an external agent to Sclip's local MCP server so it can read and edit your project directly.",
     starting: "MCP server starting…",
     copy: "Copy config",
     copied: "Copied!",
@@ -1620,18 +1644,18 @@ const enUS = {
     skill_path_unavailable:
       "No Skill folder to open — see “Let your agent set itself up” above.",
     skill_stale:
-      "Showing the copy an earlier launch left behind, which may be older than this version of WeftCut.",
+      "Showing the copy an earlier launch left behind, which may be older than this version of Sclip.",
     skill_retry: "Try again",
     skill_retrying: "Installing…",
     skill_fault: {
       not_built:
         "This development build has no Skill staged yet. Run “npm run build:skills” and restart.",
       bundle_missing:
-        "No Skill shipped with this installation of WeftCut. Reinstall the app to restore it.",
+        "No Skill shipped with this installation of Sclip. Reinstall the app to restore it.",
       incomplete:
-        "The Skill that shipped with WeftCut is incomplete. Reinstall the app to restore it.",
+        "The Skill that shipped with Sclip is incomplete. Reinstall the app to restore it.",
       copy_failed:
-        "WeftCut could not write the Skill into its user-data folder. Check free disk space and the folder's permissions, then restart.",
+        "Sclip could not write the Skill into its user-data folder. Check free disk space and the folder's permissions, then restart.",
     },
     copy_path: "Copy path",
     browse: "Browse…",
@@ -1640,7 +1664,7 @@ const enUS = {
     // platform can — see main/openPath.ts).
     open_location: "Open file location",
     agent_prompt: [
-      "Configure the WeftCut MCP server for me. Make the configuration change directly; do not just describe the steps.",
+      "Configure the Sclip MCP server for me. Make the configuration change directly; do not just describe the steps.",
       "",
       "Connection details:",
       "- Server name: weftcut",
@@ -1657,7 +1681,7 @@ const enUS = {
       "- Report which file you changed and whether the configuration is valid.",
     ].join("\n"),
     agent_prompt_stdio: [
-      "Configure the WeftCut MCP server for me. Make the configuration change directly; do not just describe the steps.",
+      "Configure the Sclip MCP server for me. Make the configuration change directly; do not just describe the steps.",
       "",
       "Connection details:",
       "- Server name: weftcut",
@@ -1678,11 +1702,11 @@ const enUS = {
     // applies. It stands on its own so the message still reads when there is no
     // staged Skill folder to hand over and this half is left out.
     agent_prompt_skill: [
-      "Then install the WeftCut Skill — the usage guidance that ships with the app.",
+      "Then install the Sclip Skill — the usage guidance that ships with the app.",
       "",
       '- Copy the folder "{{folder}}" into your own skills directory, keeping the folder name weftcut. For Claude Code that is ~/.claude/skills/weftcut.',
-      "- Overwrite any copy already sitting there; it belongs to an older version of WeftCut.",
-      "- Read the Skill once it is in place, and follow it whenever you work on a WeftCut project.",
+      "- Overwrite any copy already sitting there; it belongs to an older version of Sclip.",
+      "- Read the Skill once it is in place, and follow it whenever you work on a Sclip project.",
       "- Report where you installed it.",
     ].join("\n"),
     reveal: "Reveal token",
@@ -1696,7 +1720,7 @@ const enUS = {
       "MCP requests must carry the token, and the server binds to local use only. The token is stored in mcp_auth.json — if it leaks, use Refresh token to rotate it.",
     snippets_heading: "Client config snippets",
     stdio_note:
-      "This configuration stays valid long-term: app restarts, port changes and token changes require no edits. Agents can also connect while WeftCut is closed, and launch it directly.",
+      "This configuration stays valid long-term: app restarts, port changes and token changes require no edits. Agents can also connect while Sclip is closed, and launch it directly.",
     http_heading: "HTTP direct (advanced)",
     http_note:
       "Connects directly to the running app. The connection drops once the app closes, and the configuration becomes invalid when the port or token changes. Unless your client does not support stdio, use the configuration above.",
@@ -1736,7 +1760,7 @@ const enUS = {
     startup_heading: "Startup",
     reopen_on_launch: "Auto-open last project",
     reopen_on_launch_hint:
-      "When enabled, WeftCut skips the start screen and auto-opens the last used project.",
+      "When enabled, Sclip skips the start screen and auto-opens the last used project.",
     canvas_heading: "Canvas",
     canvas_blurb:
       "This project's editing and preview size, and its timeline frame rate.",
@@ -1923,7 +1947,7 @@ const enUS = {
       "This clip's format isn't supported by the Lite engine, and the Standard engine isn't installed.",
     data_location_heading: "Data location",
     data_location_blurb:
-      "Where WeftCut keeps its large managed files. Your Motifs, partial caches, and downloaded assets will be stored here.",
+      "Where Sclip keeps its large managed files. Your Motifs, partial caches, and downloaded assets will be stored here.",
     data_location_current_label: "Current folder",
     data_location_fallback:
       "Fallback — the folder you chose was unavailable, so the default is in use.",
@@ -1935,15 +1959,15 @@ const enUS = {
     data_location_phase_done: "Finishing…",
     data_location_progress_count: "{{copied}} / {{total}} files",
     data_location_success_copy:
-      "Your data was copied to {{path}}. Restart WeftCut to start using the new location.",
+      "Your data was copied to {{path}}. Restart Sclip to start using the new location.",
     data_location_success_adopt:
-      "WeftCut will use the existing data folder at {{path}}. Restart to apply.",
+      "Sclip will use the existing data folder at {{path}}. Restart to apply.",
     data_location_restart: "Restart to apply",
     data_location_error:
       "Couldn't change the data folder: {{message}} Your data was left unchanged.",
     data_location_cleanup_title: "Delete old data copy?",
     data_location_cleanup_body:
-      "WeftCut is now running on the new location. The previous copy at {{path}} is no longer used — delete it to free up space, or keep it as a backup.",
+      "Sclip is now running on the new location. The previous copy at {{path}} is no longer used — delete it to free up space, or keep it as a backup.",
     data_location_cleanup_keep: "Keep",
     data_location_cleanup_delete: "Delete old copy",
     data_location_cleanup_deleting: "Deleting…",
@@ -2435,6 +2459,7 @@ const enUS = {
       separate_audio: "Separated audio",
       add_av_pair: "Added A/V pair",
       rebind_motif: "Rebound motif clips",
+      rough_cut_apply: "Applied rough cut plan",
     },
     // A selected gap closed (ADR 0069): the subject is the gap, no clip went.
     gap: {

@@ -87,80 +87,38 @@
 
 .splash-mark {
   position: relative;
-  width: min(46vw, 290px);
-  aspect-ratio: 640 / 440;
-  filter: drop-shadow(0 18px 44px rgba(0, 0, 0, 0.38));
-  animation: splash-mark-settle 2500ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  width: min(72vw, 560px);
+  aspect-ratio: 16 / 9;
+  filter: drop-shadow(0 18px 44px rgba(0, 0, 0, 0.6));
+  animation: splash-mark-settle 2600ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
 }
 
-.splash-logo-pulse-trace .logo-pulse-glow,
-.splash-logo-pulse-trace .logo-pulse-core {
-  animation: none;
-  opacity: 0;
-}
-
-.splash-screen-pulsing .splash-logo-pulse-trace .logo-pulse-glow,
-.splash-screen-pulsing .splash-logo-pulse-trace .logo-pulse-core {
-  animation: logo-pulse-sweep 2.6s cubic-bezier(0.32, 0, 0.5, 1) infinite;
-}
-
-.splash-pulse-overlay {
-  position: absolute;
-  inset: 0;
-  display: block;
+.splash-video {
   width: 100%;
   height: 100%;
-  overflow: visible;
-  pointer-events: none;
-}
-
-.splash-film-stack,
-.splash-w-paint {
-  position: absolute;
-  inset: 0;
-}
-
-.splash-film-stack {
-  opacity: 0;
-  transform-origin: 50% 50%;
-  animation: splash-film-arrive 2500ms cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-.splash-film-stack img,
-.splash-w-paint img {
+  object-fit: contain;
   display: block;
+}
+
+.splash-video-fallback {
   width: 100%;
   height: 100%;
-}
-
-.splash-film-stack img {
-  position: absolute;
-  inset: 0;
-}
-
-/* The clip windows are the icon's cut regions measured in the 640×440 mark
- * frame: the W cut sweeps x 88→552 (13.75%→86.25%) and the wedge split
- * sweeps y 147→289 (33.4091%→65.6818%). */
-.splash-w-cut-filler {
-  animation: splash-w-cut-erase 2500ms cubic-bezier(0.42, 0, 0.58, 1) both;
-}
-
-.splash-wedge-filler {
-  animation: splash-wedge-erase 2500ms cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-.splash-w-paint {
-  animation: splash-w-paint-reveal 2500ms cubic-bezier(0.42, 0, 0.58, 1) both;
+  object-fit: contain;
+  display: block;
 }
 
 .splash-wordmark {
-  color: #dce8fb;
-  font-size: 22px;
+  color: #ffffff;
+  font-size: 24px;
   font-weight: 600;
   letter-spacing: 0.22em;
   text-indent: 0.22em;
   opacity: 0;
-  animation: splash-wordmark-in 2500ms ease both;
+  animation: splash-wordmark-in 2600ms ease both;
 }
 
 .splash-copy {
@@ -181,7 +139,7 @@
   font-size: var(--font-size-body);
   line-height: 1.35;
   text-align: center;
-  animation: splash-progress-in 2500ms ease both;
+  animation: splash-progress-in 2600ms ease both;
 }
 
 .splash-progress-dot {
@@ -189,7 +147,7 @@
   height: 5px;
   flex: 0 0 auto;
   border-radius: 50%;
-  background: #6696e6;
+  background: #ffffff;
 }
 
 .splash-progress-message {
@@ -202,28 +160,8 @@
   font-variant-numeric: tabular-nums;
 }
 
-@keyframes splash-w-cut-erase {
-  0%, 12% { clip-path: inset(0 0 0 13.75%); }
-  45%, 100% { clip-path: inset(0 0 0 86.25%); }
-}
-
-@keyframes splash-wedge-erase {
-  0%, 49% { clip-path: inset(33.4091% 0 0 0); }
-  65%, 100% { clip-path: inset(65.6818% 0 0 0); }
-}
-
-@keyframes splash-w-paint-reveal {
-  0%, 12% { clip-path: inset(0 86.25% 0 0); }
-  45%, 100% { clip-path: inset(0 13.75% 0 0); }
-}
-
-@keyframes splash-film-arrive {
-  0% { opacity: 0; transform: scale(0.96); }
-  10%, 100% { opacity: 1; transform: scale(1); }
-}
-
 @keyframes splash-mark-settle {
-  0% { opacity: 0; transform: scale(0.9); }
+  0% { opacity: 0; transform: scale(0.92); }
   10%, 100% { opacity: 1; transform: scale(1); }
 }
 
@@ -551,14 +489,15 @@
 }
 
 .startup-action.primary {
-  border-color: var(--selection-border);
-  background: color-mix(in srgb, var(--primary) 28%, var(--card));
-  color: var(--primary-foreground);
+  border-color: rgba(255, 255, 255, 0.4);
+  background: #ffffff;
+  color: #000000;
 }
 
 .startup-action.primary:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--ring) 72%, transparent);
-  background: color-mix(in srgb, var(--primary) 38%, var(--card));
+  border-color: #ffffff;
+  background: #e5e5e5;
+  color: #000000;
 }
 
 .startup-action-label {
@@ -699,38 +638,40 @@
   text-overflow: ellipsis;
 }
 
-.startup-recent-remove {
+.startup-recent-actions {
   align-self: center;
   margin-right: 6px;
-  background: transparent;
-  border: none;
-  color: var(--muted-foreground);
   display: inline-flex;
   align-items: center;
-  cursor: pointer;
-  padding: 2px 8px;
+}
+
+.startup-trash-menu-item {
+  color: var(--destructive);
+}
+
+.startup-trash-description {
+  margin: 0;
+  font-size: var(--font-size-body);
+  color: var(--muted-foreground);
+  line-height: 1.5;
+}
+
+.startup-trash-path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: var(--font-size-caption);
+  overflow-wrap: anywhere;
+  padding: 8px;
+  background: var(--surface-tint);
   border-radius: var(--radius-control);
-  opacity: 0;
-  transition: opacity var(--transition-fast), color var(--transition-fast), background var(--transition-fast);
 }
 
-.startup-recent-remove:focus-visible {
-  outline: none;
+.startup-notice {
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-control);
+  font-size: var(--font-size-body);
   color: var(--foreground);
-  box-shadow: var(--focus-ring);
-}
-
-/* Hover row OR keyboard-focus inside the row reveals the ×. Using opacity
- * (not display/visibility) so the button always occupies its grid cell —
- * the card never reflows when the user mouses over it. */
-.startup-recent-list li:hover .startup-recent-remove,
-.startup-recent-list li:focus-within .startup-recent-remove {
-  opacity: 1;
-}
-
-.startup-recent-remove:hover {
-  color: var(--color-red-300);
-  background: color-mix(in srgb, var(--destructive) 12%, transparent);
 }
 
 .startup-recent-toggle {
@@ -919,4 +860,3 @@
   justify-content: flex-end;
   gap: 8px;
 }
-

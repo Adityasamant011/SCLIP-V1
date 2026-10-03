@@ -53,6 +53,47 @@ export function prodTextParams(a: Record<string, unknown>, comp: { width: number
     throw new McpArgError('x and y must be given together', x === undefined ? 'x' : 'y')
   }
   if (x !== undefined && y !== undefined) params.transform.position = staticPosition(x, y)
+  const family = parseStrOpt(a.fontFamily, 'fontFamily')
+  const size = parseNumOpt(a.fontSizePx, 'fontSizePx')
+  const weight = parseNumOpt(a.fontWeight, 'fontWeight')
+  if (family !== null) params.font.family = family
+  if (size !== undefined) {
+    if (size <= 0) throw new McpArgError('fontSizePx must be positive', 'fontSizePx')
+    params.font.size_px = size
+  }
+  if (weight !== undefined) {
+    if (weight < 100 || weight > 900) throw new McpArgError('fontWeight must be in [100, 900]', 'fontWeight')
+    params.font.weight = weight
+  }
+  if (a.fillColor !== undefined) params.color = { mode: 'Static', value: parseRgba(a.fillColor, 'fillColor') }
+  if (a.align != null) {
+    if (a.align !== 'Left' && a.align !== 'Center' && a.align !== 'Right') throw new McpArgError('align must be Left, Center, or Right', 'align')
+    params.align = a.align
+  }
+  const boxW = parseNumOpt(a.boxW, 'boxW')
+  if (boxW !== undefined) {
+    if (boxW <= 0) throw new McpArgError('boxW must be positive', 'boxW')
+    params.box_w = boxW
+  }
+  const outlineWidth = parseNumOpt(a.outlineWidth, 'outlineWidth')
+  if (outlineWidth !== undefined) {
+    if (outlineWidth < 0) throw new McpArgError('outlineWidth must be non-negative', 'outlineWidth')
+    params.outline = outlineWidth === 0 ? null : {
+      color: a.outlineColor === undefined ? { r: 0, g: 0, b: 0, a: 255 } : parseRgba(a.outlineColor, 'outlineColor'),
+      width: outlineWidth,
+    }
+  } else if (a.outlineColor !== undefined) {
+    throw new McpArgError('outlineColor requires outlineWidth > 0', 'outlineColor')
+  }
+  if (a.shadow !== undefined) {
+    const shadow = a.shadow as Record<string, unknown>
+    if (shadow === null || typeof shadow !== 'object' || Array.isArray(shadow)) throw new McpArgError('shadow must be an object', 'shadow')
+    const offsetX = parseNumOpt(shadow.offset_x, 'shadow.offset_x') ?? 0
+    const offsetY = parseNumOpt(shadow.offset_y, 'shadow.offset_y') ?? 0
+    const blur = parseNumOpt(shadow.blur, 'shadow.blur') ?? 0
+    if (blur < 0) throw new McpArgError('shadow.blur must be non-negative', 'shadow.blur')
+    params.shadow = { color: parseRgba(shadow.color, 'shadow.color'), offset_x: offsetX, offset_y: offsetY, blur }
+  }
   return params
 }
 

@@ -42,6 +42,9 @@ import { upsertKeyframe, removeKeyframe, retimeKeyframe, setSegmentEasing, setAu
 import { readLayerTrack } from './mutations/params'
 import { applySetPosition, applyTranslatePath } from './mutations/position'
 import { applyTextCorrection, applyTranscripts } from './mutations/textCorrection'
+import { compileRoughCutTimeline, type RoughCutApplyResult } from './mutations/roughCut'
+import { buildTimelineContext } from '../sclip/timelineContext'
+import { validateRoughCutReview } from '../sclip/roughCutReview'
 import { CORRECTION_SCRIPT_MAX, type TextCorrectionExpectation } from '../../shared/textCorrectionRequest'
 import type { TranscriptPayload } from '../../shared/captionTiming'
 import type { PositionAnimation } from '../../shared/position'
@@ -98,6 +101,9 @@ export type DispatchResult = { ok: true; value: unknown } | { ok: false; error: 
 export interface ActorHandle {
   snapshot(): Project
   dispatch(channel: string, args: Record<string, unknown>): DispatchResult
+  /** Attribute a synchronous mutation to its real caller. Async hybrids call
+   *  this for each write after their compute step, not around an await. */
+  dispatchAs(source: Actor, channel: string, args: Record<string, unknown>): DispatchResult
   command(channel: string, wireArgs: Record<string, unknown>): DispatchResult
   replaceState(next: Project): void
   subscribe(cb: (e: ChangeEvent) => void): () => void
@@ -129,11 +135,19 @@ export function createActor(opts: ActorOptions): ActorHandle {
   const idGen = opts.idGen
   const clock: Clock = opts.clock ?? (() => '<TS>')
   const actor: Actor = opts.actor ?? { kind: 'User' }
+  let mutationActor: Actor = actor
   const history = new History(opts.initial, actor, idGen(), clock()) // consumes the Initial op_id
   const subs = new Set<(e: ChangeEvent) => void>()
   const motifCatalog: MotifCatalog = opts.motifCatalog ?? new MotifCatalog()
 
   function current(): Project { return history.current() }
+
+  function asActor<T>(source: Actor, run: () => T): T {
+    const previous = mutationActor
+    mutationActor = source
+    try { return run() }
+    finally { mutationActor = previous }
+  }
 
   /** validate(next) → throw CommandFailure(ValidationFailed) on a rule failure.
    *  Every path that must reject before minting an op_id calls this. */
@@ -200,8 +214,8 @@ export function createActor(opts: ActorOptions): ActorHandle {
     const refs = typeof affected === 'function' ? affected(value) : affected
     const opId = idGen() // AFTER validate — failed validate consumes no op_id
     const ts = clock()
-    history.record({ op_id: opId, actor, timestamp: ts, summary: summary.text, label_key: summary.key, label_args: summary.label_args, affected: refs, snapshot: next })
-    emit({ op_id: opId, actor, timestamp: ts, summary: summary.text, affected: refs, new_snapshot: next, diff_hint: diff })
+    history.record({ op_id: opId, actor: mutationActor, timestamp: ts, summary: summary.text, label_key: summary.key, label_args: summary.label_args, affected: refs, snapshot: next })
+    emit({ op_id: opId, actor: mutationActor, timestamp: ts, summary: summary.text, affected: refs, new_snapshot: next, diff_hint: diff })
     logDroppedTransitions(droppedTransitions) // after record — a failed validate logs nothing
     logDroppedMarkers(droppedMarkers)
     return value
@@ -216,7 +230,7 @@ export function createActor(opts: ActorOptions): ActorHandle {
         opts.emitLog({
           level: 'info',
           category: { kind: 'Project' },
-          source: actor.kind === 'Agent' ? { kind: 'Agent', client: actor.client } : { kind: 'User' },
+          source: mutationActor.kind === 'Agent' ? { kind: 'Agent', client: mutationActor.client } : { kind: 'User' },
           message: `Transition removed: edit broke its overlap (transition ${d.id}, from ${d.from_layer}, to ${d.to_layer})`,
           details: { kind: 'TransitionReconcileDrop', transition: d.id, from_layer: d.from_layer, to_layer: d.to_layer, reason: d.reason },
         })
@@ -236,7 +250,7 @@ export function createActor(opts: ActorOptions): ActorHandle {
         opts.emitLog({
           level: 'info',
           category: { kind: 'Project' },
-          source: actor.kind === 'Agent' ? { kind: 'Agent', client: actor.client } : { kind: 'User' },
+          source: mutationActor.kind === 'Agent' ? { kind: 'Agent', client: mutationActor.client } : { kind: 'User' },
           message: `Marker removed: the clip it followed is gone (marker ${d.id}${d.label ? ` "${d.label}"` : ''}, layer ${d.layer})`,
           details: { kind: 'MarkerReconcileDrop', marker: d.id, composition: d.composition, layer: d.layer, label: d.label },
         })
@@ -254,7 +268,7 @@ export function createActor(opts: ActorOptions): ActorHandle {
         opts.emitLog({
           level: 'info',
           category: { kind: 'Project' },
-          source: actor.kind === 'Agent' ? { kind: 'Agent', client: actor.client } : { kind: 'User' },
+          source: mutationActor.kind === 'Agent' ? { kind: 'Agent', client: mutationActor.client } : { kind: 'User' },
           message: `Transition placement moved layer ${b.layer} to ${b.spawned ? `a new track ${b.to_track}` : `track ${b.to_track}`}: its lane was occupied after the shift`,
           details: { kind: 'TransitionPlacementBounce', layer: b.layer, from_track: b.from_track, to_track: b.to_track, spawned: b.spawned },
         })
@@ -278,7 +292,7 @@ export function createActor(opts: ActorOptions): ActorHandle {
    *  the recorded history ID; undo/redo and preference changes have none. */
   function broadcastUnrecorded(summary: string, snapshot: Project, diff: DiffHint = { kind: 'Coarse' }, historyOpId?: Uuid): void {
     const opId = idGen() // the unrecorded broadcast's own deterministic id
-    emit({ op_id: opId, ...(historyOpId ? { history_op_id: historyOpId } : {}), actor, timestamp: clock(), summary, affected: [], new_snapshot: snapshot, diff_hint: diff })
+    emit({ op_id: opId, ...(historyOpId ? { history_op_id: historyOpId } : {}), actor: mutationActor, timestamp: clock(), summary, affected: [], new_snapshot: snapshot, diff_hint: diff })
   }
 
   // ── affected-ref helpers. Every recorded commit names the entities it touched,
@@ -541,7 +555,7 @@ export function createActor(opts: ActorOptions): ActorHandle {
   // ── checkpoints — used by the MCP checkpoint + begin_agent_session tools.
   //    checkpoint mints 1 id, no op/broadcast; restore success = 2 ids
   //    (entry op_id then broadcast op_id); CheckpointNotFound/HistoryLocked = 0. ──
-  function checkpoint(label: string, cpActor: Actor = actor): Uuid {
+  function checkpoint(label: string, cpActor: Actor = mutationActor): Uuid {
     const id = idGen() // the checkpoint's own id — no commit, no broadcast
     return history.checkpoint(label, cpActor, id, clock())
   }
@@ -550,7 +564,7 @@ export function createActor(opts: ActorOptions): ActorHandle {
     if (reason !== null) throw new CommandFailure({ error: 'HistoryLocked', reason }) // 0 ids
     if (!history.hasCheckpoint(id)) throw new CommandFailure({ error: 'CheckpointNotFound', checkpoint: id }) // 0 ids — peek BEFORE mint
     const opId = idGen() // entry op_id — minted FIRST
-    const snap = history.restoreCheckpoint(id, opId, clock(), actor)!
+    const snap = history.restoreCheckpoint(id, opId, clock(), mutationActor)!
     broadcastUnrecorded(`Restored checkpoint ${id}`, snap, { kind: 'Coarse' }, opId) // +1 broadcast id (the SECOND id)
   }
   /** Drop a checkpoint. Absent id → CheckpointNotFound, burning ZERO ids (same
@@ -865,7 +879,11 @@ export function createActor(opts: ActorOptions): ActorHandle {
             (d) => applyRestackLayer(d, idGen, layer, a.anchor as Uuid, a.position as RestackPosition))
           return { ok: true, value: null }
         }
-        case 'trim_layer': commit(HISTORY_SUMMARY.layerTrim, layerRef(a.layer as Uuid), { kind: 'Coarse' }, (d) => applyTrimLayer(d, a.layer as Uuid, ((a.edge as string) === 'out' ? 'Out' : 'In'), parseNum(a.new_t_us, 'new_t_us'), (a.escape_link as boolean) ?? false)); return { ok: true, value: null }
+        case 'trim_layer': {
+          if (a.edge !== 'in' && a.edge !== 'out') throw new CommandFailure({ error: 'InvalidArgument', field: 'edge', detail: "expected 'in' or 'out'" })
+          commit(HISTORY_SUMMARY.layerTrim, layerRef(a.layer as Uuid), { kind: 'Coarse' }, (d) => applyTrimLayer(d, a.layer as Uuid, a.edge === 'out' ? 'Out' : 'In', parseNum(a.new_t_us, 'new_t_us'), (a.escape_link as boolean) ?? false))
+          return { ok: true, value: null }
+        }
         case 'delete_layer': commit(HISTORY_SUMMARY.layerDelete, layerRef(a.layer as Uuid), { kind: 'Coarse' }, (d) => applyDeleteLayer(d, a.layer as Uuid)); return { ok: true, value: null }
         // The SELECTION's delete, and the marquee's headline gesture: N swept
         // clips must cost ONE undo entry, which the singular form above cannot
@@ -1601,6 +1619,10 @@ export function createActor(opts: ActorOptions): ActorHandle {
   }
 
   function mcpCall(name: string, argsJson: string): McpCallResult {
+    return asActor(MCP_ACTOR, () => mcpCallAsAgent(name, argsJson))
+  }
+
+  function mcpCallAsAgent(name: string, argsJson: string): McpCallResult {
     let a: Record<string, unknown>
     try { a = JSON.parse(argsJson) as Record<string, unknown> }
     catch (e) { return { ok: false, error: { code: 'invalid_params', message: `invalid args for ${name}: ${String(e)}` } } }
@@ -1614,6 +1636,28 @@ export function createActor(opts: ActorOptions): ActorHandle {
           const params = colorParams(p.color as Rgba, (p.width as number | undefined) ?? 1920, (p.height as number | undefined) ?? 1080)
           const id = commit(HISTORY_SUMMARY.layerAdd, layerRef, { kind: 'Coarse' }, (d) => applyAddLayer(d, idGen, p.track as string, params, p.t_start_us as number, p.t_end_us as number))
           return { ok: true, result: toolText(id) }
+        }
+        case 'add_media_layer': {
+          const p = mcpDef('add_media_layer').parseDedicated!(a)
+          const r = command('add_media_layer', { mediaId: p.media_id, trackId: p.track_id, tStartUs: p.t_start_us })
+          return r.ok ? { ok: true, result: toolText(r.value as string) } : { ok: false, error: mapCommandError(r.error) }
+        }
+        case 'add_text_layer': {
+          const p = mcpDef('add_text_layer').parseDedicated!(a)
+          const r = command('add_text_layer', {
+            content: p.content, tStartUs: p.t_start_us, durationUs: p.duration_us,
+            trackId: p.track_id, compositionId: p.composition_id,
+            x: p.x, y: p.y, fontFamily: p.font_family, fontSizePx: p.font_size_px,
+            fontWeight: p.font_weight, fillColor: p.fill_color,
+            outlineWidth: p.outline_width, outlineColor: p.outline_color,
+            shadow: p.shadow, align: p.align, boxW: p.box_w,
+          })
+          return r.ok ? { ok: true, result: toolText(r.value as string) } : { ok: false, error: mapCommandError(r.error) }
+        }
+        case 'restyle_captions': {
+          const patch = mcpDef('restyle_captions').parseDedicated!(a)
+          const r = command('restyle_captions', { patch })
+          return r.ok ? { ok: true, result: toolEmpty() } : { ok: false, error: mapCommandError(r.error) }
         }
         case 'add_video_layer': {
           const p = mcpDef('add_video_layer').parseDedicated!(a)
@@ -1748,6 +1792,106 @@ export function createActor(opts: ActorOptions): ActorHandle {
           const checkpointId = checkpoint(`Pre-agent: ${reason}`, MCP_ACTOR) // 1 det id; slot-flip + log are non-state side effects
           return { ok: true, result: toolJson({ checkpoint_id: checkpointId, started_at: clock() }) }
         }
+        case 'apply_rough_cut_plan': {
+          const p = mcpDef('apply_rough_cut_plan').parseDedicated!(a)
+          let planObj = p.plan
+          if (typeof planObj === 'string') {
+            try { planObj = JSON.parse(planObj) }
+            catch (e) {
+              return { ok: false, error: { code: 'invalid_params', message: `Invalid plan JSON: ${String(e)}` } }
+            }
+          }
+          const dryRun = (p.dry_run as boolean) ?? false
+          const reapply = (p.reapply as boolean) ?? false
+          const compId = (p.composition_id as string | null) ?? null
+          const trackId = (p.track_id as string | null) ?? null
+
+          if (dryRun) {
+            try {
+              const res = compileRoughCutTimeline(current(), idGen, planObj as any, {
+                composition_id: compId,
+                track_id: trackId,
+                dry_run: true,
+                reapply,
+              })
+              return { ok: true, result: toolJson(res) }
+            } catch (err) {
+              return { ok: false, error: mapCommandError(err instanceof CommandFailure ? err.err : { error: 'Backend', detail: String(err) }) }
+            }
+          }
+
+          // Preflight on current state to ensure zero checkpoints if preflight fails
+          try {
+            compileRoughCutTimeline(current(), idGen, planObj as any, {
+              composition_id: compId,
+              track_id: trackId,
+              dry_run: true,
+              reapply,
+            })
+          } catch (err) {
+            return { ok: false, error: mapCommandError(err instanceof CommandFailure ? err.err : { error: 'Backend', detail: String(err) }) }
+          }
+
+          const goal = (planObj as any)?.brief?.goal ?? 'AI Rough Cut'
+          const checkpointId = checkpoint(`Before AI Rough Cut: ${goal}`, MCP_ACTOR)
+
+          try {
+            const res = commit(
+              HISTORY_SUMMARY.layerRoughCutApply,
+              (r: RoughCutApplyResult) => layerRefs(r.mapping.flatMap(m => [m.layer_id, ...(m.audio_layer_id ? [m.audio_layer_id] : [])])),
+              { kind: 'Coarse' },
+              (draft) => compileRoughCutTimeline(draft, idGen, planObj as any, {
+                composition_id: compId,
+                track_id: trackId,
+                dry_run: false,
+                reapply,
+                checkpoint_id: checkpointId,
+              })
+            )
+            return { ok: true, result: toolJson(res) }
+          } catch (err) {
+            if (err instanceof CommandFailure) {
+              return { ok: false, error: mapCommandError(err.err) }
+            }
+            throw err
+          }
+        }
+        case 'get_timeline_context': {
+          const p = mcpDef('get_timeline_context').parseDedicated!(a)
+          const compId = (p.composition_id as string | null) ?? current().root_id
+          const startUs = p.start_us as number | undefined
+          const endUs = p.end_us as number | undefined
+          const transcriptsDir = p.transcripts_dir as string | undefined
+          try {
+            const res = buildTimelineContext(current(), {
+              compositionId: compId,
+              range: startUs !== undefined && endUs !== undefined ? { start_us: startUs, end_us: endUs } : undefined,
+              transcriptsDir,
+            })
+            return { ok: true, result: toolJson(res) }
+          } catch (err) {
+            return { ok: false, error: { code: 'not_found', message: String(err) } }
+          }
+        }
+        case 'validate_rough_cut_review': {
+          const p = mcpDef('validate_rough_cut_review').parseDedicated!(a)
+          let reviewObj = p.review
+          if (typeof reviewObj === 'string') {
+            try { reviewObj = JSON.parse(reviewObj) } catch (e) {
+              return { ok: false, error: { code: 'invalid_params', message: `Invalid review JSON: ${String(e)}` } }
+            }
+          }
+          const compId = (p.composition_id as string | null) ?? current().root_id
+          const comp = current().compositions[compId]
+          if (!comp) {
+            return { ok: false, error: { code: 'not_found', message: `Composition not found: ${compId}` } }
+          }
+          const res = validateRoughCutReview(reviewObj, comp)
+          return { ok: true, result: toolJson(res) }
+        }
+        case 'inspect_timeline_frame':
+        case 'render_timeline_range':
+          return { ok: false, error: { code: 'invalid_request', message: `${name} is an asynchronous media QA tool served by the MCP server layer` } }
         case 'set_keyframe': {
           const p = mcpDef('set_keyframe').parseDedicated!(a)
           const layer = p.layer as string
@@ -1940,6 +2084,7 @@ export function createActor(opts: ActorOptions): ActorHandle {
   return {
     snapshot: current,
     dispatch,
+    dispatchAs: (source, channel, args) => asActor(source, () => dispatch(channel, args)),
     command,
     mcpCall,
     replaceState,

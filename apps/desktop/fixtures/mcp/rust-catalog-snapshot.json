@@ -417,6 +417,50 @@
         "title": "DescribeClipArgs",
         "type": "object"
       }
+    },
+    {
+      "name": "get_media_context",
+      "description": "Get unified, timestamp-aligned source facts for an imported media item across all available perception modalities (transcripts, VSHOT shot cuts, visual stats, VLM scene descriptions, audio pauses, and frame reference URIs). All timestamps are source-media relative microseconds. Missing/uncomputed modalities report clean status \"not_generated\" instead of erroring.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "detail": {
+            "default": null,
+            "description": "Detail level: \"overview\" or \"range\". Defaults to \"overview\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "end_us": {
+            "default": null,
+            "description": "Window end in source microseconds. Defaults to source media duration.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "media_id": {
+            "description": "Media pool item id (UUID).",
+            "type": "string"
+          },
+          "start_us": {
+            "default": null,
+            "description": "Window start in source microseconds. Defaults to 0.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "media_id"
+        ],
+        "title": "GetMediaContextArgs",
+        "type": "object"
+      }
     }
   ],
   "resources": [

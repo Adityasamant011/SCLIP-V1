@@ -51,6 +51,21 @@ describe('actor commit pipeline', () => {
     expect(events.length).toBe(1)
   })
 
+  it('attributes MCP and hybrid writes to the agent without contaminating later GUI writes', () => {
+    const { actor, aRoll } = fresh()
+    const origins: string[] = []
+    actor.subscribe((e) => origins.push(e.actor.kind))
+    expect(actor.mcpCall('add_track', JSON.stringify({ label: 'From MCP' })).ok).toBe(true)
+    expect(actor.dispatchAs({ kind: 'Agent', client: 'mcp' }, 'add_layer', {
+      track: aRoll, kind: 'color', t_start_us: 0, t_end_us: 1_000_000,
+    }).ok).toBe(true)
+    expect(actor.dispatch('add_layer', {
+      track: aRoll, kind: 'color', t_start_us: 1_000_000, t_end_us: 2_000_000,
+    }).ok).toBe(true)
+    expect(origins).toEqual(['Agent', 'Agent', 'User'])
+    expect(actor.historyView(3).ops.map((entry) => entry.actor.kind)).toEqual(['Agent', 'Agent', 'User'])
+  })
+
   it('dry_run applies+validates each op without committing, halting at the first error', () => {
     const { actor, aRoll } = fresh()
     const out = actor.dryRun([

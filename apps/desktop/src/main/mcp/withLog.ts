@@ -310,7 +310,8 @@ export function withLog<Req extends RequestLike, Res>(
     try {
       const out = await runInWindow()
       settled = true
-      finish(false, null)
+      const refused = out !== null && typeof out === 'object' && 'isError' in out && out.isError === true
+      finish(refused, refused ? out : null)
       return out
     } catch (err) {
       settled = true

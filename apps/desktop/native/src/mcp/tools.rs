@@ -116,8 +116,8 @@ pub(super) struct DetectPausesArgs {
 }
 
 /// One pause, timeline-absolute and clipped to the layer's span.
-#[derive(Debug, Serialize, JsonSchema)]
-pub(super) struct PauseRegion {
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub(crate) struct PauseRegion {
     pub t_start_us: i64,
     pub t_end_us: i64,
 }
@@ -517,7 +517,7 @@ fn peak_time_us(idx: usize, sample_rate: u32, frames_per_peak: u32) -> i64 {
 /// interruptions, whose clipped duration is ≥ `min_pause_us`.
 #[cfg(feature = "jobs")]
 #[allow(clippy::too_many_arguments)]
-fn detect_pauses_in_peaks(
+pub(crate) fn detect_pauses_in_peaks(
     peaks: &[f32],
     threshold_amp: f32,
     min_pause_us: i64,
@@ -616,7 +616,7 @@ fn push_if_long_enough(
 /// the audio actually reached, which is what "noise floor" has to mean for the
 /// UI to offer it as a threshold.
 #[cfg(feature = "jobs")]
-fn noise_floor_p10(
+pub(crate) fn noise_floor_p10(
     peaks: &[f32],
     src_in_us: i64,
     src_out_us: i64,
@@ -1226,6 +1226,8 @@ pub(super) struct ResolvedClipAudio {
     /// defaulted `t_end_us`, so the caller reports the window it actually got
     /// rather than the one it asked for.
     pub timeline_end_us: i64,
+    /// Total duration of the source media in microseconds, if known.
+    pub source_duration_us: Option<i64>,
 }
 
 /// Find a layer with audio attached (VideoClip or Audio), validate the
@@ -1342,7 +1344,31 @@ pub(super) fn resolve_clip_audio_source(
         source_out_us: source_out,
         timeline_start_us: t_start,
         timeline_end_us: t_end,
+        source_duration_us: media.metadata.duration_us,
     })
+}
+
+/// Write serialized transcript JSON bytes atomically to the cache.
+#[cfg(feature = "speech")]
+async fn write_transcript_atomic(dest: &std::path::Path, bytes: &[u8]) -> Result<(), anyhow::Error> {
+    use crate::cache::{cached_ok, discard_temp, promote_temp, temp_path};
+    use anyhow::Context;
+    if let Some(parent) = dest.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .with_context(|| format!("ensure {}", parent.display()))?;
+    }
+    let tmp = temp_path(dest);
+    let _ = tokio::fs::remove_file(&tmp).await;
+    tokio::fs::write(&tmp, bytes)
+        .await
+        .with_context(|| format!("write {}", tmp.display()))?;
+    if !cached_ok(&tmp) {
+        discard_temp(dest);
+        anyhow::bail!("transcript is empty after write");
+    }
+    promote_temp(dest)?;
+    Ok(())
 }
 
 /// Write synthesized audio bytes atomically to the cache. Mirrors the
@@ -1469,6 +1495,69 @@ pub(super) async fn transcribe_clip(
         }
     };
 
+    let want_word_timing = args.word_timestamps.unwrap_or(true);
+    let is_full = resolved.source_in_us == 0
+        && resolved
+            .source_duration_us
+            .map(|d| resolved.source_out_us >= d)
+            .unwrap_or(false);
+
+    // 1. Check if full-source transcript is cached
+    let full_key = speech::transcript::transcript_cache_key(
+        &resolved.source_hash,
+        None,
+        used_backend.as_str(),
+        args.language.as_deref(),
+        want_word_timing,
+    );
+    let full_path = b.cache.transcript(&full_key);
+    if crate::cache::cached_ok(&full_path) {
+        crate::cache::touch_if_stale(&full_path);
+        if let Ok(bytes) = tokio::fs::read(&full_path).await {
+            if let Ok(cached) = serde_json::from_slice::<speech::transcript::CachedTranscript>(&bytes) {
+                let sliced = cached.slice_window(resolved.source_in_us, resolved.source_out_us);
+                let transcript = sliced.to_shifted_transcript(resolved.source_in_us, resolved.timeline_start_us);
+                let srt = transcript.render_srt();
+                let result = TranscribeClipResult {
+                    backend: used_backend.as_str(),
+                    segments: &transcript.segments,
+                    language: transcript.language.as_deref(),
+                    word_timing: transcript.word_timing,
+                    srt,
+                };
+                return ToolResult::json(&result);
+            }
+        }
+    }
+
+    // 2. Check if exact-range transcript is cached
+    let range_key = speech::transcript::transcript_cache_key(
+        &resolved.source_hash,
+        Some((resolved.source_in_us, resolved.source_out_us)),
+        used_backend.as_str(),
+        args.language.as_deref(),
+        want_word_timing,
+    );
+    let range_path = b.cache.transcript(&range_key);
+    if crate::cache::cached_ok(&range_path) {
+        crate::cache::touch_if_stale(&range_path);
+        if let Ok(bytes) = tokio::fs::read(&range_path).await {
+            if let Ok(cached) = serde_json::from_slice::<speech::transcript::CachedTranscript>(&bytes) {
+                let transcript = cached.to_shifted_transcript(resolved.source_in_us, resolved.timeline_start_us);
+                let srt = transcript.render_srt();
+                let result = TranscribeClipResult {
+                    backend: used_backend.as_str(),
+                    segments: &transcript.segments,
+                    language: transcript.language.as_deref(),
+                    word_timing: transcript.word_timing,
+                    srt,
+                };
+                return ToolResult::json(&result);
+            }
+        }
+    }
+
+    // 3. Cache miss: extract audio and transcribe
     let audio_path = speech::audio_extract::extract_audio_window(
         &b.cache,
         &resolved.source_path,
@@ -1482,16 +1571,42 @@ pub(super) async fn transcribe_clip(
     let raw = transcriber
         .transcribe(speech::TranscribeRequest {
             audio_path,
-            language: args.language,
-            want_word_timing: args.word_timestamps.unwrap_or(true),
+            language: args.language.clone(),
+            want_word_timing,
         })
         .await
         .map_err(map_speech_error)?;
 
-    // Normalize the backend's raw style → one Transcript, then place the
-    // audio-slice-relative times on the timeline.
+    // Normalize the backend's raw style → one Transcript
     let mut transcript = speech::parse_raw(raw).map_err(map_speech_error)?;
-    transcript.shift(resolved.timeline_start_us);
+
+    // Shift window-relative times to source-relative times for caching
+    transcript.shift(resolved.source_in_us);
+
+    // Write to persistent cache in source-relative time
+    let cached_entry = speech::transcript::CachedTranscript {
+        source_hash: resolved.source_hash.clone(),
+        is_full_source: is_full,
+        source_duration_us: resolved.source_duration_us,
+        in_us: if is_full { 0 } else { resolved.source_in_us },
+        out_us: if is_full {
+            resolved.source_duration_us.unwrap_or(resolved.source_out_us)
+        } else {
+            resolved.source_out_us
+        },
+        backend: used_backend.as_str().to_string(),
+        language: transcript.language.clone(),
+        word_timing: transcript.word_timing,
+        segments: transcript.segments.clone(),
+    };
+    let save_key = if is_full { &full_key } else { &range_key };
+    let save_path = b.cache.transcript(save_key);
+    if let Ok(bytes) = serde_json::to_vec(&cached_entry) {
+        let _ = write_transcript_atomic(&save_path, &bytes).await;
+    }
+
+    // Shift the remaining delta to place on the timeline
+    transcript.shift(resolved.timeline_start_us.saturating_sub(resolved.source_in_us));
 
     let srt = transcript.render_srt();
     let result = TranscribeClipResult {
@@ -1842,6 +1957,7 @@ pub(super) async fn describe_clip(
         vlm::shift_segments(&mut fresh, resolved.source_in_us);
 
         cache.merge_window(resolved.source_in_us, resolved.source_out_us, fresh);
+        cache.source_hash = Some(resolved.source_hash.clone());
         write_description_atomic(&dest, &cache).await.map_err(|e| {
             McpToolError::internal_error(format!("persist description: {e:#}"), None)
         })?;
@@ -1963,4 +2079,44 @@ pub(super) async fn synthesize_speech(
         "synthesize_speech is handled by the host process (TS actor hybrid)".to_string(),
         None,
     ))
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetMediaContextArgs {
+    /// Media pool item id (UUID).
+    pub media_id: String,
+    /// Window start in source microseconds. Defaults to 0.
+    #[serde(default)]
+    pub start_us: Option<i64>,
+    /// Window end in source microseconds. Defaults to source media duration.
+    #[serde(default)]
+    pub end_us: Option<i64>,
+    /// Detail level: "overview" or "range". Defaults to "overview".
+    #[serde(default)]
+    pub detail: Option<String>,
+    /// Injected media item from TS host.
+    #[schemars(skip)]
+    #[serde(default)]
+    pub media: Option<crate::state::MediaItem>,
+}
+
+pub(super) async fn get_media_context(
+    b: &Backend,
+    args: GetMediaContextArgs,
+) -> Result<ToolResult, McpToolError> {
+    let media_id = parse_uuid(&args.media_id, "media_id")?;
+    let media = args.media.ok_or_else(|| {
+        McpToolError::resource_not_found(format!("media {media_id} not found in project media pool"), None)
+    })?;
+
+    let body = super::resources::build_media_context_json(
+        &b.cache,
+        &media,
+        args.start_us,
+        args.end_us,
+        args.detail.as_deref(),
+    )
+    .await;
+
+    ToolResult::json(&body)
 }

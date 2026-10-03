@@ -15,11 +15,6 @@ import {
   type StartupProgress,
 } from "./startup/initializeRenderer";
 import { PerformanceMonitorWindow } from "./render/PerfHUD";
-import {
-  projectOpen,
-  recentsGetReopenOnLaunch,
-  recentsMostRecent,
-} from "./ipc";
 import { initEval } from "./eval";
 import { isMac } from "./platform";
 import "./i18n";
@@ -159,35 +154,10 @@ function Root() {
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const enabled = await recentsGetReopenOnLaunch();
-        if (!enabled) {
-          if (!cancelled) setStage("startup");
-          return;
-        }
-        const recent = await recentsMostRecent();
-        if (!recent) {
-          if (!cancelled) setStage("startup");
-          return;
-        }
-        try {
-          await projectOpen(recent.path);
-          if (!cancelled) setStage("editor");
-        } catch (err) {
-          console.warn("reopen-on-launch failed; falling back to startup", err);
-          if (!cancelled) setStage("startup");
-        }
-      } catch (err) {
-        console.warn("startup pref read failed:", err);
-        if (!cancelled) setStage("startup");
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    // Sclip always lands on the startup dashboard on launch.
+    setStage("startup");
   }, []);
+
 
   // E2E-only: expose `window.__weftcutTest.newProjectAndEnter` so the E2E
   // suite can create a project + enter the editor headlessly. The dynamic

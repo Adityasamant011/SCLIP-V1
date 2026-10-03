@@ -329,4 +329,60 @@ describe("useExportFlow audio-effect gate", () => {
     expect(calls).toEqual([{ startUs: 0, endUs: 2_000_000 }]);
     expect(summary([]).compositions[ROOT_ID]).toBeDefined();
   });
+
+  it("blocks export when unresolved attribution obligations exist on timeline assets", async () => {
+    bridge.answers.set("check_export_attribution_safety", () => ({
+      can_export: false,
+      has_unresolved_obligations: true,
+      unresolved_count: 1,
+      warnings: ['Unresolved attribution obligation for "wikimedia_photo.jpg" (CC BY 4.0)'],
+    }));
+    const { result } = mount();
+
+    await act(async () => {
+      await result.current.runExportWithSettings(
+        { ...DEFAULT_EXPORT_SETTINGS, includeVideo: true, includeAudio: true },
+        "/out/movie.mp4",
+      );
+    });
+
+    await waitFor(() => {
+      expect(result.current.exportState).toEqual({
+        kind: "error",
+        detail: 'Export blocked: Unresolved attribution obligation for "wikimedia_photo.jpg" (CC BY 4.0)',
+      });
+    });
+    expect(bridge.log).toContain("invoke check_export_attribution_safety");
+    expect(bridge.log).not.toContain("invoke export_video_sink_start");
+  });
+
+  it("allows export to proceed once attribution obligations are resolved", async () => {
+    bridge.answers.set("check_export_attribution_safety", () => ({
+      can_export: true,
+      has_unresolved_obligations: false,
+      unresolved_count: 0,
+      warnings: [],
+    }));
+    bridge.answers.set("project_summary", () =>
+      summary([track("track-a", "Audio", [AUDIO_LAYER])]),
+    );
+    bridge.answers.set("ensure_export_audio_fx", () => ({
+      waiting: [],
+      failed: [],
+    }));
+    bridge.answers.set("export_project_audio_only", () => true);
+    const { result } = mount();
+
+    await act(async () => {
+      await result.current.runExportWithSettings(
+        { ...DEFAULT_EXPORT_SETTINGS, includeVideo: false, includeAudio: true },
+        "/out/mix.m4a",
+      );
+    });
+
+    await waitFor(() => {
+      expect(result.current.exportState?.kind).toBe("complete");
+    });
+    expect(bridge.log).toContain("invoke check_export_attribution_safety");
+  });
 });

@@ -1,0 +1,121 @@
+// @vitest-environment jsdom
+import { act, cleanup, render, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+const terminal = vi.hoisted(() => ({
+  writes: [] as string[],
+  onData: null as ((data: string) => void) | null,
+  output: null as ((event: unknown) => void) | null,
+  replayDone: null as (() => void) | null,
+  asyncWrite: false,
+  handlers: [] as Array<{ dispose: ReturnType<typeof vi.fn> }>,
+}))
+const ipc = vi.hoisted(() => ({
+  sclipOpenTerminal: vi.fn(),
+  sclipTerminalInput: vi.fn(),
+  sclipTerminalResize: vi.fn(),
+}))
+
+vi.mock('@xterm/xterm', () => ({ Terminal: class {
+  cols = 80
+  rows = 24
+  loadAddon() {}
+  open() {}
+  parser = {
+    registerOscHandler: vi.fn(() => { const h = { dispose: vi.fn() }; terminal.handlers.push(h); return h }),
+    registerCsiHandler: vi.fn(() => { const h = { dispose: vi.fn() }; terminal.handlers.push(h); return h }),
+  }
+  write(data: string, done?: () => void) {
+    terminal.writes.push(data)
+    if (terminal.asyncWrite && done) terminal.replayDone = done
+    else done?.()
+  }
+  onData(callback: (data: string) => void) { terminal.onData = callback; return { dispose() {} } }
+  scrollToBottom() {}
+  clear() {}
+  dispose() {}
+} }))
+vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { fit() {} } }))
+vi.mock('@xterm/addon-web-links', () => ({ WebLinksAddon: class {} }))
+vi.mock('../ipc/sclip', () => ipc)
+
+import { HermesTerminal } from './HermesTerminal'
+
+beforeEach(() => {
+  terminal.writes = []
+  terminal.onData = null
+  terminal.output = null
+  terminal.replayDone = null
+  terminal.asyncWrite = false
+  terminal.handlers = []
+  vi.clearAllMocks()
+  ipc.sclipTerminalInput.mockResolvedValue(undefined)
+  ipc.sclipTerminalResize.mockResolvedValue(undefined)
+  Object.defineProperty(window, 'api', { configurable: true, value: {
+    on: (_channel: string, callback: (event: unknown) => void) => {
+      terminal.output = callback
+      return () => { terminal.output = null }
+    },
+  } })
+  vi.stubGlobal('ResizeObserver', class { observe() {}; disconnect() {} })
+})
+
+afterEach(() => { cleanup(); vi.unstubAllGlobals() })
+
+describe('HermesTerminal startup and typing', () => {
+  it('keeps live output queued until asynchronous history parsing completes', async () => {
+    terminal.asyncWrite = true
+    ipc.sclipOpenTerminal.mockResolvedValue({ history: '\x1b]11;?\x07\x1b[c', sequence: 1 })
+    render(<HermesTerminal projectId="project" sessionId="session" />)
+    await waitFor(() => expect(terminal.replayDone).not.toBeNull())
+    act(() => {
+      terminal.output?.({ projectId: 'project', sessionId: 'session', sequence: 2, data: '\x1b]11;?\x07' })
+      terminal.onData?.('你好\x1b[200~paste\x1b[201~')
+    })
+    expect(terminal.writes).toHaveLength(1)
+    expect(terminal.handlers.every(h => h.dispose.mock.calls.length === 0)).toBe(true)
+    act(() => terminal.replayDone?.())
+    expect(terminal.handlers.every(h => h.dispose.mock.calls.length === 1)).toBe(true)
+    expect(terminal.writes).toHaveLength(2)
+    await waitFor(() => expect(ipc.sclipTerminalInput).toHaveBeenCalledWith('project', 'session', '你好\x1b[200~paste\x1b[201~'))
+  })
+
+  it('paints the startup snapshot once, then only newer live output', async () => {
+    let resolveOpen!: (value: { history: string; sequence: number }) => void
+    ipc.sclipOpenTerminal.mockImplementation(() => new Promise(resolve => { resolveOpen = resolve }))
+    render(<HermesTerminal projectId="project" sessionId="session" />)
+
+    act(() => {
+      terminal.output?.({ projectId: 'project', sessionId: 'session', sequence: 1, data: 'banner' })
+      terminal.output?.({ projectId: 'project', sessionId: 'session', sequence: 2, data: 'prompt> ' })
+    })
+    await act(async () => { resolveOpen({ history: 'banner', sequence: 1 }) })
+    expect(terminal.writes.join('')).toBe('bannerprompt> ')
+    act(() => {
+      terminal.output?.({ projectId: 'project', sessionId: 'session', sequence: 2, data: 'prompt> ' })
+      terminal.output?.({ projectId: 'project', sessionId: 'session', sequence: 3, data: 'ready' })
+    })
+    expect(terminal.writes.join('')).toBe('bannerprompt> ready')
+  })
+
+  it('waits for startup and sends rapid keystrokes to the PTY in order', async () => {
+    let resolveOpen!: (value: { history: string; sequence: number }) => void
+    ipc.sclipOpenTerminal.mockImplementation(() => new Promise(resolve => { resolveOpen = resolve }))
+    const sent: string[] = []
+    const releases: Array<() => void> = []
+    ipc.sclipTerminalInput.mockImplementation((_project: string, _session: string, data: string) => {
+      sent.push(data)
+      return new Promise<void>(resolve => { releases.push(resolve) })
+    })
+    render(<HermesTerminal projectId="project" sessionId="session" />)
+    act(() => { terminal.onData?.('a'); terminal.onData?.('b'); terminal.onData?.('c') })
+    expect(sent).toEqual([])
+    await act(async () => { resolveOpen({ history: '', sequence: 0 }) })
+    await waitFor(() => expect(sent).toEqual(['a']))
+    await act(async () => { releases.shift()?.() })
+    await waitFor(() => expect(sent).toEqual(['a', 'b']))
+    await act(async () => { releases.shift()?.() })
+    await waitFor(() => expect(sent).toEqual(['a', 'b', 'c']))
+    await act(async () => { releases.shift()?.() })
+  })
+})

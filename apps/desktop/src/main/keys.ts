@@ -3,8 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 /// True when the OS keyring backs safeStorage. False on Linux without a
-/// keyring (headless CI, minimal containers) → key material persists in
-/// plaintext. Callers should warn + degrade, never hard-fail.
+/// keyring (headless CI, minimal containers) → refuse credential writes.
 export function encryptionAvailable(): boolean {
   try { return safeStorage.isEncryptionAvailable() } catch { return false }
 }
@@ -53,6 +52,7 @@ export function loadAllKeys(): Record<string, string> {
 /// Encrypt + persist one provider key. Trims; empty key is a no-op clear.
 export function setKey(provider: string, key: string): void {
   const trimmed = (key ?? '').trim()
+  if (trimmed && !encryptionAvailable()) throw new Error('Secure OS key storage is required before saving credentials')
   const stored = readStored()
   if (!trimmed) {
     delete stored[provider]

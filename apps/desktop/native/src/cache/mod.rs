@@ -342,6 +342,17 @@ impl CacheLayout {
         self.voiceover_dir().join(format!("{hash}.{ext}"))
     }
 
+    /// Persistent speech transcripts for source media.
+    /// Keyed by `speech::transcript::transcript_cache_key`.
+    /// Excluded from disk-LRU sweeps.
+    pub fn transcripts_dir(&self) -> PathBuf {
+        self.current_root().join("transcripts")
+    }
+
+    pub fn transcript(&self, key: &str) -> PathBuf {
+        self.transcripts_dir().join(format!("{key}.json"))
+    }
+
     /// Create the top-level cache directory tree. Idempotent. Called
     /// implicitly by `set_workspace`; the boot fallback also calls it once.
     ///
@@ -367,6 +378,7 @@ impl CacheLayout {
             self.shots_dir(),
             self.shot_stats_dir(),
             self.voiceover_dir(),
+            self.transcripts_dir(),
         ] {
             fs::create_dir_all(&p).with_context(|| format!("create cache dir {}", p.display()))?;
         }
@@ -566,6 +578,10 @@ mod tests {
         assert_eq!(
             layout.voiceover("abc", "mp3"),
             tmp.path().join("voiceover").join("abc.mp3"),
+        );
+        assert_eq!(
+            layout.transcript("abc"),
+            tmp.path().join("transcripts").join("abc.json"),
         );
         assert_eq!(
             layout.filmstrip_tile("abc", FilmstripSrc::Quick, 3, 7),

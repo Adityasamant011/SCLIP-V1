@@ -19,6 +19,7 @@ import {
 import { wireDecodeComponent } from "../settings/decodeComponentStore";
 import { SettingsPanel } from "../settings/SettingsPanel";
 import { AppDialog } from "../components/AppDialog";
+import { Menu, MenuItem, MenuSeparator } from "../menu/Menu";
 import { AppInput } from "../components/AppInput";
 import { AppNumberField } from "../components/AppNumberField";
 import { AppSelect } from "../components/AppSelect";
@@ -31,12 +32,13 @@ import {
   GlobeIcon,
   PlusIcon,
   SettingsIcon,
-  XIcon,
 } from "lucide-react";
 import {
   keybindingsGet,
   projectNewWorkspace,
   projectOpen,
+  projectReveal,
+  projectTrash,
   recentsLastNewProjectParent,
   recentsList,
   recentsRemove,
@@ -51,7 +53,6 @@ import {
   fpsLabel,
   resolutionLabel,
 } from "./canvasPresets";
-import { LogoPulsePaths } from "./LogoPulsePaths";
 import {
   cleanIpcDetail,
   describeCreateError,
@@ -72,6 +73,8 @@ export function StartupScreen({ onWorkspaceReady }: Props) {
   const { t, i18n } = useTranslation();
   const [recents, setRecents] = useState<RecentEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [trashTarget, setTrashTarget] = useState<RecentEntry | null>(null);
   const [busy, setBusy] = useState(false);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -165,6 +168,7 @@ export function StartupScreen({ onWorkspaceReady }: Props) {
       if (busy) return;
       setBusy(true);
       setError(null);
+      setNotice(null);
       try {
         await action();
       } catch (e) {
@@ -263,21 +267,6 @@ export function StartupScreen({ onWorkspaceReady }: Props) {
               width={44}
               height={44}
             />
-            <svg
-              className="startup-logo-pulse-trace"
-              viewBox="0 0 440 440"
-              fill="none"
-              focusable="false"
-            >
-              <defs>
-                <clipPath id="startup-logo-w-clip">
-                  <path d="M200.117 167.417L151.477 239.378C149.409 242.438 144.851 242.276 143.004 239.078L95.331 156.5C92.6515 151.859 87.6995 149 82.3404 149H10.0005C4.47764 149 0.000488281 153.477 0.000488281 159V183C0.000488281 188.523 4.47764 193 10.0005 193H57.3059C62.6835 193 67.6496 195.879 70.3222 200.545L124.679 295.455C127.352 300.121 132.318 303 137.696 303H154.024C159.011 303 163.672 300.522 166.461 296.387L220.001 217L273.541 296.387C276.329 300.522 280.99 303 285.977 303H302.306C307.683 303 312.649 300.121 315.322 295.455L369.679 200.545C372.352 195.879 377.318 193 382.696 193H430C435.523 193 440 188.523 440 183V159C440 153.477 435.523 149 430 149L357.661 149C352.302 149 347.35 151.859 344.671 156.5L296.997 239.078C295.151 242.276 290.593 242.438 288.525 239.378L239.885 167.417C230.368 153.337 209.634 153.337 200.117 167.417Z" />
-                </clipPath>
-              </defs>
-              <g clipPath="url(#startup-logo-w-clip)">
-                <LogoPulsePaths />
-              </g>
-            </svg>
           </span>
           <div className="startup-heading-text">
             <h1>{t("app.title")}</h1>
@@ -306,7 +295,8 @@ export function StartupScreen({ onWorkspaceReady }: Props) {
           </button>
         </div>
 
-        {error && <p className="startup-error">{error}</p>}
+        {error && !trashTarget && <p className="startup-error" role="alert">{error}</p>}
+        {notice && <p className="startup-notice" role="status">{notice}</p>}
 
         <section className="startup-recent">
           <div className="startup-recent-header">
@@ -358,19 +348,21 @@ export function StartupScreen({ onWorkspaceReady }: Props) {
                     </span>
                     <span className="startup-recent-path">{entry.path}</span>
                   </button>
-                  <button
-                    type="button"
-                    className="startup-recent-remove"
-                    onClick={async (e) => {
-                      e.stopPropagation();
-                      await recentsRemove(entry.path).catch(() => {});
-                      await refreshRecents();
-                    }}
-                    title={t("startup.recent_remove_hint")}
-                    aria-label={t("startup.recent_remove_hint")}
-                  >
-                    <XIcon size={14} aria-hidden />
-                  </button>
+                  <div className="startup-recent-actions">
+                    <Menu label={t("startup.recent_actions")} hint={entry.name}>
+                      <MenuItem label={t("startup.recent_reveal")} disabled={busy}
+                        onSelect={() => runProtected(() => projectReveal(entry.path))} />
+                      <MenuItem label={t("startup.recent_remove_hint")} disabled={busy}
+                        onSelect={() => runProtected(async () => {
+                          await recentsRemove(entry.path);
+                          await refreshRecents();
+                          setNotice(t("startup.recent_removed"));
+                        })} />
+                      <MenuSeparator />
+                      <MenuItem label={t("startup.recent_trash")} className="startup-trash-menu-item" disabled={busy}
+                        onSelect={() => { setError(null); setTrashTarget(entry); }} />
+                    </Menu>
+                  </div>
                 </li>
               ))}
             </ul>
@@ -386,6 +378,27 @@ export function StartupScreen({ onWorkspaceReady }: Props) {
             onWorkspaceReady();
           }}
         />
+      )}
+      {trashTarget && (
+        <AppDialog title={t("startup.trash_title", { name: trashTarget.name })}
+          onClose={busy ? undefined : () => { setTrashTarget(null); setError(null); }}
+          panelClassName="new-project-panel">
+          <p className="startup-trash-description">{t("startup.trash_description")}</p>
+          <div className="startup-trash-path">{trashTarget.path}</div>
+          <p className="startup-trash-description">{t("startup.trash_restore")}</p>
+          {error && <div className="startup-error" role="alert">{error}</div>}
+          <div className="new-project-actions">
+            <Button variant="outline" disabled={busy} onClick={() => { setTrashTarget(null); setError(null); }}>{t("startup.trash_cancel")}</Button>
+            <Button variant="destructive" disabled={busy} onClick={() => void runProtected(async () => {
+              const result = await projectTrash(trashTarget.path);
+              setTrashTarget(null);
+              await refreshRecents();
+              setNotice(t(result === 'missing' ? "startup.trash_missing" : "startup.trash_success", { name: trashTarget.name }));
+            }, e => t("startup.trash_failed", { detail: cleanIpcDetail(e) }))}>
+              {t(busy ? "startup.trash_busy" : "startup.trash_confirm")}
+            </Button>
+          </div>
+        </AppDialog>
       )}
       {settingsOpen && (
         // No composition props: there is no open project here, so the

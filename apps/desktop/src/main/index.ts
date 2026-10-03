@@ -8,8 +8,16 @@ import { createRequire } from 'node:module'
 import { execFile } from 'node:child_process'
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, Notification, protocol, shell } from 'electron'
 import { loadAllKeys, setKey, clearKey } from './keys.js'
+import { configuredHermesKeys, credentialTags, resolveHermesProviderEnvironment, testHermesConnection, validateHermesProfile } from './sclip/hermesSettings.js'
+import { createJevClient, JEV_MODEL } from './sclip/jevClient.js'
+import { disposeVisionRuntime } from './sclip/visionRuntime.js'
+import { createSourcePassageEvaluator, type Transcript } from './sclip/sourcePassageEvaluation.js'
+import { redactHermesSecrets } from './sclip/hermesSecrets.js'
+import { createStyleEventRecorder, type StyleEventRecorder } from './sclip/styleEvents.js'
+import { synthesizeSpeechLocally } from './sclip/localTts.js'
 import electronUpdater from 'electron-updater'
 import { createUpdates } from './updates.js'
+import { trashRecentProject } from './projectTrash.js'
 import { mediaMimeForExt } from './mediaMime.js'
 import { VLM_ENDPOINT_KEY_TAG } from '../shared/vlm-config.js'
 import { MOTIF_SCHEME_ENTRY, registerMotifProtocol } from './motif/protocol.js'
@@ -99,6 +107,7 @@ function emitToRenderer(event: string, payload: unknown): void {
 // `startMcpHost` resolves.
 let mcpHostRef: import('./mcp/index.js').McpHost | null = null
 let tsHost: import('./state/ts-actor-host.js').TsActorHost | null = null
+let styleEventRecorder: StyleEventRecorder | null = null
 // Audio-effect bake orchestrator (ADR 0063). Module-scoped for the same reason
 // as `tsHost`: the `backend:invoke` handler and the before-quit hook both reach
 // it, and it does not exist until whenReady has built the actor it subscribes to.
@@ -401,6 +410,36 @@ app.whenReady().then(async () => {
   // and the file picker.
   nativeTheme.themeSource = 'dark'
 
+  // Explicitly set macOS Dock icon to Sclip logo
+  if (process.platform === 'darwin' && app.dock) {
+    const iconCandidates = [
+      path.join(process.resourcesPath, 'icon.png'),
+      path.join(process.resourcesPath, 'icon.icns'),
+      path.join(import.meta.dirname, '../../build/icon.png'),
+    ]
+    for (const iconPath of iconCandidates) {
+      if (fs.existsSync(iconPath)) {
+        try {
+          app.dock.setIcon(iconPath)
+          break
+        } catch {}
+      }
+    }
+  }
+
+  // Ensure node-pty spawn-helper has executable permissions on unix
+  if (process.platform !== 'win32') {
+    const helperPaths = [
+      path.join(process.resourcesPath, 'app.asar.unpacked/node_modules/node-pty/build/Release/spawn-helper'),
+      path.join(process.resourcesPath, 'app.asar.unpacked/node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper'),
+    ]
+    for (const hp of helperPaths) {
+      if (fs.existsSync(hp)) {
+        try { fs.chmodSync(hp, 0o755) } catch {}
+      }
+    }
+  }
+
   // App-global (not per-window): Electron's DEFAULT application menu never goes
   // live on any platform — Windows/Linux get no menu at all, macOS the explicit
   // one from ./appMenu. Either way dev reload/DevTools/fullscreen come from
@@ -582,7 +621,7 @@ app.whenReady().then(async () => {
 
   const { encryptionAvailable } = await import('./keys.js')
   if (!encryptionAvailable()) {
-    console.warn('[main] OS keyring unavailable — cloud API keys persist in PLAINTEXT (cloud_keys.json). Secure your userData dir or install a keyring (libsecret/kwallet).')
+    console.warn('[main] OS keyring unavailable — saving new cloud API keys is disabled until secure storage is available.')
     // Surfaced through the renderer's system-status entry (pulled via app:notices).
     startupNotices.push({ level: 'warn', code: 'keyring_unavailable' })
   }
@@ -608,6 +647,18 @@ app.whenReady().then(async () => {
   // speech resolver sees a COMPLETE speech_config snapshot (cloud keys + local
   // config) before the first transcribe_clip. Ordered right after the keys, well
   // ahead of the MCP host start below.
+  const initialSpeechCfg = speechConfig.get()
+  if (!initialSpeechCfg.local['whisper_cpp']) {
+    const defaultModel = path.join(app.getPath('userData'), 'models', 'ggml-base.bin')
+    const candidates = ['/opt/homebrew/bin/whisper-cli', '/usr/local/bin/whisper-cli']
+    const foundBin = candidates.find(p => fs.existsSync(p))
+    if (foundBin && fs.existsSync(defaultModel)) {
+      speechConfig.apply({
+        preferred_engine: 'whisper_cpp',
+        local: { backend: 'whisper_cpp', config: { binary: foundBin, model: defaultModel } },
+      })
+    }
+  }
   for (const [tag, lc] of Object.entries(speechConfig.get().local)) {
     backend.setLocalBackend(tag, lc.binary, lc.model, lc.device ?? null, lc.threads ?? null, lc.tokens ?? null)
   }
@@ -727,8 +778,25 @@ app.whenReady().then(async () => {
     probeMedia: (p: string) => backend!.probeMedia(p),
     hashMediaSource: (p: string) => backend!.hashMediaSource(p),
     parseSubtitles: (body: string, format: string | null) => backend!.parseSubtitles(body, format),
-    synthesizeSpeechCompute: (argsJson: string) => backend!.synthesizeSpeechCompute(argsJson),
-    analyzeShotsFloor: (mediaJson: string) => backend!.analyzeShotsFloor(mediaJson),
+    synthesizeSpeechCompute: async (argsJson: string) => {
+      try {
+        return await backend!.synthesizeSpeechCompute(argsJson)
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err)
+        console.log(`[synthesizeSpeechCompute] Cloud synthesizer unavailable (${msg}), falling back to local TTS engine`)
+        const args = JSON.parse(argsJson) as { text: string; voice?: string; speed?: number }
+        const { filePath, cached } = await synthesizeSpeechLocally(args, dataRoot.cacheDir)
+        const probedStr = await backend!.probeMedia(filePath)
+        const mediaItem = JSON.parse(probedStr)
+        const duration_us = mediaItem.metadata?.duration_us ?? 0
+        return JSON.stringify({
+          media_item: mediaItem,
+          duration_us,
+          cached,
+        })
+      }
+    },
+
     reduceShotReport: (reportJson: string, sensitivity: number, minShotUs: number, inUs: number, outUs: number) =>
       backend!.reduceShotReport(reportJson, sensitivity, minShotUs, inUs, outUs),
     shotFloorReportCached: (mediaJson: string) => backend!.shotFloorReportCached(mediaJson),
@@ -755,6 +823,17 @@ app.whenReady().then(async () => {
         backend!, tsHost, 'detect_pauses', { ...args }, undefined, undefined, peaksPathFor,
       )
       return toolResultPayload(result) as import('./state/hybrids.js').DetectPausesResult
+    },
+    readTranscript: async (media: import('./state/model.js').MediaItem, inUs?: number, outUs?: number) => {
+      const uri = inUs != null && outUs != null
+        ? `media://${media.id}/transcript/${inUs}/${outUs}`
+        : `media://${media.id}/transcript`
+      const raw = await backend!.mcpReadResource(uri, JSON.stringify({ media }))
+      const parsed = JSON.parse(raw) as { ok?: boolean; result?: { contents?: Array<{ text?: string }> }; error?: { message?: string } }
+      if (parsed.ok === false) {
+        throw new Error(parsed.error?.message ?? 'Failed to read transcript resource')
+      }
+      return parsed.result?.contents?.[0]?.text ?? null
     },
   }
 
@@ -809,9 +888,11 @@ app.whenReady().then(async () => {
     dir: app.getPath('userData'),
   })
 
+  styleEventRecorder = createStyleEventRecorder(path.join(app.getPath('userData'), 'sclip-hermes'))
   tsHost = createTsActorHost({
     send: (event, payload) => emitToRenderer(event, payload),
     mcpNotify: (payload) => mcpHostRef?.notifyChange(payload),
+    onProjectChange: (change, before) => styleEventRecorder?.observe(change, before),
     fileExists: (p) => fs.existsSync(p),
     fs: nodeFs,
     relinkFs,
@@ -875,7 +956,9 @@ app.whenReady().then(async () => {
   // `clipCompute` dispatch in `backend:invoke`: the injection is what decides
   // which engine serves a call, so two definitions of it would be two answers
   // to the same question depending on who asked.
-  const getPreferredEngine = (): string | null => models?.active('speech')?.backend ?? null
+  const getPreferredEngine = (): string | null =>
+    models?.active('speech')?.backend ??
+    (speechConfig.get().preferred_engine !== 'auto' ? speechConfig.get().preferred_engine : (speechConfig.get().local['whisper_cpp'] ? 'whisper_cpp' : null))
   const getVlm = (): {
     config: Record<string, unknown>
     preferred: string | null
@@ -914,10 +997,61 @@ app.whenReady().then(async () => {
   // Started AFTER tsHost.start() so the actor is ready before any MCP read can run
   // (the host serves state views from the actor and injects compute slices).
   const { startMcpHost } = await import('./mcp/index.js')
+  const { handleReadResource } = await import('./mcp/server.js')
+  const sourceBackend = backend
+  const jevDecide = createJevClient(() => {
+    const keys = loadAllKeys()
+    return resolveHermesProviderEnvironment({ provider: 'openrouter', model: JEV_MODEL, maxIterations: 60 }, tag => keys[tag], app.isPackaged ? {} : process.env).OPENROUTER_API_KEY
+  }, fetch, receipt => emitLogEntry({ level: 'debug', category: { kind: 'Mcp' }, source: { kind: 'System' },
+    message: 'Jev inference usage', details: { provider: 'openrouter', ...receipt } }))
+  const evaluateSourcePassages = createSourcePassageEvaluator(async id => {
+    if (!tsHost?.actor.snapshot().media_pool[id]) throw new Error('Imported source media not found.')
+    const result = await handleReadResource(sourceBackend, () => tsHost, `media://${id}/transcript`)
+    const contents = 'contents' in result ? result.contents : undefined
+    const text = Array.isArray(contents) ? contents.find(item => typeof item.text === 'string')?.text : undefined
+    if (typeof text !== 'string') throw new Error('Cached source transcript resource unavailable.')
+    return JSON.parse(text) as Transcript
+  }, jevDecide)
+  const jevEnabled = process.env.SCLIP_JEV_ENABLED === '1'
+  const { BackgroundReviewer } = await import('./sclip/reviewer/backgroundReviewer.js')
+  const { getVisionSidecar } = await import('./sclip/visionSidecar.js')
+  const { SourceObservationIndex } = await import('./sclip/sourceObservationIndex.js')
+  const sourceObservationIndex = process.platform === 'darwin' && process.arch === 'arm64'
+    ? new SourceObservationIndex({
+      cacheDir: app.getPath('userData'),
+      visionSidecar: getVisionSidecar(),
+      readTranscript: async (media) => {
+        try {
+          const result = await handleReadResource(sourceBackend, () => tsHost, `media://${media.id}/transcript`)
+          const contents = 'contents' in result ? result.contents : undefined
+          const text = Array.isArray(contents) ? contents.find(item => typeof item.text === 'string')?.text : undefined
+          return typeof text === 'string' ? JSON.parse(text) : null
+        } catch {
+          return null
+        }
+      },
+    })
+    : undefined
+  const backgroundReviewer = new BackgroundReviewer(
+    tsHost,
+    process.platform === 'darwin' && process.arch === 'arm64' ? getVisionSidecar() : undefined,
+    undefined, // debounceMs — use default 1500ms
+    undefined, // rangeRenderer — use default
+    undefined, // frameExtractor — use default
+    jevDecide, // narrative coherence guard (gracefully degraded if offline)
+  )
+
   const mcpHost = await startMcpHost(backend, {
     getTsHost: () => tsHost,
+    getActiveWindow: () => mainWindow && !mainWindow.isDestroyed() ? mainWindow : null,
     getPreferredEngine,
     getVlm,
+    getReviewerSummary: (immediate?: boolean) => (immediate ? backgroundReviewer.auditSynchronous() : backgroundReviewer.getSummary()),
+    sourceObservationIndex,
+    // Optional helper, no new profile/settings store or model fallback.
+    // Keep initial rollout opt-in until the real-provider comparison passes.
+    evaluateSourcePassages: jevEnabled ? evaluateSourcePassages : undefined,
+    compactSourceEvidence: process.env.SCLIP_COMPACT_SOURCE !== '0',
     // `detect_pauses` reads the same peaks file the timeline draws, so the
     // agent's bands and the person's are the same bands.
     peaksPathFor,
@@ -959,7 +1093,7 @@ app.whenReady().then(async () => {
   // points the user at always matches this app version. Unlike the shim, nothing
   // in the app reads it — it exists to be copied into an agent client's own
   // skills directory.
-  const { installSkills } = await import('./mcp/skillsInstall.js')
+  const { installSkills, refreshHermesWeftcutSkill } = await import('./mcp/skillsInstall.js')
   const skillsSource = {
     resourcesSkills: path.join(process.resourcesPath, 'skills'),
     devSkills: path.join(import.meta.dirname, '../skills'),
@@ -967,6 +1101,9 @@ app.whenReady().then(async () => {
     userDataDir: app.getPath('userData'),
   }
   let skills = installSkills(skillsSource)
+  if (skills.state === 'installed' && !refreshHermesWeftcutSkill(app.getPath('userData'))) {
+    console.warn('[mcp] Could not refresh the WeftCut skill in the Sclip Hermes profile')
+  }
   /// Bring `startupNotices` in line with the latest install attempt: at most one
   /// agent-skill row, and none once it is installed.
   ///
@@ -1025,6 +1162,7 @@ app.whenReady().then(async () => {
   // restart would be one the user has no reason to trust worked.
   ipcMain.handle('reinstall_skills', () => {
     skills = installSkills(skillsSource)
+    if (skills.state === 'installed') refreshHermesWeftcutSkill(app.getPath('userData'))
     syncSkillNotice()
     // The renderer pulled its notice list once, on mount. Without this it would
     // keep showing the System-status card for a fault that no longer exists.
@@ -1071,8 +1209,10 @@ app.whenReady().then(async () => {
   const { callClipComputeTool, readMediaFrameDataUrl, readMediaDescription } = await import('./mcp/server.js')
   const { AUDIO_FX_CHANNELS, CLIP_COMPUTE_CHANNELS } = await import('./state/router.js')
 
-  const { MCP_TOOL_DEFS } = await import('./state/mcp-commands.js')
-  const { MOTIF_TOOL_DEFS } = await import('./mcp/motifToolDefs.js')
+  const { registeredMcpTools } = await import('./mcp/server.js')
+  const registeredToolCount = (await registeredMcpTools(backend, {
+    evaluateSourcePassages: jevEnabled ? evaluateSourcePassages : undefined,
+  })).length
   const { SclipSessionStore } = await import('./sclip/sessionStore.js')
   const {
     configureHermesBridge,
@@ -1105,30 +1245,25 @@ app.whenReady().then(async () => {
     setKey(SCLIP_GATEWAY_KEY_TAG, generated)
     return generated
   }
+  const DEFAULT_HERMES_SOURCE = '/Users/adityasamant/SCLIP/hermes-agent-src'
+  const resolvedHermesSource = process.env.SCLIP_HERMES_SOURCE?.trim() || (fs.existsSync(DEFAULT_HERMES_SOURCE) ? DEFAULT_HERMES_SOURCE : undefined)
   hermesRuntime = new HermesRuntime({
     isPackaged: app.isPackaged,
     resourcesPath: process.resourcesPath,
     userDataPath: app.getPath('userData'),
     executableOverride: process.env.SCLIP_HERMES_EXECUTABLE,
-    sourceOverride: process.env.SCLIP_HERMES_SOURCE,
+    sourceOverride: resolvedHermesSource,
     getGatewayToken: gatewayToken,
     getMcpInfo: () => mcpHost.getInfo(),
-    getProviderEnvironment: () => resolveProviderEnvironment(),
+    getProviderEnvironment: profile => resolveProviderEnvironment(profile),
     onStatus: status => broadcastEvent(BrowserWindow.getAllWindows(), 'sclip:hermes_runtime', status),
   })
-  const resolveProviderEnvironment = () => {
+  const resolveProviderEnvironment = (profile: import('./sclip/hermesRuntime.js').HermesProfileConfig) => {
     const keys = loadAllKeys()
-    return {
-      ...(keys.openai ? { OPENAI_API_KEY: keys.openai } : {}),
-      ...(keys.anthropic ? { ANTHROPIC_API_KEY: keys.anthropic } : {}),
-      ...(keys.openrouter ? { OPENROUTER_API_KEY: keys.openrouter } : {}),
-      ...(keys.sclip_openrouter ? { OPENROUTER_API_KEY: keys.sclip_openrouter } : {}),
-      ...(keys.groq ? { GROQ_API_KEY: keys.groq } : {}),
-      ...(keys.deepseek ? { DEEPSEEK_API_KEY: keys.deepseek } : {}),
-      ...(keys.gemini ? { GEMINI_API_KEY: keys.gemini } : {}),
-      ...(keys.custom_base_url ? { OPENAI_BASE_URL: keys.custom_base_url } : {}),
-    }
+    return resolveHermesProviderEnvironment(profile, tag => keys[tag], app.isPackaged ? {} : process.env)
   }
+  const redactHermesForRenderer = (value: string) => redactHermesSecrets(value, Object.values(loadAllKeys()))
+  const sclipSessionStore = new SclipSessionStore(path.join(app.getPath('userData'), 'sclip_hermes_sessions.json'))
   configureHermesBridge({
     getGatewayUrl: () => hermesRuntime?.snapshot().gatewayUrl ?? '',
     getGatewayToken: gatewayToken,
@@ -1147,20 +1282,22 @@ app.whenReady().then(async () => {
         port: Number(new URL(info.url).port),
         // Tools and resources are distinct MCP capabilities. The native catalog
         // snapshot has 9 resources; the TS-owned Motif surface contributes one.
-        tools: MCP_TOOL_DEFS.length + MOTIF_TOOL_DEFS.length,
+        tools: registeredToolCount,
         resources: 10,
       }
     },
-    sessions: new SclipSessionStore(path.join(app.getPath('userData'), 'sclip_hermes_sessions.json')),
+    getProfileConfig: () => readHermesProfile(path.join(app.getPath('userData'), 'sclip-hermes')),
+    redactForRenderer: redactHermesForRenderer,
+    sessions: sclipSessionStore,
   })
   hermesTerminalRuntime = new HermesTerminalRuntime({
     isPackaged: app.isPackaged,
     resourcesPath: process.resourcesPath,
     userDataPath: app.getPath('userData'),
     executableOverride: process.env.SCLIP_HERMES_EXECUTABLE,
-    sourceOverride: process.env.SCLIP_HERMES_SOURCE,
+    sourceOverride: resolvedHermesSource,
     getMcpInfo: () => mcpHost.getInfo(),
-    getProviderEnvironment: () => resolveProviderEnvironment(),
+    getProviderEnvironment: profile => resolveProviderEnvironment(profile),
     assertSession: async (projectId, sessionId) => {
       if (hermesRuntime?.snapshot().state !== 'ready') throw new Error('Reconnect Hermes before opening its terminal')
       const activeProjectId = await (async () => {
@@ -1168,8 +1305,9 @@ app.whenReady().then(async () => {
         return typeof summary?.project_id === 'string' ? summary.project_id : ''
       })()
       if (!projectId || activeProjectId !== projectId) throw new Error('The Hermes terminal is limited to the active WeftCut project')
-      const sessions = await listProjectSessions(projectId)
-      if (!sessions.sessions.some(session => session.id === sessionId)) throw new Error('Hermes terminal session does not belong to this project')
+      // The local binding is authoritative; fetching every Hermes message via
+      // the gateway for each keystroke made interactive typing network-bound.
+      if (!sclipSessionStore.owns(projectId, sessionId)) throw new Error('Hermes terminal session does not belong to this project')
     },
     onOutput: event => broadcastEvent(BrowserWindow.getAllWindows(), 'sclip:terminal_output', event),
     onExit: event => broadcastEvent(BrowserWindow.getAllWindows(), 'sclip:terminal_exit', event),
@@ -1182,24 +1320,37 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.handle('backend:invoke', async (_e, { channel, args }) => {
+    if (channel === 'project_trash') {
+      return trashRecentProject((args as { path?: unknown })?.path, {
+        recents,
+        protectedPaths: [os.homedir(), app.getPath('documents'), app.getPath('desktop'), app.getPath('userData'), app.getAppPath()],
+        prepare: async target => {
+          if (wsCache && path.relative(wsCache, target) === '') {
+            await tsHost!.handleInvoke('project_save', {})
+            hermesTerminalRuntime?.stopAll()
+          }
+        },
+        trashItem: target => shell.trashItem(target),
+      })
+    }
+    if (channel === 'project_reveal') {
+      const target = (args as { path?: unknown })?.path
+      if (typeof target !== 'string' || !recents.list().some(entry => entry.path === target)) throw new Error('Choose a project from the recent list.')
+      shell.showItemInFolder(target)
+      return null
+    }
     if (channel === 'sclip_restart_hermes') return hermesRuntime?.restart()
     if (channel === 'sclip_get_hermes_config') {
       const home = path.join(app.getPath('userData'), 'sclip-hermes')
       const profile = readHermesProfile(home)
       const keys = loadAllKeys()
+      const secrets = Object.values(keys)
       return {
-        provider: profile.provider,
-        model: profile.model,
-        customBaseUrl: profile.customBaseUrl,
+        provider: redactHermesSecrets(profile.provider, secrets),
+        model: redactHermesSecrets(profile.model, secrets),
+        customBaseUrl: profile.customBaseUrl ? redactHermesSecrets(profile.customBaseUrl, secrets) : undefined,
         maxIterations: profile.maxIterations,
-        configuredKeys: {
-          anthropic: !!keys.anthropic,
-          openai: !!keys.openai,
-          openrouter: !!(keys.openrouter || keys.sclip_openrouter),
-          groq: !!keys.groq,
-          deepseek: !!keys.deepseek,
-          gemini: !!keys.gemini,
-        },
+        configuredKeys: configuredHermesKeys(tag => keys[tag]),
       }
     }
     if (channel === 'sclip_set_hermes_config') {
@@ -1210,46 +1361,70 @@ app.whenReady().then(async () => {
         maxIterations?: number
         apiKey?: string
       }
+      validateHermesProfile({ provider, model, customBaseUrl, maxIterations })
       if (apiKey !== undefined && provider) {
         if (apiKey.trim()) {
           if (!encryptionAvailable()) throw new Error('Allow macOS Keychain access before saving API keys.')
-          setKey(provider, apiKey.trim())
-          if (provider === 'openrouter') setKey('sclip_openrouter', apiKey.trim())
-        }
-      }
-      if (customBaseUrl !== undefined && provider === 'custom') {
-        if (customBaseUrl.trim()) {
-          setKey('custom_base_url', customBaseUrl.trim())
-        } else {
-          clearKey('custom_base_url')
+          const tag = credentialTags(provider)[0]
+          if (!tag) throw new Error('This provider does not accept an API key')
+          setKey(tag, apiKey.trim())
         }
       }
       const home = path.join(app.getPath('userData'), 'sclip-hermes')
       const port = hermesRuntime?.getPort() ?? 0
       writeHermesProfile(home, port, { provider, model, customBaseUrl, maxIterations })
-      void hermesRuntime?.restart()
+
+      if (hermesRuntime) {
+        await hermesRuntime.restart()
+      }
+      if (hermesTerminalRuntime) {
+        await hermesTerminalRuntime.restartAll()
+      }
+
+      broadcastEvent(BrowserWindow.getAllWindows(), 'sclip:hermes_config_changed', {
+        provider,
+        model,
+      })
+
       return { ok: true }
     }
-    if (channel === 'sclip_set_openrouter_key') {
-      if (!encryptionAvailable()) throw new Error('Allow macOS Keychain access before saving the OpenRouter key.')
-      const key = (args as { key?: unknown })?.key
-      if (typeof key !== 'string' || !key.trim()) throw new Error('An OpenRouter API key is required')
-      setKey('sclip_openrouter', key.trim())
-      return hermesRuntime?.restart()
+    if (channel === 'sclip_remove_hermes_key') {
+      const provider = (args as { provider?: unknown })?.provider
+      if (typeof provider !== 'string' || credentialTags(provider).length === 0) throw new Error('Unsupported credential provider')
+      for (const tag of credentialTags(provider)) clearKey(tag)
+      if (hermesRuntime) {
+        await hermesRuntime.restart()
+      }
+      if (hermesTerminalRuntime) {
+        await hermesTerminalRuntime.restartAll()
+      }
+      broadcastEvent(BrowserWindow.getAllWindows(), 'sclip:hermes_config_changed', { provider, credentialConfigured: false })
+      return { ok: true }
+    }
+    if (channel === 'sclip_test_hermes_connection') {
+      const home = path.join(app.getPath('userData'), 'sclip-hermes')
+      const input = (args ?? {}) as { provider?: string; model?: string; customBaseUrl?: string }
+      validateHermesProfile(input)
+      const profile = { ...readHermesProfile(home), ...input }
+      const keys = loadAllKeys()
+      return testHermesConnection(profile, tag => keys[tag], app.isPackaged ? {} : process.env)
     }
     if (channel === 'sclip_get_hermes_status') return getHermesStatus()
     if (channel === 'sclip_open_terminal') {
       const { projectId, sessionId, cols, rows } = args as { projectId: string; sessionId: string; cols?: number; rows?: number }
-      return hermesTerminalRuntime?.ensure(projectId, sessionId, cols, rows) ?? ''
+      if (!hermesTerminalRuntime) throw new Error('Hermes terminal is unavailable')
+      return hermesTerminalRuntime.ensure(projectId, sessionId, cols, rows)
     }
     if (channel === 'sclip_restart_terminal') {
       const { projectId, sessionId, cols, rows } = args as { projectId: string; sessionId: string; cols?: number; rows?: number }
-      return hermesTerminalRuntime?.restartSession(projectId, sessionId, cols, rows) ?? ''
+      if (!hermesTerminalRuntime) throw new Error('Hermes terminal is unavailable')
+      return hermesTerminalRuntime.restartSession(projectId, sessionId, cols, rows)
     }
     if (channel === 'sclip_terminal_input') {
       const { projectId, sessionId, data } = args as { projectId: string; sessionId: string; data: string }
       if (typeof data !== 'string') throw new Error('Terminal input must be text')
-      await hermesTerminalRuntime?.input(projectId, sessionId, data)
+      if (!hermesTerminalRuntime) throw new Error('Hermes terminal is unavailable')
+      await hermesTerminalRuntime.input(projectId, sessionId, data)
       return null
     }
     if (channel === 'sclip_terminal_resize') {
@@ -1619,6 +1794,27 @@ app.whenReady().then(async () => {
       const resolved = resolveSingleMediaArgs(withWaveform as { mediaId?: string }, pool)
       const json = await backend!.invoke(channel, JSON.stringify(resolved))
       return JSON.parse(json)
+    }
+    // Attribution safety check channel
+    if (channel === 'check_export_attribution_safety') {
+      if (!tsHost) return { can_export: true, has_unresolved_obligations: false, unresolved_count: 0, warnings: [] }
+      const { checkExportAttributionSafety } = await import('./media/external/attribution.js')
+      return checkExportAttributionSafety(tsHost.actor.snapshot())
+    }
+    // Hard attribution safety gate before ANY real export (audio, video sink, mux)
+    if (
+      tsHost &&
+      (channel === 'export_video_sink_start' ||
+        channel === 'mux_export' ||
+        EXPORT_PROJECT_CHANNELS.has(channel))
+    ) {
+      const { checkExportAttributionSafety } = await import('./media/external/attribution.js')
+      const safety = checkExportAttributionSafety(tsHost.actor.snapshot())
+      if (!safety.can_export) {
+        throw new Error(
+          `Export blocked by unresolved attribution obligations:\n${safety.warnings.join('\n')}`,
+        )
+      }
     }
     // Audio export: the TS actor owns state, so inject the full project here
     // and forward it — the Rust fns take it as a call argument. The mix channel
@@ -2521,8 +2717,12 @@ app.on('before-quit', (event) => {
   }
   event.preventDefault()
   quitFlushed = true
+  hermesTerminalRuntime?.stopAll()
   void Promise.all([
     tsHost.handleInvoke('project_save', {}).catch((e) => console.warn('[main] autosave quit-flush failed', e)),
+    styleEventRecorder?.flush(),
     hermesRuntime?.stop(),
+    // Reuse the existing disposal path: the local worker must not outlive quit.
+    disposeVisionRuntime(),
   ]).finally(() => app.quit())
 })

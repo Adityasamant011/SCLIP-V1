@@ -187,40 +187,40 @@
    index.html). Surface and stroke steps are intentionally centralized here;
    feature styles consume roles instead of maintaining local near-black ramps. */
 .dark {
-    --background: #0c0e12;
-    --foreground: #e5e7eb;
-    --card: #111419;
-    --card-foreground: #e5e7eb;
-    --popover: #1c2028;
-    --popover-foreground: #e5e7eb;
-    --primary: #2563eb;
-    --primary-foreground: #ffffff;
-    --secondary: #222731;
-    --secondary-foreground: #e5e7eb;
-    --muted: #222731;
-    --muted-foreground: #9ca3af;
-    --accent: #2e3541;
-    --accent-foreground: #f3f4f6;
+    --background: #080808;
+    --foreground: #f5f5f5;
+    --card: #121212;
+    --card-foreground: #f5f5f5;
+    --popover: #171717;
+    --popover-foreground: #f5f5f5;
+    --primary: #ffffff;
+    --primary-foreground: #000000;
+    --secondary: #1e1e1e;
+    --secondary-foreground: #f5f5f5;
+    --muted: #1e1e1e;
+    --muted-foreground: #a3a3a3;
+    --accent: #262626;
+    --accent-foreground: #ffffff;
     --destructive: #f87171;
-    --border: #363e4b;
+    --border: #262626;
     /* Structural hairline dividers (panel header rules, track seams) —
        deliberately softer than the control border above. */
-    --border-soft: #252a34;
-    --input: #363e4b;
-    --ring: #3b82f6;
+    --border-soft: #181818;
+    --input: #262626;
+    --ring: #ffffff;
     --chart-1: oklch(0.87 0 0);
     --chart-2: oklch(0.556 0 0);
     --chart-3: oklch(0.439 0 0);
     --chart-4: oklch(0.371 0 0);
     --chart-5: oklch(0.269 0 0);
-    --sidebar: #111419;
-    --sidebar-foreground: #e5e7eb;
-    --sidebar-primary: #2563eb;
-    --sidebar-primary-foreground: #ffffff;
-    --sidebar-accent: #222731;
-    --sidebar-accent-foreground: #f3f4f6;
-    --sidebar-border: #252a34;
-    --sidebar-ring: #3b82f6;
+    --sidebar: #0f0f0f;
+    --sidebar-foreground: #f5f5f5;
+    --sidebar-primary: #ffffff;
+    --sidebar-primary-foreground: #000000;
+    --sidebar-accent: #1e1e1e;
+    --sidebar-accent-foreground: #f5f5f5;
+    --sidebar-border: #181818;
+    --sidebar-ring: #ffffff;
 
     /* ── Polish layer (dark NLE) ───────────────────────────────────────────
        Semantic tokens added on top of the shadcn base above. Legacy CSS
@@ -231,20 +231,20 @@
        → floating overlay. Adjacent steps are deliberately visible on large
        regions without turning the editor slate-blue. The preview canvas sits
        on --background (not pure #000) so dark footage edges stay visible. */
-    --surface-sunken: #08090b;   /* thumbnail slots, code wells, inset editors */
-    --surface-raised: #181c23;   /* rows/cards lifted above a panel, hover rests */
+    --surface-sunken: #000000;   /* thumbnail slots, code wells, inset editors */
+    --surface-raised: #1c1c1c;   /* rows/cards lifted above a panel, hover rests */
 
     /* Timeline track lane — one step above --background so row seams and the
        scroll gutter read as distinct surfaces instead of one flat black. */
-    --track-lane: #14171d;
+    --track-lane: #141414;
 
-    /* Single selection / active / focus accent. --ring (#3b82f6) is the one
+    /* Single selection / active / focus accent. --ring (#ffffff) is the one
        true accent; these are its standard translucent derivations so selected
        backgrounds and outlines stop drifting between three blues. */
     --selection: var(--ring);
-    --selection-bg: rgba(59, 130, 246, 0.16);
-    --selection-border: rgba(59, 130, 246, 0.5);
-    --focus-ring: 0 0 0 2px color-mix(in srgb, var(--ring) 50%, transparent);
+    --selection-bg: rgba(255, 255, 255, 0.14);
+    --selection-border: rgba(255, 255, 255, 0.45);
+    --focus-ring: 0 0 0 2px color-mix(in srgb, var(--ring) 45%, transparent);
 
     /* Neutral state layer — translucent white overlays for hover/press on
        otherwise-transparent controls, replacing scattered rgba(255,255,255,α). */

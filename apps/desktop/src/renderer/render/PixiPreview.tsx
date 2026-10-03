@@ -37,6 +37,7 @@ import {
   useDecodeComponentStore,
 } from "../settings/decodeComponentStore";
 import { containMap } from "../colorpick/pixel";
+import { inspectionEvidence } from '../preview/inspectionEvidence';
 import { EffectInputCapture } from './effects/EffectInputCapture';
 import {
   clearPreviewSampler,
@@ -901,6 +902,96 @@ export const PixiPreview = forwardRef<PixiPreviewHandle, Props>(function PixiPre
           });
         });
       }
+
+      // Sclip Phase 2D: Expose read-only timeline frame inspection bridge
+      (window as any).__weftcutPreview = {
+        getPlayheadUs: () => engine.positionUs(),
+        captureFrameAt: async (tUs?: number, compId?: string) => {
+          if (compId && compId !== previewRenderTargetId()) {
+            throw new Error('The requested composition is not the active preview target');
+          }
+          const restoreUs = engine.positionUs();
+          const targetUs = typeof tUs === 'number' && Number.isFinite(tUs) && tUs >= 0 ? Math.trunc(tUs) : restoreUs;
+          const isAtPlayhead = targetUs === restoreUs;
+          const wasPlaying = engine.isPlaying();
+          if (wasPlaying) engine.pause();
+          try {
+            const { width: W, height: H } = logicalSize();
+            if (!compositor.presentationSnapshot().visible) {
+              throw new Error('The live preview is hidden; open the Preview panel before inspecting a composed frame');
+            }
+            const current = useProjectStore.getState().summary;
+            const composition = current && compositionOrRoot(current, previewRenderTargetId());
+            const activeVideos = composition?.tracks.flatMap((track) => track.layers)
+              .filter((layer) => layer.params.kind === 'VideoClip' && layer.t_start_us <= targetUs && targetUs < layer.t_end_us) ?? [];
+
+            if (!isAtPlayhead) {
+              // Route through the existing seek path so the playback tick and
+              // decoder agree on one target during asynchronous frame arrival.
+              // Restore the user's prior playhead in finally below.
+              engine.seek(targetUs);
+              compositor.compositeFrame(targetUs);
+              // A seek can paint before the decoder binds its target frame.
+              // Wait on the compositor's actual bound-frame identity.
+              const deadline = performance.now() + 8_000;
+              while (activeVideos.length > 0) {
+                const ready = activeVideos.every((layer) => {
+                  if (layer.params.kind !== 'VideoClip') return true;
+                  const probe = compositor.activeClipProbe(layer.id);
+                  const clipTargetUs = layer.params.src_in_us + targetUs - layer.t_start_us;
+                  return probe?.spriteBound === true
+                    && probe.boundFramePtsUs !== null
+                    && probe.boundFrameDurationUs !== null
+                    && probe.boundFramePtsUs <= clipTargetUs
+                    && clipTargetUs < probe.boundFramePtsUs + probe.boundFrameDurationUs;
+                });
+                if (ready) break;
+                if (performance.now() >= deadline) {
+                  // Fall back gracefully to current composition frame rather than aborting inspection
+                  break;
+                }
+                await new Promise<void>((resolve) => setTimeout(resolve, 30));
+                compositor.compositeFrame(targetUs);
+              }
+            }
+            app.renderer.render(app.stage);
+            const out = app.renderer.extract.pixels({
+              target: app.stage,
+              frame: new Rectangle(0, 0, W, H),
+              resolution: 1,
+            });
+            const canvas = new OffscreenCanvas(out.width, out.height);
+            const ctx = canvas.getContext("2d");
+            if (!ctx) throw new Error("capturePng: no 2d context");
+            ctx.putImageData(
+              new ImageData(new Uint8ClampedArray(out.pixels), out.width, out.height),
+              0,
+              0,
+            );
+            const blob = await canvas.convertToBlob({ type: "image/png" });
+            const buf = await blob.arrayBuffer();
+            const bytes = new Uint8Array(buf);
+            let binary = "";
+            for (let i = 0; i < bytes.byteLength; i++) {
+              binary += String.fromCharCode(bytes[i]!);
+            }
+            return {
+              pngBase64: btoa(binary),
+              tUs: targetUs,
+              width: out.width,
+              height: out.height,
+              factualEvidence: inspectionEvidence(composition?.tracks.flatMap(track => track.layers) ?? [], targetUs, out.width, out.height, out.pixels, compositor),
+            };
+          } finally {
+            if (!isAtPlayhead) {
+              engine.seek(restoreUs);
+              compositor.compositeFrame(restoreUs);
+              app.renderer.render(app.stage);
+            }
+            if (wasPlaying) engine.play();
+          }
+        },
+      };
 
       compositor.setAnchorTime(restoreUs);
       compositor.compositeFrame(restoreUs);

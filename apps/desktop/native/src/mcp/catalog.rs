@@ -192,6 +192,7 @@ tool_table! {
                           (local-first). VideoClip layers with speed != 1.0 are rejected — split off a \
                           speed-1 segment first. Errors with an actionable message when no \
                           video-understanding backend is configured.", tools::DescribeClipArgs, tools::describe_clip),
+    "get_media_context" => ("Get unified, timestamp-aligned source facts for an imported media item across all available perception modalities (transcripts, VSHOT shot cuts, visual stats, VLM scene descriptions, audio pauses, and frame reference URIs). All timestamps are source-media relative microseconds. Missing/uncomputed modalities report clean status \"not_generated\" instead of erroring.", tools::GetMediaContextArgs, tools::get_media_context),
 }
 
 pub(crate) fn resource_catalog() -> Vec<ResourceDef> {

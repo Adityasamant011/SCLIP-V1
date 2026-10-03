@@ -48,7 +48,7 @@ describe('routeMcpTool', () => {
     // import_media / apply_subtitles / synthesize_speech advertise via the Rust
     // catalog, so they are NOT in MCP_TOOLS. The two whose defs are TS-owned —
     // they must merge into the catalog from the TS side — are the only overlap.
-    const TS_OWNED = new Set(['auto_split_by_shot', 'remove_pauses'])
+    const TS_OWNED = new Set(['auto_split_by_shot', 'remove_pauses', 'apply_transcripts'])
     for (const t of HYBRID_TOOLS) {
       expect(MCP_TOOLS.has(t), t).toBe(TS_OWNED.has(t))
     }

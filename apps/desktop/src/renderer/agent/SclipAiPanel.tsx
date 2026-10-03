@@ -25,10 +25,12 @@ export function SclipAiPanel() {
   const terminalActions = useRef<{ clear: () => void } | null>(null)
 
   const handleRestart = async () => {
-    if (!projectId || terminal.kind !== 'ready') return
+    if (!projectId) return
     setIsRestarting(true)
     try {
-      await sclipRestartTerminal(projectId, terminal.sessionId)
+      if (terminal.kind === 'ready') {
+        await sclipRestartTerminal(projectId, terminal.sessionId).catch(() => {})
+      }
       setRestartNonce(n => n + 1)
     } finally {
       setIsRestarting(false)
@@ -40,16 +42,32 @@ export function SclipAiPanel() {
   }
 
   useEffect(() => {
+    const unsubscribe = window.api.on('sclip:hermes_config_changed', () => {
+      setRestartNonce(n => n + 1)
+    })
+    return () => unsubscribe()
+  }, [])
+
+  useEffect(() => {
     let active = true
     setTerminal({ kind: 'opening' })
     if (!projectId) {
-      setTerminal({ kind: 'error', message: 'Open a WeftCut project to start Hermes.' })
+      setTerminal({ kind: 'error', message: 'Open a Sclip project to start Hermes.' })
       return () => { active = false }
     }
     void (async () => {
       try {
-        const status = await sclipGetHermesStatus()
-        if (!status.online) throw new Error(status.runtimeDetail || 'Hermes is not connected.')
+        let status = await sclipGetHermesStatus()
+        // Retry polling up to 5 times (1.5 seconds total) if Hermes is starting/restarting
+        const maxAttempts = 5
+        for (let attempt = 1; !status.online && attempt < maxAttempts; attempt++) {
+          if (!active) return
+          await new Promise(resolve => setTimeout(resolve, 300))
+          status = await sclipGetHermesStatus()
+        }
+        if (!status.online) {
+          throw new Error(status.runtimeDetail || 'Hermes is not connected.')
+        }
         const sessions = await sclipListProjectSessions(projectId)
         let sessionId = sessions.activeSessionId
         if (!sessionId && sessions.sessions[0]) {
@@ -63,12 +81,12 @@ export function SclipAiPanel() {
       }
     })()
     return () => { active = false }
-  }, [projectId])
+  }, [projectId, restartNonce])
 
   return (
     <div className="sclip-dock-wrapper">
       <AgentPanelHeader
-        onRestartTerminal={terminal.kind === 'ready' && projectId ? handleRestart : undefined}
+        onRestartTerminal={projectId ? handleRestart : undefined}
         onClearTerminal={terminal.kind === 'ready' && projectId ? handleClear : undefined}
         isRestarting={isRestarting}
       />
@@ -82,7 +100,23 @@ export function SclipAiPanel() {
           />
         ) : (
           <div className="sclip-terminal-empty" role="status">
-            {terminal.kind === 'error' ? terminal.message : 'Starting Hermes terminal…'}
+            {terminal.kind === 'error' ? (
+              <div className="sclip-terminal-error-card">
+                <span className="sclip-terminal-error-text">{terminal.message}</span>
+                {projectId && (
+                  <button
+                    type="button"
+                    className="sclip-terminal-retry-btn"
+                    onClick={handleRestart}
+                    disabled={isRestarting}
+                  >
+                    {isRestarting ? 'Connecting…' : 'Retry Connection'}
+                  </button>
+                )}
+              </div>
+            ) : (
+              'Starting Hermes terminal…'
+            )}
           </div>
         )}
       </div>

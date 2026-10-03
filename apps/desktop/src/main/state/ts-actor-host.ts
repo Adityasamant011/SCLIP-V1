@@ -1,7 +1,7 @@
 // apps/desktop/src/main/state/ts-actor-host.ts
 import { createActor, type ActorHandle, type ChangeEvent } from './actor'
 import { uuidV7Gen } from './ids'
-import { blankProject, eachLayer, rootComposition } from './model'
+import { blankProject, eachLayer, rootComposition, type Project } from './model'
 import { buildProjectSummary } from './summary'
 import { routeChannel } from './router'
 import { createAutosave, type AutosaveController, type AutosaveFs } from './autosave'
@@ -31,6 +31,8 @@ export interface TsActorHostDeps {
   send: (event: string, payload: unknown) => void
   /** mcpHost.notifyChange(payload) — the mcp:change relay. */
   mcpNotify: (payload: unknown) => void
+  /** Optional local preference evidence sink; never allowed to fail a timeline edit. */
+  onProjectChange?: (change: ChangeEvent, before: Project) => void
   /** fs.existsSync, for buildProjectSummary's media-availability checks. */
   fileExists: (absPath: string) => boolean
   /** Combined OrchestratorFs & AutosaveFs adapter — node:fs in production, in-memory in tests. */
@@ -112,6 +114,8 @@ export interface TsActorHost {
   /** Hybrid deps (native-compute → TS-write). Exposed so the MCP host's hybrid
    *  branch can `runHybrid(name, args, tsHost.hybridDeps)` (server.ts). */
   hybridDeps: HybridDeps
+  /** Same hybrid compute path, with ProjectActor writes attributed to MCP. */
+  mcpHybridDeps: HybridDeps
   /** Host-level Motif tool dispatch (catalog read + authoring + install). Both
    *  the renderer `handleInvoke('motif')` and the MCP `route==='motif'` path use it. */
   motifTool: (name: string, args: Record<string, unknown>) => unknown
@@ -163,6 +167,7 @@ export function createTsActorHost(deps: TsActorHostDeps): TsActorHost {
     emitLog: (entry) => { try { deps.emitLog?.(entry) } catch (err) { console.warn('[ts-actor-host] emitLog failed (actor)', err) } },
   })
   let unsub: (() => void) | null = null
+  let observedSnapshot = actor.snapshot()
   const agent = new AgentActivityService(actor, deps.send)
 
   const autosave: AutosaveController = createAutosave({
@@ -248,11 +253,18 @@ export function createTsActorHost(deps: TsActorHostDeps): TsActorHost {
     readFile: deps.readFile,
     snapshotComposition: () => rootComposition(actor.snapshot()),
   }
+  const mcpHybridDeps: HybridDeps = {
+    ...hybridDeps,
+    actor: {
+      ...actor,
+      dispatch: (channel, args) => actor.dispatchAs({ kind: 'Agent', client: 'mcp' }, channel, args),
+    },
+  }
 
   // Only state-replacing routes cross this gate. Save As preserves the current
   // actor snapshot and writes it directly to its new destination.
   const replaceWorkspace = async <T>(replace: () => Promise<T>): Promise<T> => {
-    await autosave.forceFlush()
+    await autosave.forceFlush({ skipMissingCleanWorkspace: true })
     return replace()
   }
 
@@ -294,6 +306,10 @@ export function createTsActorHost(deps: TsActorHostDeps): TsActorHost {
   }
 
   function emitChange(e: ChangeEvent): void {
+    const before = observedSnapshot
+    observedSnapshot = e.new_snapshot
+    try { deps.onProjectChange?.(e, before) }
+    catch (err) { console.warn('[ts-actor-host] preference observer failed', err) }
     const payload = mapChangeEvent(e)
     deps.send('project:changed', payload)
     deps.mcpNotify(payload)
@@ -380,6 +396,10 @@ export function createTsActorHost(deps: TsActorHostDeps): TsActorHost {
     if (channel === 'agent_activity_snapshot') return agent.snapshot()
     if (channel === 'agent_session_get') return agent.snapshot().session
     if (channel === 'agent_unlock_history') { agent.unlock(); return null }
+    if (channel === 'check_export_attribution_safety') {
+      const { checkExportAttributionSafety } = await import('../media/external/attribution.js')
+      return checkExportAttributionSafety(actor.snapshot())
+    }
     const route = routeChannel(channel)
     switch (route.kind) {
       case 'command': {
@@ -534,6 +554,7 @@ export function createTsActorHost(deps: TsActorHostDeps): TsActorHost {
     handleInvoke,
     mcpCall,
     hybridDeps,
+    mcpHybridDeps,
     motifTool: runMotif,
     refreshMotifCatalog,
     start() {

@@ -26,7 +26,7 @@ function tsHostStub() {
     readFile: () => '',
     snapshotComposition: () => root(actor.snapshot()),
   }
-  return { actor, mcpCall: (name: string, argsJson: string) => actor.mcpCall(name, argsJson), hybridDeps, handleInvoke: async () => null, start: () => {}, stop: () => {}, beginAgentSessionSlot: () => {} } as any
+  return { actor, mcpCall: (name: string, argsJson: string) => actor.mcpCall(name, argsJson), hybridDeps, mcpHybridDeps: hybridDeps, handleInvoke: async () => null, start: () => {}, stop: () => {}, beginAgentSessionSlot: () => {} } as any
 }
 function fakeBackend(mcpCallTool: (n: string, a: string) => Promise<string>) {
   return { mcpCallTool, mcpReadResource: async () => '{"ok":true,"result":{}}', mcpCatalog: async () => '{"tools":[]}' } as any
@@ -49,6 +49,33 @@ describe('handleCallTool flip routing', () => {
     expect(out.content[0].type).toBe('text') // a uuid
     const layers = root(ts.actor.snapshot()).tracks.reduce((n: number, t: any) => n + t.layers.length, 0)
     expect(layers).toBe(1)
+  })
+  it('calculates a portrait fit without mutating, then applies through the existing transform command', async () => {
+    const ts = tsHostStub()
+    expect(ts.actor.dispatch('set_composition', { width: 1080, height: 1920 }).ok).toBe(true)
+    const item = mediaItemTemplate(MID, 'Video', 4_000_000)
+    item.metadata.video = { width: 1280, height: 720 }
+    expect(ts.actor.dispatch('add_media_item', { media: item }).ok).toBe(true)
+    const trackId = root(ts.actor.snapshot()).tracks[0].id
+    const placed = ts.actor.mcpCall('add_video_layer', JSON.stringify({
+      media_id: MID, track_id: trackId,
+      src_in_us: 0, src_out_us: 1_000_000, t_start_us: 0, t_end_us: 1_000_000,
+    }))
+    expect(placed.ok).toBe(true)
+    if (!placed.ok) return
+    const layerId = placed.result.content[0]!.text
+    const historyBefore = ts.actor.historyStatus().len
+    const reply: any = await handleCallTool(fakeBackend(async () => '{}'), () => ts, 'calculate_video_fit', { layer_id: layerId, mode: 'cover', focus_x: 0.75 })
+    expect(reply.isError).not.toBe(true)
+    const result = JSON.parse(reply.content[0].text)
+    expect(result.patch.kind).toBe('VideoClip')
+    expect(result.patch.scale_x).toBe(result.patch.scale_y)
+    expect(result.patch.x).toBeLessThan(-1000)
+    expect(ts.actor.historyStatus().len).toBe(historyBefore)
+    expect(ts.actor.mcpCall('update_layer_params', JSON.stringify({ layer_id: layerId, patch: result.patch })).ok).toBe(true)
+    const layer = root(ts.actor.snapshot()).tracks[0].layers.find((candidate) => candidate.id === layerId)!
+    expect(layer.params.kind).toBe('VideoClip')
+    if (layer.params.kind === 'VideoClip') expect(layer.params.transform.scale_x).toMatchObject({ mode: 'Static', value: result.patch.scale_x })
   })
   it('routes synthesize_speech through the hybrid (not blocked)', async () => {
     // synthesize_speech is a hybrid; it must NOT be rejected with -32600.
@@ -246,5 +273,18 @@ describe('handleCallTool flip routing', () => {
     expect(sent.language).toBeUndefined()
     expect(sent.fps).toBeUndefined()
     expect(sent.focus).toBeUndefined()
+  })
+
+  it('injects media from pool for get_media_context and forwards to backend', async () => {
+    const ts = tsHostStub()
+    const MID = '00000000-0000-0000-0000-0000000000aa'
+    ts.actor.dispatch('add_media_item', { media: mediaItemTemplate(MID, 'Video', 4_000_000) })
+    const spy = vi.fn(async (_name: string, _args: string) => '{"ok":true,"result":{"content":[{"type":"text","text":"{}"}]}}')
+    await handleCallTool(fakeBackend(spy), () => ts, 'get_media_context', { media_id: MID })
+    expect(spy).toHaveBeenCalledTimes(1)
+    const forwarded = JSON.parse(spy.mock.calls[0][1])
+    expect(forwarded.media_id).toBe(MID)
+    expect(forwarded.media).toBeDefined()
+    expect(forwarded.media.id).toBe(MID)
   })
 })

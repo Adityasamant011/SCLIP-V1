@@ -66,6 +66,21 @@ function makeDeps(actor: ActorHandle, opts: { workspaceDir?: string | null; file
       reduceShotReport: vi.fn((reportJson: string) => reportJson),
       shotDefaultOpts: vi.fn(() => ({ ...RUST_SHOT_DEFAULTS })),
       detectPauses: vi.fn(async () => ({ pauses: [], noise_floor_amp: 0, peaks_source: 'raw' as const })),
+      readTranscript: vi.fn(async () => JSON.stringify({
+        status: 'available',
+        word_timing: 'exact',
+        segments: [
+          {
+            text: 'Hello world',
+            t_start_us: 1_000_000,
+            t_end_us: 2_000_000,
+            words: [
+              { text: 'Hello', t_start_us: 1_000_000, t_end_us: 1_500_000 },
+              { text: 'world', t_start_us: 1_500_000, t_end_us: 2_000_000 },
+            ],
+          },
+        ],
+      })),
     },
     enqueueDerivatives,
     enqueueWorkspaceCopy,
@@ -1724,5 +1739,337 @@ describe('applyWorkspacePathsEvent', () => {
       media_id: MID, path_abs: 'a', path_rel: 'r', file_hash_blake3: 'h', file_size: 1, file_mtime: 2,
     })
     expect(r.ok).toBe(false)
+  })
+})
+
+describe('runHybrid: apply_transcripts', () => {
+  it('rejects when layer_id is missing', async () => {
+    const actor = freshActor()
+    const deps = makeDeps(actor)
+    await expect(runHybrid('apply_transcripts', {}, deps)).rejects.toThrow(/layer_id is required/)
+  })
+
+  it('rejects when layer is not found', async () => {
+    const actor = freshActor()
+    const deps = makeDeps(actor)
+    await expect(runHybrid('apply_transcripts', { layer_id: 'non-existent' }, deps)).rejects.toThrow(/not found/)
+  })
+
+  it('reads cached transcript when transcripts arg is omitted and preserves word timing metadata', async () => {
+    const actor = freshActor()
+    const deps = makeDeps(actor)
+    const track = root(actor.snapshot()).tracks[0].id
+
+    // Add media item and video layer
+    actor.dispatch('add_media_item', { media: probedItem() })
+    const addLayer = actor.dispatch('add_layer', {
+      track,
+      kind: 'video',
+      media: MID,
+      t_start_us: 5_000_000,
+      t_end_us: 7_000_000,
+      src_in_us: 1_000_000,
+      src_out_us: 3_000_000,
+    })
+    expect(addLayer.ok).toBe(true)
+    if (!addLayer.ok) throw new Error(JSON.stringify(addLayer.error))
+    const layerId = addLayer.value as string
+
+    const resStr = (await runHybrid('apply_transcripts', { layer_id: layerId }, deps)) as string
+    const res = JSON.parse(resStr)
+    expect(res.layer_id).toBe(layerId)
+    expect(typeof res.track_id).toBe('string')
+
+    // Verify caption track exists and contains text layers with caption_timing metadata
+    const snap = actor.snapshot()
+    const captionTrack = root(snap).tracks.find((t) => t.id === res.track_id)
+    expect(captionTrack).toBeDefined()
+    expect(captionTrack!.role).toBe('Caption')
+    expect(captionTrack!.layers.length).toBe(1)
+    expect(res.caption_layer_ids).toEqual(captionTrack!.layers.map(l => l.id))
+    expect(res.caption_count).toBe(1)
+    expect(res.timeline_range).toEqual({ start_us: 5_000_000, end_us: 6_000_000 })
+    expect(res).not.toHaveProperty('tracks')
+
+    const textLayer = captionTrack!.layers[0]
+    expect(textLayer.params.kind).toBe('Text')
+    expect((textLayer.params as any).content).toBe('Hello world')
+
+    const timing = textLayer.metadata['weftcut.caption_timing'] as any
+    expect(timing).toBeDefined()
+    expect(timing.version).toBe(1)
+    expect(timing.provenance).toBe('exact')
+    expect(timing.words.length).toBe(2)
+    expect(timing.words[0].text).toBe('Hello')
+    expect(timing.words[1].text).toBe('world')
+    expect(timing.source.id).toBe(layerId)
+    // Non-overlapping captions can reuse the same track; the second response
+    // must not include any IDs created by the first call.
+    const second = JSON.parse(await runHybrid('apply_transcripts', { layer_id: layerId,
+      transcripts: [{ word_timing: 'none', segments: [{ text: 'Later', t_start_us: 7_000_000, t_end_us: 8_000_000, words: [] }] }],
+    }, deps) as string)
+    expect(second.track_id).toBe(res.track_id)
+    expect(second.caption_count).toBe(1)
+    expect(second.caption_layer_ids).not.toContain(textLayer.id)
+    expect(second.caption_track_ids).toEqual([second.track_id])
+    const packed = JSON.parse(await runHybrid('apply_transcripts', { layer_id: layerId,
+      transcripts: [{ word_timing: 'none', segments: [
+        { text: 'A', t_start_us: 8_000_000, t_end_us: 9_000_000, words: [] },
+        { text: 'B', t_start_us: 8_000_000, t_end_us: 9_000_000, words: [] },
+      ] }],
+    }, deps) as string)
+    expect(packed.caption_count).toBe(2)
+    expect(packed.caption_track_ids).toHaveLength(2)
+    const newIds = packed.caption_track_ids.flatMap((id: string) => root(actor.snapshot()).tracks.find(t => t.id === id)!.layers)
+      .filter((l: any) => ['A', 'B'].includes(l.params.content)).map((l: any) => l.id)
+    expect(packed.caption_layer_ids).toEqual(newIds)
+  })
+
+  it('applies explicit transcripts payload when provided', async () => {
+    const actor = freshActor()
+    const deps = makeDeps(actor)
+    const track = root(actor.snapshot()).tracks[0].id
+
+    actor.dispatch('add_media_item', { media: probedItem() })
+    const addLayer = actor.dispatch('add_layer', {
+      track,
+      kind: 'video',
+      media: MID,
+      t_start_us: 0,
+      t_end_us: 2_000_000,
+      src_in_us: 0,
+      src_out_us: 2_000_000,
+    })
+    if (!addLayer.ok) throw new Error(JSON.stringify(addLayer.error))
+    const layerId = addLayer.value as string
+
+    const explicitTranscripts = [
+      {
+        word_timing: 'exact' as const,
+        segments: [
+          {
+            text: 'Custom cue',
+            t_start_us: 500_000,
+            t_end_us: 1_500_000,
+            words: [
+              { text: 'Custom', t_start_us: 500_000, t_end_us: 1_000_000 },
+              { text: 'cue', t_start_us: 1_000_000, t_end_us: 1_500_000 },
+            ],
+          },
+        ],
+      },
+    ]
+
+    const resStr = (await runHybrid('apply_transcripts', { layer_id: layerId, transcripts: explicitTranscripts }, deps)) as string
+    const res = JSON.parse(resStr)
+    expect(res.layer_id).toBe(layerId)
+
+    const snap = actor.snapshot()
+    const captionTrack = root(snap).tracks.find((t) => t.id === res.track_id)
+    expect(captionTrack).toBeDefined()
+    const textLayer = captionTrack!.layers[0]
+    expect((textLayer.params as any).content).toBe('Custom cue')
+    const timing = textLayer.metadata['weftcut.caption_timing'] as any
+    expect(timing.provenance).toBe('exact')
+    expect(timing.words[0].text).toBe('Custom')
+  })
+
+  it('rejects cleanly when transcript is not_generated', async () => {
+    const actor = freshActor()
+    const deps = makeDeps(actor)
+    const track = root(actor.snapshot()).tracks[0].id
+
+    deps.compute.readTranscript = vi.fn(async () => JSON.stringify({
+      status: 'not_generated',
+      message: 'No transcript generated yet for media.',
+    }))
+
+    actor.dispatch('add_media_item', { media: probedItem() })
+    const addLayer = actor.dispatch('add_layer', {
+      track,
+      kind: 'video',
+      media: MID,
+      t_start_us: 0,
+      t_end_us: 2_000_000,
+      src_in_us: 0,
+      src_out_us: 2_000_000,
+    })
+    if (!addLayer.ok) throw new Error(JSON.stringify(addLayer.error))
+    const layerId = addLayer.value as string
+
+    await expect(runHybrid('apply_transcripts', { layer_id: layerId }, deps)).rejects.toThrow(/No transcript generated yet/)
+  })
+
+  it('chunks long essay segments into concise 3-5 word phrases with exact word timing and bold styling', async () => {
+    const actor = freshActor()
+    const deps = makeDeps(actor)
+    const track = root(actor.snapshot()).tracks[0].id
+
+    // 15-word segment from Whisper
+    deps.compute.readTranscript = vi.fn(async () => JSON.stringify({
+      status: 'available',
+      word_timing: 'exact',
+      segments: [
+        {
+          text: 'So this is the complete beginners guide to video editing where I will teach you everything.',
+          t_start_us: 0,
+          t_end_us: 6_000_000,
+          words: [
+            { text: 'So', t_start_us: 0, t_end_us: 300_000 },
+            { text: 'this', t_start_us: 300_000, t_end_us: 600_000 },
+            { text: 'is', t_start_us: 600_000, t_end_us: 800_000 },
+            { text: 'the', t_start_us: 800_000, t_end_us: 1_000_000 },
+            { text: 'complete', t_start_us: 1_000_000, t_end_us: 1_400_000 },
+            { text: 'beginners', t_start_us: 1_500_000, t_end_us: 2_000_000 },
+            { text: 'guide', t_start_us: 2_000_000, t_end_us: 2_300_000 },
+            { text: 'to', t_start_us: 2_300_000, t_end_us: 2_500_000 },
+            { text: 'video', t_start_us: 2_500_000, t_end_us: 2_800_000 },
+            { text: 'editing', t_start_us: 2_800_000, t_end_us: 3_300_000 },
+            { text: 'where', t_start_us: 3_500_000, t_end_us: 3_800_000 },
+            { text: 'I', t_start_us: 3_800_000, t_end_us: 4_000_000 },
+            { text: 'will', t_start_us: 4_000_000, t_end_us: 4_300_000 },
+            { text: 'teach', t_start_us: 4_300_000, t_end_us: 4_800_000 },
+            { text: 'you', t_start_us: 4_800_000, t_end_us: 5_200_000 },
+            { text: 'everything.', t_start_us: 5_200_000, t_end_us: 6_000_000 },
+          ],
+        },
+      ],
+    }))
+
+    const longMid = 'media-long-1'
+    actor.dispatch('add_media_item', { media: mediaItemTemplate(longMid, 'Video', 10_000_000) })
+    const addLayer = actor.dispatch('add_layer', {
+      track,
+      kind: 'video',
+      media: longMid,
+      t_start_us: 0,
+      t_end_us: 6_000_000,
+      src_in_us: 0,
+      src_out_us: 6_000_000,
+    })
+    expect(addLayer.ok).toBe(true)
+    if (!addLayer.ok) throw new Error(JSON.stringify(addLayer.error))
+    const layerId = addLayer.value as string
+
+    const resStr = (await runHybrid('apply_transcripts', { layer_id: layerId }, deps)) as string
+    const res = JSON.parse(resStr)
+
+    // Verify chunked into concise phrases (each 3 to 5 words)
+    expect(res.caption_count).toBeGreaterThanOrEqual(3)
+    expect(res.caption_count).toBeLessThanOrEqual(5)
+
+    const snap = actor.snapshot()
+    const captionTrack = root(snap).tracks.find((t) => t.id === res.track_id)!
+    for (const cueLayer of captionTrack.layers) {
+      const words = (cueLayer.params as any).content.split(/\s+/)
+      expect(words.length).toBeGreaterThanOrEqual(1)
+      expect(words.length).toBeLessThanOrEqual(5)
+      // Bold typography for short-form clarity
+      expect((cueLayer.params as any).font.weight).toBe(700)
+    }
+  })
+
+  it('drops ghost segments and keeps consecutive clips on a single caption track without overlap', async () => {
+    const actor = freshActor()
+    const deps = makeDeps(actor)
+    const track = root(actor.snapshot()).tracks[0].id
+
+    const longMid2 = 'media-long-2'
+    actor.dispatch('add_media_item', { media: mediaItemTemplate(longMid2, 'Video', 200_000_000) })
+
+    // Clip 0: [0s - 6s], source [150s - 156s]
+    const add0 = actor.dispatch('add_layer', {
+      track,
+      kind: 'video',
+      media: longMid2,
+      t_start_us: 0,
+      t_end_us: 6_000_000,
+      src_in_us: 150_000_000,
+      src_out_us: 156_000_000,
+    })
+    expect(add0.ok).toBe(true)
+    if (!add0.ok) throw new Error(JSON.stringify(add0.error))
+    const layer0 = add0.value as string
+
+    // Clip 1: [6s - 10s], source [180s - 184s]
+    const add1 = actor.dispatch('add_layer', {
+      track,
+      kind: 'video',
+      media: longMid2,
+      t_start_us: 6_000_000,
+      t_end_us: 10_000_000,
+      src_in_us: 180_000_000,
+      src_out_us: 184_000_000,
+    })
+    expect(add1.ok).toBe(true)
+    if (!add1.ok) throw new Error(JSON.stringify(add1.error))
+    const layer1 = add1.value as string
+
+    // Transcript for Clip 0 contains a valid segment AND a ghost segment starting at 155.9s
+    // whose words all start after 156.0s (past the cut point)
+    deps.compute.readTranscript = vi.fn(async (_m, inUs) => {
+      if (inUs === 150_000_000) {
+        return JSON.stringify({
+          status: 'available',
+          word_timing: 'exact',
+          segments: [
+            {
+              text: 'First clip speech',
+              t_start_us: 150_000_000,
+              t_end_us: 155_000_000,
+              words: [
+                { text: 'First', t_start_us: 150_500_000, t_end_us: 151_500_000 },
+                { text: 'clip', t_start_us: 151_500_000, t_end_us: 152_500_000 },
+                { text: 'speech', t_start_us: 152_500_000, t_end_us: 154_000_000 },
+              ],
+            },
+            {
+              // Ghost segment! Starts at 155.9s (< 156s), but words start at 156.2s
+              text: 'Ghost speech leaking past cut',
+              t_start_us: 155_900_000,
+              t_end_us: 160_000_000,
+              words: [
+                { text: 'Ghost', t_start_us: 156_200_000, t_end_us: 157_000_000 },
+                { text: 'speech', t_start_us: 157_000_000, t_end_us: 158_000_000 },
+              ],
+            },
+          ],
+        })
+      } else {
+        return JSON.stringify({
+          status: 'available',
+          word_timing: 'exact',
+          segments: [
+            {
+              text: 'Second clip speech',
+              t_start_us: 180_000_000,
+              t_end_us: 183_000_000,
+              words: [
+                { text: 'Second', t_start_us: 180_500_000, t_end_us: 181_500_000 },
+                { text: 'clip', t_start_us: 181_500_000, t_end_us: 182_500_000 },
+                { text: 'speech', t_start_us: 182_500_000, t_end_us: 183_000_000 },
+              ],
+            },
+          ],
+        })
+      }
+    })
+
+    const res0 = JSON.parse((await runHybrid('apply_transcripts', { layer_id: layer0 }, deps)) as string)
+    const res1 = JSON.parse((await runHybrid('apply_transcripts', { layer_id: layer1 }, deps)) as string)
+
+    // Clip 1 must land on the SAME caption track because Clip 0 did not leak!
+    expect(res1.track_id).toBe(res0.track_id)
+
+    const snap = actor.snapshot()
+    const captionTracks = root(snap).tracks.filter((t) => t.role === 'Caption')
+    // Exactly ONE caption track total
+    expect(captionTracks.length).toBe(1)
+
+    // Verify no captions overlap
+    const layers = captionTracks[0].layers
+    expect(layers.length).toBe(2)
+    expect(layers[0].t_end_us).toBeLessThanOrEqual(6_000_000)
+    expect(layers[1].t_start_us).toBeGreaterThanOrEqual(6_000_000)
   })
 })

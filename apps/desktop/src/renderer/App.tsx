@@ -72,7 +72,7 @@ import {
   type SettingsCategory,
 } from "./settings/SettingsPanel";
 import { MotifPicker } from "./motifs/MotifPicker";
-import { tenBitExportCapable } from "./render/exportSettings";
+import { DEFAULT_EXPORT_SETTINGS, tenBitExportCapable } from "./render/exportSettings";
 import { AppDialog } from "./components/AppDialog";
 import { Button } from "@/components/ui/button";
 import { MotifStaleDialog } from "./panels/MotifStaleDialog";
@@ -541,6 +541,26 @@ export function App({ onCloseProject }: AppProps) {
     openRenderPlayPopup,
     revealExportedFile,
   } = useExportFlow({ previewRef, proxyStateRef, decodeProbeMemo });
+
+  // MCP's composed QA/export adapter calls the exact same export callback as
+  // the UI. It may write only the destination chosen by the authenticated main
+  // process; this renderer bridge adds no compositor or export implementation.
+  useEffect(() => {
+    const target = window as typeof window & { __sclipExportRange?: (request: {
+      projectId: string; outputPath: string; startUs: number; endUs: number;
+      resolutionHeight?: number; fps?: number;
+    }) => Promise<void> };
+    target.__sclipExportRange = async (request) => {
+      const summary = await projectSummary();
+      if (!summary || summary.project_id !== request.projectId) throw new Error('Project changed before export');
+      if (exportState && exportState.kind !== 'complete' && exportState.kind !== 'error') throw new Error('An export is already running');
+      await runExportWithSettings({ ...DEFAULT_EXPORT_SETTINGS,
+        resolutionHeight: request.resolutionHeight ?? null,
+        fps: request.fps ?? null,
+      }, request.outputPath, { startUs: request.startUs, endUs: request.endUs });
+    };
+    return () => { delete target.__sclipExportRange; };
+  }, [runExportWithSettings, exportState]);
 
   // ---- Menu-bar action handlers ----
 

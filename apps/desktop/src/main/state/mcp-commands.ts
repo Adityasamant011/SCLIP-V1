@@ -10,6 +10,7 @@ import type { EffectPatch } from './mutations/effects'
 import type { MarkerPatch } from './mutations/markers'
 import { sortKeys } from './canonical'
 import { EASING_PRESETS, ELASTIC_DEFAULT_AMPLITUDE, ELASTIC_DEFAULT_PERIOD, cloneInterp, presetIdForSegment } from '../../shared/easing'
+import { ROUGH_CUT_PLAN_INPUT_SCHEMA } from '../sclip/roughCutPlan'
 
 export type McpErrorCode = 'invalid_params' | 'invalid_request' | 'not_found' | 'internal'
 export type McpToolErrorJson = { code: McpErrorCode; message: string; data?: unknown }
@@ -20,6 +21,11 @@ export type McpCallResult = { ok: true; result: ToolResultJson } | { ok: false; 
 export class McpArgError extends Error {
   constructor(public readonly mcpMessage: string, public readonly field?: string) { super(mcpMessage); this.name = 'McpArgError' }
   toJson(): McpToolErrorJson { return { code: 'invalid_params', message: this.mcpMessage } }
+}
+
+function parseTrimEdge(value: unknown): 'in' | 'out' {
+  if (value !== 'in' && value !== 'out') throw new McpArgError("edge must be 'in' or 'out'", 'edge')
+  return value
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -714,7 +720,7 @@ export interface McpToolDef {
 // send nested payloads as JSON-encoded strings no matter how it is prompted —
 // the server then rejects or, worse, silently ignores them.
 // mcp.catalog-bijection.test.ts gates this catalog-wide.
-const RGBA_SCHEMA = { type: 'object', properties: { r: { type: 'integer' }, g: { type: 'integer' }, b: { type: 'integer' }, a: { type: 'integer' } }, required: ['r', 'g', 'b', 'a'] }
+const RGBA_SCHEMA = { type: 'object', description: 'RGBA channels are integers 0..255 (opaque alpha is 255, not 1).', properties: { r: { type: 'integer', minimum: 0, maximum: 255 }, g: { type: 'integer', minimum: 0, maximum: 255 }, b: { type: 'integer', minimum: 0, maximum: 255 }, a: { type: 'integer', minimum: 0, maximum: 255 } }, required: ['r', 'g', 'b', 'a'] }
 // The creation-op scope (ADR 0052): only tools that CREATE take it. Every
 // layer-addressed tool derives its composition from the layer id — an agent
 // editing inside a Group never names the Group. Two spellings of the same
@@ -910,7 +916,7 @@ export const MCP_TOOL_DEFS: ReadonlyArray<McpToolDef> = [
     } }, required: ['layer_id', 'patch'] },
     parseArgs: (a) => ({ op: 'update_layer', args: { layer: parseUuid(a.layer_id, 'layer_id'), patch: parseObj(a.patch, 'patch') } }) },
   { name: 'update_layer_params', exec: 'table',
-    description: "Path mode rejects independent x/y writes; use translate_path to move the route or set_position to explicitly replace the position. Update a layer's kind-specific params. The patch is tagged with `kind` ('Text' | 'VideoClip' | 'ImageOverlay' | 'Color' | 'Audio') and must match the layer's kind. Audio fields take real effect in both preview and export: `gain_db` (dB; this patch sets a STATIC value, replacing any existing keyframes on the track), `pan` (-1..1 equal-power, same static-replace semantics), `fade_in_us`/`fade_out_us` (linear edge fades), `mute`, and `role` (one of dialogue/music/sfx/voiceover) to reassign the clip's mixing role. A Text layer is laid out by its BOX, not by scale: `box_w`/`box_h` are the layout box in composition pixels, local (before `scale`), and which of the two are set IS the resize mode — (null, null) auto width (never wraps), (set, null) auto height (wraps), (set, set) fixed (wraps, and shrinks the rendered glyphs to fit). Send an explicit `null` to put an axis back to auto; omit the field to leave it alone. A `box_h` with no `box_w` — neither stored nor in the same patch — is REFUSED rather than measured by guess, so pass both for fixed. `align` places the text block horizontally inside the box and `valign` (Top | Middle | Bottom) vertically; `line_height` (0 = the font's own metrics) and `letter_spacing` are pixels. Text deliberately has no scale fields here: a bigger title is a bigger box, and the `font_size_px` you set is what reaches the frame at any box size. On a scale-linked layer (`scale_linked` in the layer view), a patch leaving scale_x ≠ scale_y auto-clears the link in the same commit; patch both axes to the same value to keep it.",
+    description: "Path mode rejects independent x/y writes; use translate_path to move the route or set_position to explicitly replace the position. Update a layer's kind-specific params. The patch is tagged with `kind` ('Text' | 'VideoClip' | 'ImageOverlay' | 'Color' | 'Audio') and must match the layer's kind. Changing `src_out_us` changes ONLY the named layer's source window; it does NOT extend that layer's timeline end or linked audio. Use timeline tools when timeline time must change. Audio fields take real effect in both preview and export: `gain_db` (dB; this patch sets a STATIC value, replacing any existing keyframes on the track), `pan` (-1..1 equal-power, same static-replace semantics), `fade_in_us`/`fade_out_us` (linear edge fades), `mute`, and `role` (one of dialogue/music/sfx/voiceover) to reassign the clip's mixing role. A Text layer is laid out by its BOX, not by scale: `box_w`/`box_h` are the layout box in composition pixels, local (before `scale`), and which of the two are set IS the resize mode — (null, null) auto width (never wraps), (set, null) auto height (wraps), (set, set) fixed (wraps, and shrinks the rendered glyphs to fit). Send an explicit `null` to put an axis back to auto; omit the field to leave it alone. A `box_h` with no `box_w` — neither stored nor in the same patch — is REFUSED rather than measured by guess, so pass both for fixed. `align` places the text block horizontally inside the box and `valign` (Top | Middle | Bottom) vertically; `line_height` (0 = the font's own metrics) and `letter_spacing` are pixels. Text deliberately has no scale fields here: a bigger title is a bigger box, and the `font_size_px` you set is what reaches the frame at any box size. On a scale-linked layer (`scale_linked` in the layer view), a patch leaving scale_x ≠ scale_y auto-clears the link in the same commit; patch both axes to the same value to keep it.",
     inputSchema: { type: 'object', properties: { layer_id: { type: 'string' }, patch: {
       type: 'object',
       description: "Kind-tagged params patch. Must include `kind` matching the layer's kind ('Text' | 'VideoClip' | 'ImageOverlay' | 'Color' | 'Audio'). Only fields you include are applied.",
@@ -967,7 +973,7 @@ export const MCP_TOOL_DEFS: ReadonlyArray<McpToolDef> = [
     inputSchema: { type: 'object', properties: { layer_id: { type: 'string' }, linked: { type: 'boolean' } }, required: ['layer_id', 'linked'] },
     parseArgs: (a) => ({ op: 'set_scale_linked', args: { layer: parseUuid(a.layer_id, 'layer_id'), linked: parseBool(a.linked, 'linked') } }) },
   { name: 'move_layer', exec: 'table',
-    description: 'Move a layer to a different track and/or start time. The end time shifts by the same delta. Cross-track moves are validated against the destination\'s existing layers — overlap rejects with structured options.',
+    description: 'Move one layer within its composition to `new_track_id` and `new_t_start_us`. Its end shifts by the same delta; its source in/out stay unchanged. By default (`escape_link=false`), all linked siblings, including paired audio, shift by that delta on their own tracks, but only the named layer changes track. `escape_link=true` moves only the named layer. This does not ripple downstream layers: moving away leaves a gap, and a destination overlap is refused with structured options. Times snap to each layer\'s grid; a linked move toward time zero is clamped as a set.',
     inputSchema: { type: 'object', properties: { layer_id: { type: 'string' }, new_t_start_us: { type: 'integer' }, new_track_id: { type: 'string' }, escape_link: { type: ['boolean', 'null'] } }, required: ['layer_id', 'new_t_start_us', 'new_track_id'] },
     parseArgs: (a) => ({ op: 'move_layer', args: { layer: parseUuid(a.layer_id, 'layer_id'), to_track: parseUuid(a.new_track_id, 'new_track_id'), t_start_us: parseNum(a.new_t_start_us, 'new_t_start_us'), escape_link: parseBoolOpt(a.escape_link, 'escape_link', false) } }) },
   { name: 'restack_layer', exec: 'table',
@@ -979,11 +985,11 @@ export const MCP_TOOL_DEFS: ReadonlyArray<McpToolDef> = [
     }, required: ['anchor_layer_id', 'layer_id', 'position'] },
     parseArgs: (a) => ({ op: 'restack_layer', args: { layer: parseUuid(a.layer_id, 'layer_id'), anchor: parseUuid(a.anchor_layer_id, 'anchor_layer_id'), position: parseRestackPosition(a.position) } }) },
   { name: 'trim_layer', exec: 'table',
-    description: "Trim one edge of a layer's timeline range. `edge` is 'in' (t_start) or 'out' (t_end). For media-bearing layers the corresponding src bound (src_in_us or src_out_us) moves by the same delta; over-trimming past the source bound is clamped. When the layer is in a link and `escape_link` is false (default), every link member whose corresponding edge sits at the same t as the trimmed edge is moved by the same delta, clamped to the tightest aligned member's bounds. Pass `escape_link=true` to trim only this layer. See `docs/features.md#links`.",
-    inputSchema: { type: 'object', properties: { layer_id: { type: 'string' }, edge: { type: 'string' }, new_t_us: { type: 'integer' }, escape_link: { type: ['boolean', 'null'] } }, required: ['edge', 'layer_id', 'new_t_us'] },
-    parseArgs: (a) => ({ op: 'trim_layer', args: { layer: parseUuid(a.layer_id, 'layer_id'), edge: parseStr(a.edge, 'edge'), new_t_us: parseNum(a.new_t_us, 'new_t_us'), escape_link: parseBoolOpt(a.escape_link, 'escape_link', false) } }) },
+    description: "Trim one edge of a layer's timeline range: `in` changes t_start_us, `out` changes t_end_us; the opposite edge stays fixed. For media-bearing layers the matching source bound (src_in_us or src_out_us) changes by the same delta. An outward trim can reveal source content beyond the clip's CURRENT src_out_us, up to the actual media pool's probed duration (and other timeline/source bounds); the current clip out-point is not the media limit. This does not ripple: an inward trim leaves empty timeline space, and an outward trim cannot displace another layer. By default (`escape_link=false`), linked A/V members whose matching edges are aligned trim together, clamped to the tightest aligned member's bounds; `escape_link=true` trims only the named layer. See `docs/features.md#links`.",
+    inputSchema: { type: 'object', properties: { layer_id: { type: 'string' }, edge: { type: 'string', enum: ['in', 'out'] }, new_t_us: { type: 'integer' }, escape_link: { type: ['boolean', 'null'] } }, required: ['edge', 'layer_id', 'new_t_us'] },
+    parseArgs: (a) => ({ op: 'trim_layer', args: { layer: parseUuid(a.layer_id, 'layer_id'), edge: parseTrimEdge(a.edge), new_t_us: parseNum(a.new_t_us, 'new_t_us'), escape_link: parseBoolOpt(a.escape_link, 'escape_link', false) } }) },
   { name: 'delete_layer', exec: 'table',
-    description: 'Delete a layer. The span it held is left EMPTY and nothing downstream moves; `ripple_delete_layers` is the one that closes it. If this empties a non-reserved, unlocked track, the track is deleted in the same history entry (one undo restores both). A/B-roll and other role-stamped tracks stay.',
+    description: 'Delete only the named layer. Its span is left EMPTY and nothing downstream moves; `ripple_delete_layers` closes vacated spans instead. The deleted layer is removed from its link (which dissolves below two members); linked siblings remain. If this empties a non-reserved, unlocked track, the track is deleted in the same history entry (one undo restores both). A/B-roll and other role-stamped tracks stay.',
     inputSchema: { type: 'object', properties: { layer_id: { type: 'string' } }, required: ['layer_id'] },
     parseArgs: (a) => ({ op: 'delete_layer', args: { layer: parseUuid(a.layer_id, 'layer_id') } }) },
   { name: 'ripple_delete_layers', exec: 'table',
@@ -1220,6 +1226,33 @@ export const MCP_TOOL_DEFS: ReadonlyArray<McpToolDef> = [
       width: parseNumOpt(a.width, 'width'), height: parseNumOpt(a.height, 'height'),
       t_start_us: parseNum(a.t_start_us, 't_start_us'), t_end_us: parseNum(a.t_end_us, 't_end_us'),
       composition_id: parseCompositionIdOpt(a.composition_id) }) },
+  { name: 'add_media_layer', exec: 'dedicated',
+    description: 'Place an imported Audio, Video, or Image item using the editor\'s existing kind-matched media placement command. Standalone Audio becomes an editable Audio layer (use update_layer_params for music role, gain and fades). Places the full probed source duration; use trim_layer afterward for a shorter section. Video with audio follows the project\'s normal auto-pair setting. Returns the new layer id. Recorded through ProjectActor for undo, save and reload.',
+    inputSchema: { type: 'object', properties: { media_id: { type: 'string' }, track_id: { type: 'string' }, t_start_us: { type: 'integer' } }, required: ['media_id', 'track_id', 't_start_us'] },
+    parseDedicated: (a) => ({ media_id: parseUuid(a.media_id, 'media_id'), track_id: parseUuid(a.track_id, 'track_id'), t_start_us: parseNum(a.t_start_us, 't_start_us') }) },
+  { name: 'add_text_layer', exec: 'dedicated',
+    description: 'Create a native, editable Text layer through the same ProjectActor command as the Insert Text UI. Timing is in timeline microseconds. Omit track_id to use a free overlay lane or create one. x/y name the text anchor point in composition pixels and must be supplied together. Optional styling uses the existing Text renderer; box_w enables wrapping, outline_width 0 removes the outline, and shadow is {color,offset_x,offset_y,blur}. Returns the layer id; undo/save/reload behave like UI-created text.',
+    inputSchema: { type: 'object', properties: {
+      content: { type: 'string' }, t_start_us: { type: 'integer' }, duration_us: { type: 'integer' }, track_id: { type: 'string' }, composition_id: TRACK_COMPOSITION_ID_SCHEMA,
+      x: { type: 'number' }, y: { type: 'number' }, font_family: { type: 'string' }, font_size_px: { type: 'number' }, font_weight: { type: 'number' },
+      fill_color: RGBA_SCHEMA, outline_width: { type: 'number' }, outline_color: RGBA_SCHEMA,
+      shadow: { type: 'object', properties: { color: RGBA_SCHEMA, offset_x: { type: 'number' }, offset_y: { type: 'number' }, blur: { type: 'number' } }, required: ['color'] },
+      align: { type: 'string', enum: ['Left', 'Center', 'Right'] }, box_w: { type: 'number' },
+    }, required: ['content', 't_start_us', 'duration_us'] },
+    parseDedicated: (a) => ({
+      content: parseStr(a.content, 'content'), t_start_us: parseNum(a.t_start_us, 't_start_us'), duration_us: parseNum(a.duration_us, 'duration_us'),
+      track_id: a.track_id === undefined ? undefined : parseUuid(a.track_id, 'track_id'), composition_id: parseCompositionIdOpt(a.composition_id),
+      x: parseNumOpt(a.x, 'x'), y: parseNumOpt(a.y, 'y'), font_family: parseStrOpt(a.font_family, 'font_family'),
+      font_size_px: parseNumOpt(a.font_size_px, 'font_size_px'), font_weight: parseNumOpt(a.font_weight, 'font_weight'),
+      fill_color: a.fill_color === undefined ? undefined : parseRgba(a.fill_color, 'fill_color'),
+      outline_width: parseNumOpt(a.outline_width, 'outline_width'), outline_color: a.outline_color === undefined ? undefined : parseRgba(a.outline_color, 'outline_color'),
+      shadow: a.shadow === undefined ? undefined : parseObj(a.shadow, 'shadow'), align: parseStrOpt(a.align, 'align'), box_w: parseNumOpt(a.box_w, 'box_w'),
+    }) },
+  { name: 'restyle_captions', exec: 'dedicated',
+    description: 'Restyle every native Text cue on every Caption-role track in one ProjectActor edit. Only supplied fields change. Reuses the editor\'s existing restyle_captions command; undo restores the previous caption style.',
+    inputSchema: { type: 'object', properties: { font_family: { type: 'string' }, font_size_px: { type: 'number' }, color: RGBA_SCHEMA, outline_width: { type: 'number' } }, required: [] },
+    parseDedicated: (a) => ({ font_family: parseStrOpt(a.font_family, 'font_family'), font_size_px: parseNumOpt(a.font_size_px, 'font_size_px'),
+      color: a.color === undefined ? undefined : parseRgba(a.color, 'color'), outline_width: parseNumOpt(a.outline_width, 'outline_width') }) },
   { name: 'add_video_layer', exec: 'dedicated',
     description: "Add a visual media layer from an imported media item onto a track. For Video media, `src_in_us`/`src_out_us` are the in/out points within the source media; `t_start_us`/`t_end_us` are where the clip lives on the timeline. For Image media, this creates an ImageOverlay over the timeline range, and `src_in_us`/`src_out_us` are accepted for schema compatibility but ignored. Video source and timeline ranges should be the same length unless `speed` is later changed. When a Video source has an audio stream and the project's `auto_pair_audio_on_import` setting is on (default), this also creates a paired dialogue Audio layer on the SAME track's audio lane (every track holds one visual lane plus one audio lane) at the same time bounds and links the two so they move/trim/split together. The whole call is atomic: video, paired audio, and link commit together or not at all — if the audio lane is occupied the call rejects naming the blocking layer, and nothing lands on the timeline. Returns either the visual layer id (no pairing) or `{ video_layer_id, audio_layer_id, link_id }` when a pair was created.",
     inputSchema: { type: 'object', properties: { media_id: { type: 'string' }, src_in_us: { type: 'integer' }, src_out_us: { type: 'integer' }, t_end_us: { type: 'integer' }, t_start_us: { type: 'integer' }, track_id: { type: 'string' }, composition_id: TRACK_COMPOSITION_ID_SCHEMA }, required: ['media_id', 'src_in_us', 'src_out_us', 't_end_us', 't_start_us', 'track_id'] },
@@ -1228,7 +1261,7 @@ export const MCP_TOOL_DEFS: ReadonlyArray<McpToolDef> = [
       t_start_us: parseNum(a.t_start_us, 't_start_us'), t_end_us: parseNum(a.t_end_us, 't_end_us'),
       composition_id: parseCompositionIdOpt(a.composition_id) }) },
   { name: 'split_layer', exec: 'dedicated',
-    description: 'Split a layer into two halves at the given timeline microsecond. Returns {left, right} layer ids. `at_t_us` must be strictly between the layer\'s t_start_us and t_end_us. For media-bearing layers (VideoClip, Audio) the source offsets are adjusted at speed=1 — variable speed support is deferred.',
+    description: 'Split a layer at `at_t_us`, strictly inside its timeline range. The left half keeps the original id; a new right id is returned. Source windows divide at the same offset (speed=1); no timeline space is removed or rippled. By default (`escape_link=false`), linked siblings spanning the cut are also split at that time on their own grids; `escape_link=true` splits only the named layer. Both resulting halves of a linked layer remain in its link. Returns {left, right} for the named layer.',
     inputSchema: { type: 'object', properties: { at_t_us: { type: 'integer' }, escape_link: { type: ['boolean', 'null'] }, layer_id: { type: 'string' } }, required: ['at_t_us', 'layer_id'] },
     parseDedicated: (a) => ({ layer: parseUuid(a.layer_id, 'layer_id'),
       at_t_us: parseNum(a.at_t_us, 'at_t_us'), escape_link: a.escape_link }) },
@@ -1362,7 +1395,7 @@ export const MCP_TOOL_DEFS: ReadonlyArray<McpToolDef> = [
       composition_id: parseCompositionIdOpt(a.composition_id),
     }) },
   { name: 'checkpoint', exec: 'dedicated',
-    description: 'Create an explicit named checkpoint of the current state. Checkpoints survive new commits (they don\'t get truncated like the redo tail) and persist in the .vproj save file. Returns the new checkpoint id. The human\'s agent-mode record panel renders each created checkpoint as a pin-style row with a Restore button — use this at logical batch boundaries.',
+    description: 'Create an explicit named checkpoint in the current runtime history. It survives new commits (unlike the redo tail), but reopening a workspace resets undo/checkpoint history; project.json does not persist it. Returns the checkpoint id. The agent-mode record panel shows a pin-style row with a Restore button.',
     inputSchema: { type: 'object', properties: { label: { type: 'string' } }, required: ['label'] },
     parseDedicated: (a) => ({ label: parseStr(a.label, 'label') }) },
   { name: 'list_checkpoints', exec: 'dedicated',
@@ -1374,8 +1407,8 @@ export const MCP_TOOL_DEFS: ReadonlyArray<McpToolDef> = [
     inputSchema: { type: 'object', properties: { checkpoint_id: { type: 'string' } }, required: ['checkpoint_id'] },
     parseDedicated: (a) => ({ checkpoint_id: parseUuid(a.checkpoint_id, 'checkpoint_id') }) },
   { name: 'end_agent_session', exec: 'dedicated',
-    description: 'End your work session and release its history lock. Keeps the current view and activity records. Does not cancel running tasks, disconnect MCP, or prohibit later calls. Only the owning connection may end a session.',
-    inputSchema: { type: 'object', properties: {} }, parseDedicated: (_a) => ({}) },
+    description: 'End your work session and release its history lock. Refuses if the Background AI Reviewer has unresolved critical issues unless force=true. Keeps the current view and activity records.',
+    inputSchema: { type: 'object', properties: { force: { type: ['boolean', 'null'], description: 'Bypass background reviewer critical issues.' } } }, parseDedicated: (_a) => ({}) },
   { name: 'begin_agent_session', exec: 'dedicated',
     description: "Begin a work session and show the lightweight agent view. Creates one Pre-agent checkpoint. Repeating on the same connection returns the existing session without changing the view; another connection cannot replace it. Finish with end_agent_session. The user may switch views without ending the session.",
     inputSchema: { type: 'object', properties: { reason: { type: 'string' } }, required: ['reason'] },
@@ -1400,6 +1433,146 @@ export const MCP_TOOL_DEFS: ReadonlyArray<McpToolDef> = [
       pad_us: { type: ['integer', 'null'], format: 'int64', description: 'How much of each pause to KEEP on EACH side, in microseconds. Default 100000 (0.1 s), which is what stops a cut from clipping soft word onsets; pass 0 to erase each pause whole. Must be >= 0, and 2 x pad_us must be strictly less than min_pause_us or nothing would be cut.' },
     }, required: ['layer_id'] },
     parseDedicated: (a) => ({ layer: parseUuid(a.layer_id, 'layer_id'), threshold_amp: parseNumOpt(a.threshold_amp, 'threshold_amp'), min_pause_us: parseNumOpt(a.min_pause_us, 'min_pause_us'), pad_us: parseNumOpt(a.pad_us, 'pad_us') }) },
+  { name: 'apply_transcripts', exec: 'dedicated',
+    description: "Apply captions with word timing/provenance/source signatures. If transcripts is omitted, reads the target layer's cached source transcript. Returns track_id and source layer_id plus caption_layer_ids, caption_track_ids, caption_count and timeline_range for NEW captions only (including multi-track packing). Use these IDs for styling instead of reading all project tracks. Existing detailed source/state resources remain available.",
+    inputSchema: { type: 'object', properties: {
+      layer_id: { type: 'string', description: 'Target Audio or VideoClip layer id whose transcribed speech will be captioned.' },
+      composition_id: { type: ['string', 'null'], description: "Target composition id (defaults to the layer's composition or the root)." },
+      transcripts: { type: ['array', 'null'], description: "Optional explicit transcript payload array. If omitted, reads the cached transcript for `layer_id`." },
+    }, required: ['layer_id'] },
+    parseDedicated: (a) => ({
+      layer: parseUuid(a.layer_id, 'layer_id'),
+      composition_id: parseCompositionIdOpt(a.composition_id),
+      transcripts: a.transcripts,
+    }) },
+  { name: 'validate_rough_cut_plan', exec: 'dedicated',
+    description: "Deterministically validate an editorial RoughCutPlan against physical video boundaries, valid timestamp ranges, duration mathematics, and schema invariants without mutating project state.",
+    inputSchema: { type: 'object', properties: {
+      plan: ROUGH_CUT_PLAN_INPUT_SCHEMA,
+    }, required: ['plan'] },
+    parseDedicated: (a) => {
+      if (a.plan == null) throw new Error('plan is required')
+      return { plan: a.plan }
+    } },
+  { name: 'apply_rough_cut_plan', exec: 'dedicated',
+    description: "Bulk execution of YOUR ALREADY-DECIDED ranges/order: place every clip in one RoughCutPlan in one atomic undoable operation, with linked A/V, frame snapping, automatic checkpoint and created layer/audio/link IDs plus source/timeline mappings. No AI or creative selection. REPLACES all layers on the target track and assembles from timeline zero; there is no need to delete those layers one by one first. Use an empty/new target track to preserve existing work. Omitted track selects an unlocked A-roll or first unlocked track. dry_run returns predictions without history/mutation. Plan is revalidated internally. Ordinary add_video_layer/trim/move tools remain available; this is optional, not a mandatory editing stage.",
+    inputSchema: { type: 'object', properties: {
+      plan: ROUGH_CUT_PLAN_INPUT_SCHEMA,
+      composition_id: COMPOSITION_ID_SCHEMA,
+      track_id: { type: ['string', 'null'], description: 'Target track ID. Omit for default A-roll track.' },
+      dry_run: { type: ['boolean', 'null'], description: 'If true, simulates execution and returns predicted duration and mappings with zero mutations and zero history entries.' },
+      reapply: { type: ['boolean', 'null'], description: 'If true, bypasses duplicate plan execution protection.' },
+    }, required: ['plan'] },
+    parseDedicated: (a) => {
+      if (a.plan == null) throw new Error('plan is required')
+      return {
+        plan: a.plan,
+        composition_id: parseCompositionIdOpt(a.composition_id),
+        track_id: a.track_id === undefined || a.track_id === null ? null : parseUuid(a.track_id, 'track_id'),
+        dry_run: parseBoolOpt(a.dry_run, 'dry_run', false),
+        reapply: parseBoolOpt(a.reapply, 'reapply', false),
+      }
+    } },
+  { name: 'get_timeline_context', exec: 'dedicated',
+    description: "Extract compact structured timeline facts (tracks, clips, gaps, transitions, cut boundaries with speech cues) with zero mutations and zero history entries.",
+    inputSchema: { type: 'object', properties: {
+      composition_id: COMPOSITION_ID_SCHEMA,
+      start_us: { type: ['integer', 'null'], description: 'Optional range start in microseconds. Narrows cut boundaries and speech cues.' },
+      end_us: { type: ['integer', 'null'], description: 'Optional range end in microseconds. Narrows cut boundaries and speech cues.' },
+      transcripts_dir: { type: ['string', 'null'], description: 'Optional explicit directory containing cached Whisper transcript JSON files.' },
+    } },
+    parseDedicated: (a) => ({
+      composition_id: parseCompositionIdOpt(a.composition_id),
+      start_us: a.start_us === undefined || a.start_us === null ? undefined : parseNum(a.start_us, 'start_us'),
+      end_us: a.end_us === undefined || a.end_us === null ? undefined : parseNum(a.end_us, 'end_us'),
+      transcripts_dir: a.transcripts_dir === undefined || a.transcripts_dir === null ? undefined : parseStr(a.transcripts_dir, 'transcripts_dir'),
+    }) },
+  { name: 'inspect_timeline_frame', exec: 'dedicated',
+    description: "Capture a single frame from the live production preview compositor (at t_us, or at the active user playhead if t_us is omitted) without mutating project state or moving the playhead. The requested composition must be the active preview target; otherwise this refuses rather than showing a reduced FFmpeg approximation. Requires an open desktop preview.",
+    inputSchema: { type: 'object', properties: {
+      t_us: { type: 'integer', description: 'Timeline timestamp in microseconds (non-negative). If omitted, captures the frame currently displayed at the user active playhead.' },
+      composition_id: COMPOSITION_ID_SCHEMA,
+      format: { type: ['string', 'null'], enum: ['base64', 'data_url', null], description: "Image encoding format ('base64' or 'data_url'). Defaults to 'base64'." },
+    } },
+    parseDedicated: (a) => ({
+      t_us: a.t_us === undefined || a.t_us === null ? undefined : parseNum(a.t_us, 't_us'),
+      composition_id: parseCompositionIdOpt(a.composition_id),
+      format: a.format === 'data_url' ? 'data_url' : 'base64',
+    }) },
+  { name: 'render_timeline_range', exec: 'dedicated',
+    description: "Export a short root-composition range (up to 30s) through Sclip's production video compositor and normal audio mix to an isolated MP4 for multi-modal editorial QA. Requires an open desktop project. Never serves the old raw-source FFmpeg approximation and never reuses a stale layer-only cache. Does not modify project state or media pool.",
+    inputSchema: { type: 'object', properties: {
+      start_us: { type: 'integer', description: 'Range start timestamp in timeline microseconds.' },
+      end_us: { type: 'integer', description: 'Range end timestamp in timeline microseconds (must be > start_us and <= start_us + 30s).' },
+      composition_id: COMPOSITION_ID_SCHEMA,
+    }, required: ['start_us', 'end_us'] },
+    parseDedicated: (a) => {
+      if (a.start_us === undefined || a.start_us === null) throw new McpArgError('start_us is required', 'start_us')
+      if (a.end_us === undefined || a.end_us === null) throw new McpArgError('end_us is required', 'end_us')
+      return {
+        start_us: parseNum(a.start_us, 'start_us'),
+        end_us: parseNum(a.end_us, 'end_us'),
+        composition_id: parseCompositionIdOpt(a.composition_id),
+      }
+    } },
+  { name: 'validate_rough_cut_review', exec: 'dedicated',
+    description: "Mechanically validate an editorial RoughCutReview against composition duration, clip IDs, and schema invariants without creative scoring.",
+    inputSchema: { type: 'object', properties: {
+      review: {
+        type: ['object', 'string'],
+        description: 'The RoughCutReview object or JSON string to validate. Schema: { version: 1, project_id: string, composition_id: string, summary: string, total_duration_us: number, clip_count: number, inspections: [{ id: string, type: "boundary"|"section"|"full_range", timeline_range_us: [number, number], method: "context_only"|"frame"|"range_render", evidence: string, assessment: "natural"|"questionable"|"bad", reason: string, clip_ids: string[] }], identified_issues: [{ id: string, severity: "minor"|"moderate"|"critical", timeline_t_us: number, affected_range_us: [number, number], issue_type: "abrupt_cut"|"audio_clipping"|"incomplete_sentence"|"pacing_drag"|"jarring_jump"|"visual_mismatch"|"other", description: string, suggestion: string }], ready_for_next_stage: boolean }',
+        properties: {
+          version: { type: 'integer', enum: [1] },
+          project_id: { type: 'string' },
+          composition_id: { type: 'string' },
+          summary: { type: 'string' },
+          total_duration_us: { type: 'integer' },
+          clip_count: { type: 'integer' },
+          inspections: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string' },
+                type: { type: 'string', enum: ['boundary', 'section', 'full_range'] },
+                timeline_range_us: { type: 'array', items: { type: 'integer' } },
+                method: { type: 'string', enum: ['context_only', 'frame', 'range_render'] },
+                evidence: { type: 'string' },
+                assessment: { type: 'string', enum: ['natural', 'questionable', 'bad'] },
+                reason: { type: 'string' },
+                clip_ids: { type: 'array', items: { type: 'string' } },
+              },
+              required: ['id', 'type', 'timeline_range_us', 'method', 'evidence', 'assessment', 'reason', 'clip_ids'],
+            },
+          },
+          identified_issues: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string' },
+                severity: { type: 'string', enum: ['minor', 'moderate', 'critical'] },
+                timeline_t_us: { type: 'integer' },
+                affected_range_us: { type: 'array', items: { type: 'integer' } },
+                issue_type: { type: 'string', enum: ['abrupt_cut', 'audio_clipping', 'incomplete_sentence', 'pacing_drag', 'jarring_jump', 'visual_mismatch', 'other'] },
+                description: { type: 'string' },
+                suggestion: { type: 'string' },
+              },
+              required: ['id', 'severity', 'timeline_t_us', 'affected_range_us', 'issue_type', 'description', 'suggestion'],
+            },
+          },
+          ready_for_next_stage: { type: 'boolean' },
+        },
+      },
+      composition_id: COMPOSITION_ID_SCHEMA,
+    }, required: ['review'] },
+    parseDedicated: (a) => {
+      if (a.review == null) throw new McpArgError('review is required', 'review')
+      return {
+        review: a.review,
+        composition_id: parseCompositionIdOpt(a.composition_id),
+      }
+    } },
 ]
 
 const DEF_BY_NAME: Map<string, McpToolDef> = new Map(MCP_TOOL_DEFS.map((d) => [d.name, d]))

@@ -23,6 +23,7 @@ import {
   projectSummary,
   type MediaSummary,
   type ProjectSummary,
+  checkExportAttributionSafety,
 } from "../ipc";
 import { type ProxyState } from "../panels/mediaReadiness";
 import { classifyWebcodecsDecodability } from "../render/decoder/probeSourceDecodable";
@@ -308,6 +309,19 @@ export function useExportFlow(deps: {
     async (settings: ExportSettings, path: string, range?: { startUs: number; endUs: number }) => {
     // Name the run for the log mirror before any state can transition.
     exportLog.begin({ output: path, codec: settings.codec });
+    // ---- Attribution safety gate -----------------------------------------
+    try {
+      const attributionSafety = await checkExportAttributionSafety();
+      if (attributionSafety && !attributionSafety.can_export) {
+        setExportState({
+          kind: "error",
+          detail: `Export blocked: ${attributionSafety.warnings.join("; ")}`,
+        });
+        return;
+      }
+    } catch (e) {
+      console.warn("[weftcut/export] checkExportAttributionSafety check failed:", e);
+    }
     // ---- No-material guard -----------------------------------------------
     // A video export with nothing visible to render would emit pure black —
     // reject it as "no video material" instead. (Audio emptiness is judged

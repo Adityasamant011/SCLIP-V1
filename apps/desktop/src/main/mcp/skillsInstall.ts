@@ -83,3 +83,25 @@ export function installSkills(opts: {
   }
   return usable(dest) ? { state: 'installed', dir: dest } : fallback('copy_failed')
 }
+
+/** Refresh only Sclip's WeftCut skill in its dedicated Hermes profile.
+ * Other Hermes skills remain untouched. Preserve a pre-existing different
+ * SKILL.md once so a user-modified copy is recoverable. */
+export function refreshHermesWeftcutSkill(userDataDir: string): boolean {
+  const source = path.join(userDataDir, 'skills', REQUIRED_SKILL)
+  if (!fs.existsSync(path.join(source, 'SKILL.md'))) return false
+  const dest = path.join(userDataDir, 'sclip-hermes', 'skills', REQUIRED_SKILL)
+  const previous = path.join(dest, 'SKILL.md')
+  try {
+    fs.mkdirSync(dest, { recursive: true })
+    if (fs.existsSync(previous) &&
+        !fs.readFileSync(previous).equals(fs.readFileSync(path.join(source, 'SKILL.md'))) &&
+        !fs.existsSync(path.join(dest, 'SKILL.md.before-sclip-refresh'))) {
+      fs.copyFileSync(previous, path.join(dest, 'SKILL.md.before-sclip-refresh'))
+    }
+    fs.cpSync(source, dest, { recursive: true, force: true })
+    return fs.existsSync(previous)
+  } catch {
+    return false
+  }
+}

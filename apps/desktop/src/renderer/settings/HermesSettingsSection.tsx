@@ -15,6 +15,8 @@ import {
   sclipGetHermesConfig,
   sclipGetHermesStatus,
   sclipSetHermesConfig,
+  sclipRemoveHermesKey,
+  sclipTestHermesConnection,
   type HermesConfigView,
   type HermesStatus,
 } from '../ipc/sclip'
@@ -39,6 +41,7 @@ const PROVIDERS: ProviderDefinition[] = [
     description: 'Unified multi-model gateway (Anthropic, OpenAI, DeepSeek, Meta, etc.)',
     badge: 'Multi-Model',
     models: [
+      { id: 'nex-agi/nex-n2.5-pro:free', name: 'Nex N2.5 Pro (Free)' },
       { id: 'dots-studio/dots-3-note-preview:free', name: 'Dots 3 Note Preview (Free)' },
       { id: 'anthropic/claude-3.7-sonnet', name: 'Claude 3.7 Sonnet' },
       { id: 'anthropic/claude-3.5-haiku', name: 'Claude 3.5 Haiku' },
@@ -79,7 +82,7 @@ const PROVIDERS: ProviderDefinition[] = [
       { id: 'o1', name: 'o1' },
     ],
     requiresApiKey: true,
-    keyName: 'openai',
+    keyName: 'openai-api',
     placeholderKey: 'sk-proj-...',
   },
   {
@@ -154,7 +157,8 @@ const PROVIDERS: ProviderDefinition[] = [
     description: 'Any OpenAI-compatible server (vLLM, Together, local proxy)',
     badge: 'Custom URL',
     models: [],
-    requiresApiKey: false,
+    requiresApiKey: true,
+    keyName: 'custom',
     defaultBaseUrl: 'http://localhost:8000/v1',
   },
 ]
@@ -171,11 +175,14 @@ export function HermesSettingsSection() {
   const [customModelInput, setCustomModelInput] = useState('')
   const [apiKeyInput, setApiKeyInput] = useState('')
   const [showApiKey, setShowApiKey] = useState(false)
+  const [replacingKey, setReplacingKey] = useState(false)
   const [baseUrlInput, setBaseUrlInput] = useState('')
   const [maxIterations, setMaxIterations] = useState(30)
 
   const [saving, setSaving] = useState(false)
   const [saveSuccess, setSaveSuccess] = useState(false)
+  const [successMessage, setSuccessMessage] = useState('')
+  const [testing, setTesting] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   const activeProvider: ProviderDefinition = useMemo(
@@ -214,8 +221,11 @@ export function HermesSettingsSection() {
 
       setBaseUrlInput(cfg.customBaseUrl || matchedProvider?.defaultBaseUrl || '')
       setMaxIterations(cfg.maxIterations || 30)
-    } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : String(err))
+      setApiKeyInput('')
+      setReplacingKey(false)
+      setShowApiKey(false)
+    } catch {
+      setErrorMessage('Could not load Hermes settings. Please try again.')
     } finally {
       setLoading(false)
     }
@@ -228,6 +238,8 @@ export function HermesSettingsSection() {
   const handleProviderChange = (newProvId: string) => {
     setSelectedProviderId(newProvId)
     setApiKeyInput('')
+    setReplacingKey(false)
+    setShowApiKey(false)
     setSaveSuccess(false)
     setErrorMessage(null)
 
@@ -282,13 +294,52 @@ export function HermesSettingsSection() {
         apiKey: apiKeyInput.trim() ? apiKeyInput.trim() : undefined,
       })
       setSaveSuccess(true)
+      setSuccessMessage('Settings saved. Hermes is reconnecting with the selected provider and model.')
       setApiKeyInput('')
+      setReplacingKey(false)
+      setShowApiKey(false)
       await fetchConfig()
-    } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : String(err))
+    } catch {
+      setErrorMessage('Could not save Hermes settings. Check the provider, model, and secure storage availability.')
     } finally {
       setSaving(false)
     }
+  }
+
+  const handleRemoveKey = async () => {
+    if (!window.confirm(`Remove the saved ${activeProvider.name} API key?`)) return
+    setErrorMessage(null)
+    try {
+      await sclipRemoveHermesKey(activeProvider.id)
+      setApiKeyInput('')
+      setReplacingKey(false)
+      setShowApiKey(false)
+      setSaveSuccess(true)
+      setSuccessMessage('API key removed. Hermes is reconnecting.')
+      await fetchConfig()
+    } catch {
+      setErrorMessage('Could not remove the API key. Please try again.')
+    }
+  }
+
+  const handleTestConnection = async () => {
+    if (apiKeyInput.trim()) {
+      setErrorMessage('Save the API key before testing the connection.')
+      return
+    }
+    const model = isCustomModel ? customModelInput.trim() : selectedModel
+    if (!model) { setErrorMessage('Select a model before testing.'); return }
+    setTesting(true)
+    setErrorMessage(null)
+    setSaveSuccess(false)
+    try {
+      const result = await sclipTestHermesConnection({ provider: activeProvider.id, model,
+        ...(baseUrlInput.trim() ? { customBaseUrl: baseUrlInput.trim() } : {}) })
+      if (result.ok) { setSaveSuccess(true); setSuccessMessage(result.message) }
+      else setErrorMessage(result.message)
+    } catch {
+      setErrorMessage('Provider connection test failed.')
+    } finally { setTesting(false) }
   }
 
   if (loading) {
@@ -336,11 +387,11 @@ export function HermesSettingsSection() {
                 {status?.online ? 'Hermes Gateway Online' : 'Hermes Offline'}
               </span>
               <span className="sclip-settings-status-mcp">
-                {status?.mcpTools ?? 93} WeftCut MCP Tools Connected
+                {status?.mcpTools ?? 93} Sclip MCP Tools Connected
               </span>
             </div>
             <p className="sclip-settings-header-sub">
-              Select your AI provider and model. Credentials are encrypted in macOS Keychain.
+              Select your AI provider and model. Credentials use secure OS-backed storage and are never shown again after saving.
             </p>
           </div>
 
@@ -407,7 +458,7 @@ export function HermesSettingsSection() {
             {activeProvider.requiresApiKey && (
               <div className="sclip-form-row">
                 <label className="sclip-form-label">
-                  API Key
+                  {activeProvider.id === 'custom' ? 'API Key (optional)' : 'API Key'}
                   {hasKeyConfigured && (
                     <span className="sclip-key-status-tag">
                       <ShieldCheck size={11} /> Saved in Keychain
@@ -415,24 +466,28 @@ export function HermesSettingsSection() {
                   )}
                 </label>
                 <div className="sclip-form-control-col">
-                  <div className="sclip-api-key-wrapper">
-                    <AppInput
-                      type={showApiKey ? 'text' : 'password'}
-                      value={apiKeyInput}
-                      placeholder={hasKeyConfigured ? '•••••••••••••••• (Leave blank to keep existing key)' : activeProvider.placeholderKey || 'Paste API Key here'}
-                      onValueChange={setApiKeyInput}
-                    />
-                    <button
-                      type="button"
-                      className="sclip-key-eye-btn"
-                      onClick={() => setShowApiKey(!showApiKey)}
-                      title={showApiKey ? 'Hide key' : 'Show key'}
-                    >
-                      {showApiKey ? <EyeOff size={14} /> : <Eye size={14} />}
-                    </button>
-                  </div>
+                  {hasKeyConfigured && !replacingKey ? (
+                    <div className="sclip-iterations-row">
+                      <span className="sclip-key-status-tag"><ShieldCheck size={12} /> Configured</span>
+                      <Button type="button" variant="outline" onClick={() => { setReplacingKey(true); setApiKeyInput('') }}>Replace key</Button>
+                      <Button type="button" variant="outline" onClick={() => void handleRemoveKey()}>Remove</Button>
+                    </div>
+                  ) : (
+                    <div className="sclip-api-key-wrapper">
+                      <AppInput
+                        type={showApiKey ? 'text' : 'password'}
+                        ariaLabel="API key"
+                        value={apiKeyInput}
+                        placeholder={activeProvider.placeholderKey || 'Enter API key'}
+                        onValueChange={setApiKeyInput}
+                      />
+                      <button type="button" className="sclip-key-eye-btn" onClick={() => setShowApiKey(!showApiKey)} title={showApiKey ? 'Hide key' : 'Show key'}>
+                        {showApiKey ? <EyeOff size={14} /> : <Eye size={14} />}
+                      </button>
+                    </div>
+                  )}
                   <span className="sclip-input-hint">
-                    Key is encrypted via macOS Keychain safeStorage and never logged.
+                    The saved key stays in secure OS-backed storage. A replacement starts with an empty field.
                   </span>
                 </div>
               </div>
@@ -480,12 +535,15 @@ export function HermesSettingsSection() {
             )}
             {saveSuccess && (
               <div className="sclip-form-alert success" role="status">
-                <Check size={14} /> Settings saved! Hermes is reloading with the new provider and model.
+                <Check size={14} /> {successMessage}
               </div>
             )}
 
             {/* Actions */}
             <div className="sclip-form-actions">
+              <Button type="button" variant="outline" onClick={() => void handleTestConnection()} disabled={saving || testing}>
+                {testing ? 'Testing…' : 'Test Connection'}
+              </Button>
               <Button
                 type="button"
                 onClick={handleSave}

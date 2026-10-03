@@ -141,6 +141,15 @@ pub(crate) async fn read_resource(
     // Peeled off ahead of the URI match: thumbnail / frame / waveform return
     // blobs, /description and /analysis return JSON.
     if let Some(tail) = uri.strip_prefix(PREFIX_MEDIA) {
+        // /context — timestamp-aligned unified media context
+        if tail.ends_with("/context") || tail.contains("/context/") {
+            return read_media_context_resource(b, uri, tail, state.media).await;
+        }
+        // /transcript — cached transcript view (full or range)
+        #[cfg(feature = "speech")]
+        if tail.ends_with("/transcript") || tail.contains("/transcript/") {
+            return read_transcript_resource(b, uri, tail, state.media).await;
+        }
         // /description — cached VLM view, needs the injected config; see
         // `read_description_resource`.
         #[cfg(feature = "speech")]
@@ -399,6 +408,417 @@ async fn read_description_resource(
         .map_err(|e| McpToolError::internal_error(format!("read {}: {e}", path.display()), None))?;
     let body: Value = serde_json::from_slice(&bytes)
         .map_err(|e| McpToolError::internal_error(format!("parse description cache: {e}"), None))?;
+    text_resource(uri, &body)
+}
+
+#[cfg(feature = "speech")]
+async fn find_cached_transcript(
+    cache: &crate::cache::CacheLayout,
+    source_hash: &str,
+) -> Option<crate::speech::transcript::CachedTranscript> {
+    let dir = cache.transcripts_dir();
+    let mut entries = tokio::fs::read_dir(&dir).await.ok()?;
+    let mut best_entry: Option<crate::speech::transcript::CachedTranscript> = None;
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            if let Ok(bytes) = tokio::fs::read(&path).await {
+                if let Ok(cached) = serde_json::from_slice::<crate::speech::transcript::CachedTranscript>(&bytes) {
+                    if cached.source_hash == source_hash {
+                        if cached.is_full_source {
+                            crate::cache::touch_if_stale(&path);
+                            return Some(cached);
+                        }
+                        if best_entry.is_none() {
+                            crate::cache::touch_if_stale(&path);
+                            best_entry = Some(cached);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    best_entry
+}
+
+/// Serve `media://{id}/transcript` or `media://{id}/transcript/{start_us}/{end_us}`.
+/// Returns structured transcript JSON if cached, or status "not_generated".
+#[cfg(feature = "speech")]
+async fn read_transcript_resource(
+    b: &Backend,
+    uri: &str,
+    tail: &str,
+    media: Option<MediaItem>,
+) -> Result<ResourceResult, McpToolError> {
+    let parts: Vec<&str> = tail.split('/').collect();
+    if parts.is_empty() {
+        return Err(McpToolError::invalid_request("empty media resource URI", None));
+    }
+    let id_part = parts[0];
+    let media_id = Uuid::parse_str(id_part).map_err(|_| {
+        McpToolError::resource_not_found(format!("media URI has invalid UUID: {id_part}"), None)
+    })?;
+    let media = media.ok_or_else(|| {
+        McpToolError::resource_not_found(format!("media {media_id} not found"), None)
+    })?;
+
+    let range: Option<(i64, i64)> = if parts.len() == 4 && parts[1] == "transcript" {
+        let start = parts[2].parse::<i64>().map_err(|_| {
+            McpToolError::invalid_params(format!("invalid start_us: {}", parts[2]), None)
+        })?;
+        let end = parts[3].parse::<i64>().map_err(|_| {
+            McpToolError::invalid_params(format!("invalid end_us: {}", parts[3]), None)
+        })?;
+        Some((start, end))
+    } else if parts.len() == 2 && parts[1] == "transcript" {
+        None
+    } else {
+        return Err(McpToolError::invalid_request(
+            format!("malformed transcript resource URI: {uri}"),
+            None,
+        ));
+    };
+
+    let cached = find_cached_transcript(&b.cache, &media.file_hash_blake3).await;
+
+    let body = match cached {
+        Some(entry) => {
+            let (in_us, out_us, segments) = match range {
+                Some((s, e)) => {
+                    let sliced = entry.slice_window(s, e);
+                    (s, e, sliced.segments)
+                }
+                None => (entry.in_us, entry.out_us, entry.segments),
+            };
+            serde_json::json!({
+                "status": "available",
+                "media_id": media_id.to_string(),
+                "source_hash": media.file_hash_blake3,
+                "is_full_source": entry.is_full_source,
+                "in_us": in_us,
+                "out_us": out_us,
+                "duration_us": entry.source_duration_us.or(media.metadata.duration_us),
+                "language": entry.language,
+                "word_timing": entry.word_timing,
+                "segments": segments,
+            })
+        }
+        None => {
+            serde_json::json!({
+                "status": "not_generated",
+                "media_id": media_id.to_string(),
+                "source_hash": media.file_hash_blake3,
+                "message": format!("No transcript generated yet for media {media_id}. Call transcribe_clip to generate one.")
+            })
+        }
+    };
+
+    text_resource(uri, &body)
+}
+
+/// Build the consolidated, timestamp-aligned source context JSON for an imported media.
+pub(crate) async fn build_media_context_json(
+    cache: &crate::cache::CacheLayout,
+    media: &crate::state::MediaItem,
+    start_us: Option<i64>,
+    end_us: Option<i64>,
+    detail: Option<&str>,
+) -> serde_json::Value {
+    let source_duration = media.metadata.duration_us.unwrap_or(0);
+    let start = start_us.unwrap_or(0).max(0);
+    let end = end_us.unwrap_or(source_duration).max(start);
+
+    let is_overview = match detail {
+        Some("range") | Some("detail") | Some("full") => false,
+        _ => true,
+    };
+
+    // 1. Media metadata
+    let media_info = serde_json::json!({
+        "id": media.id.to_string(),
+        "filename": media.path_abs.file_name().and_then(|s| s.to_str()).unwrap_or(""),
+        "duration_us": source_duration,
+        "file_hash_blake3": media.file_hash_blake3,
+        "width": media.metadata.video.as_ref().map(|v| v.width),
+        "height": media.metadata.video.as_ref().map(|v| v.height),
+        "fps": media
+            .metadata
+            .video
+            .as_ref()
+            .map(|v| v.fps_num as f64 / v.fps_den.max(1) as f64),
+        "video_codec": media.metadata.video.as_ref().map(|v| &v.codec),
+        "audio_codec": media.metadata.audio.as_ref().map(|a| &a.codec),
+        "sample_rate": media.metadata.audio.as_ref().map(|a| a.sample_rate),
+        "channels": media.metadata.audio.as_ref().map(|a| a.channels),
+    });
+
+    // 2. Transcript modality
+    #[cfg(feature = "speech")]
+    let transcript = match find_cached_transcript(cache, &media.file_hash_blake3).await {
+        Some(cached) => {
+            let sliced = cached.slice_window(start, end);
+            if is_overview {
+                serde_json::json!({
+                    "status": "available",
+                    "is_full_source": cached.is_full_source,
+                    "language": cached.language,
+                    "word_timing": cached.word_timing,
+                    "segment_count": sliced.segments.len(),
+                })
+            } else {
+                serde_json::json!({
+                    "status": "available",
+                    "is_full_source": cached.is_full_source,
+                    "language": cached.language,
+                    "word_timing": cached.word_timing,
+                    "segment_count": sliced.segments.len(),
+                    "segments": sliced.segments,
+                })
+            }
+        }
+        None => serde_json::json!({
+            "status": "not_generated",
+            "message": "No transcript generated yet for media. Call transcribe_clip to generate one."
+        }),
+    };
+    #[cfg(not(feature = "speech"))]
+    let transcript = serde_json::json!({ "status": "not_available" });
+
+    // 3. Shots modality (VSHOT)
+    #[cfg(feature = "jobs")]
+    let (shots, frame_times) = {
+        let opts = crate::jobs::shot::ShotOpts {
+            sensitivity: 0.4,
+            min_shot_us: 500_000,
+            stats: true,
+            events: true,
+        };
+        if crate::jobs::shot::is_report_cached(cache, media, &opts) {
+            if let Ok(report) = crate::jobs::shot::cached_source_report(cache, media, &opts).await {
+                let clipped = crate::jobs::shot::clip_report(&report, start, end);
+                let kfs: Vec<i64> = clipped.shots.iter().map(|s| s.keyframe_t_us).collect();
+                let json = if is_overview {
+                    serde_json::json!({
+                        "status": "available",
+                        "shot_count": clipped.shots.len(),
+                        "cut_count": clipped.cut_scores.len(),
+                    })
+                } else {
+                    serde_json::json!({
+                        "status": "available",
+                        "shot_count": clipped.shots.len(),
+                        "shots": clipped.shots,
+                        "cut_scores": clipped.cut_scores,
+                    })
+                };
+                (json, kfs)
+            } else {
+                (
+                    serde_json::json!({
+                        "status": "not_generated",
+                        "message": "No shot detection cached yet. Read media://{id}/analysis or call analyze_clip to generate."
+                    }),
+                    Vec::new(),
+                )
+            }
+        } else {
+            (
+                serde_json::json!({
+                    "status": "not_generated",
+                    "message": "No shot detection cached yet. Read media://{id}/analysis or call analyze_clip to generate."
+                }),
+                Vec::new(),
+            )
+        }
+    };
+    #[cfg(not(feature = "jobs"))]
+    let (shots, frame_times) = (
+        serde_json::json!({ "status": "not_available" }),
+        Vec::<i64>::new(),
+    );
+
+    // 4. Descriptions modality (VLM)
+    let descriptions = {
+        let desc_dir = cache.descriptions_dir();
+        let mut found_desc: Option<(Vec<[i64; 2]>, Vec<crate::vlm::description::DescSegment>)> = None;
+        if let Ok(mut entries) = tokio::fs::read_dir(&desc_dir).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let path = entry.path();
+                if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                    if let Ok(bytes) = tokio::fs::read(&path).await {
+                        if let Ok(parsed) = serde_json::from_slice::<crate::vlm::DescriptionCache>(&bytes) {
+                            let matches_source = match &parsed.source_hash {
+                                Some(h) => h == &media.file_hash_blake3,
+                                None => {
+                                    let filename = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                                    crate::vlm::is_cache_key_for_source(filename, &media.file_hash_blake3)
+                                }
+                            };
+                            if matches_source {
+                                let segs = parsed.segments_in(start, end);
+                                found_desc = Some((parsed.covered_ranges, segs));
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        match found_desc {
+            Some((covered, segs)) => {
+                if is_overview {
+                    serde_json::json!({
+                        "status": "available",
+                        "covered_ranges": covered,
+                        "segment_count": segs.len(),
+                    })
+                } else {
+                    serde_json::json!({
+                        "status": "available",
+                        "covered_ranges": covered,
+                        "segment_count": segs.len(),
+                        "segments": segs,
+                    })
+                }
+            }
+            None => serde_json::json!({
+                "status": "not_generated",
+                "message": "No scene descriptions cached. Call describe_clip to generate."
+            }),
+        }
+    };
+
+    // 5. Audio activity / pauses (from waveform peaks if ready)
+    #[cfg(feature = "jobs")]
+    let audio_activity = {
+        let waveform_path = cache.waveform(&media.file_hash_blake3);
+        if crate::cache::cached_ok(&waveform_path) {
+            match crate::jobs::read_peaks_file(&waveform_path) {
+                Ok(peaks_file) => {
+                    let pauses = crate::mcp::tools::detect_pauses_in_peaks(
+                        &peaks_file.peaks,
+                        0.02,
+                        500_000,
+                        80_000,
+                        start,
+                        end,
+                        start,
+                        peaks_file.sample_rate,
+                        peaks_file.frames_per_peak,
+                    );
+                    let noise_floor_amp = crate::mcp::tools::noise_floor_p10(
+                        &peaks_file.peaks,
+                        start,
+                        end,
+                        peaks_file.sample_rate,
+                        peaks_file.frames_per_peak,
+                    );
+                    if is_overview {
+                        serde_json::json!({
+                            "status": "available",
+                            "waveform_cached": true,
+                            "pause_count": pauses.len(),
+                            "noise_floor_amp": noise_floor_amp,
+                        })
+                    } else {
+                        serde_json::json!({
+                            "status": "available",
+                            "waveform_cached": true,
+                            "pause_count": pauses.len(),
+                            "noise_floor_amp": noise_floor_amp,
+                            "pauses": pauses,
+                        })
+                    }
+                }
+                Err(_) => serde_json::json!({
+                    "status": "available",
+                    "waveform_cached": true,
+                }),
+            }
+        } else {
+            serde_json::json!({
+                "status": "not_generated",
+                "waveform_cached": false,
+                "message": "Waveform job not complete yet for media."
+            })
+        }
+    };
+    #[cfg(not(feature = "jobs"))]
+    let audio_activity = serde_json::json!({ "status": "not_available" });
+
+    // 6. Frame references
+    let frame_references: Vec<String> = if !frame_times.is_empty() {
+        let limit = if is_overview { 5 } else { 20 };
+        frame_times
+            .iter()
+            .take(limit)
+            .map(|t| format!("media://{}/frame/{}", media.id, t))
+            .collect()
+    } else {
+        let count = if is_overview { 3 } else { 5 };
+        let step = if end > start {
+            (end - start) / count
+        } else {
+            1_000_000
+        };
+        (0..count)
+            .map(|i| format!("media://{}/frame/{}", media.id, start + i * step))
+            .collect()
+    };
+
+    serde_json::json!({
+        "media": media_info,
+        "range": {
+            "start_us": start,
+            "end_us": end,
+            "duration_us": end - start,
+        },
+        "detail": if is_overview { "overview" } else { detail.unwrap_or("range") },
+        "transcript": transcript,
+        "shots": shots,
+        "descriptions": descriptions,
+        "audio_activity": audio_activity,
+        "frame_references": frame_references,
+    })
+}
+
+/// Serve `media://{id}/context` or `media://{id}/context/{start_us}/{end_us}`.
+async fn read_media_context_resource(
+    b: &Backend,
+    uri: &str,
+    tail: &str,
+    media: Option<MediaItem>,
+) -> Result<ResourceResult, McpToolError> {
+    let parts: Vec<&str> = tail.split('/').collect();
+    if parts.is_empty() {
+        return Err(McpToolError::invalid_request("empty media resource URI", None));
+    }
+    let id_part = parts[0];
+    let media_id = Uuid::parse_str(id_part).map_err(|_| {
+        McpToolError::resource_not_found(format!("media URI has invalid UUID: {id_part}"), None)
+    })?;
+    let media = media.ok_or_else(|| {
+        McpToolError::resource_not_found(format!("media {media_id} not found"), None)
+    })?;
+
+    let (start_us, end_us, detail_mode) = if parts.len() == 4 && parts[1] == "context" {
+        let start = parts[2].parse::<i64>().map_err(|_| {
+            McpToolError::invalid_params(format!("invalid start_us: {}", parts[2]), None)
+        })?;
+        let end = parts[3].parse::<i64>().map_err(|_| {
+            McpToolError::invalid_params(format!("invalid end_us: {}", parts[3]), None)
+        })?;
+        (Some(start), Some(end), Some("range"))
+    } else if parts.len() == 2 && parts[1] == "context" {
+        (None, None, Some("overview"))
+    } else {
+        return Err(McpToolError::invalid_request(
+            format!("malformed context resource URI: {uri}"),
+            None,
+        ));
+    };
+
+    let body = build_media_context_json(&b.cache, &media, start_us, end_us, detail_mode).await;
     text_resource(uri, &body)
 }
 
@@ -759,5 +1179,186 @@ mod stateless_tests {
             m > stale + std::time::Duration::from_secs(30),
             "thumbnail read must refresh a stale poster mtime"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn media_context_overview_vs_detail_and_codec() {
+        let b = Backend::new_for_test(std::sync::Arc::new(crate::events::VecEventSink::new()));
+        b.init().await.unwrap();
+        let id = uuid::Uuid::now_v7();
+        let hash = format!("context-test-{id}");
+
+        let mut metadata = crate::state::MediaMetadata::default();
+        metadata.duration_us = Some(10_000_000);
+        metadata.video = Some(crate::state::VideoStreamMeta {
+            width: 1920,
+            height: 1080,
+            fps_num: 30,
+            fps_den: 1,
+            codec: "h264".into(),
+            pix_fmt: "yuv420p".into(),
+            start_pts_us: None,
+            nb_frames: Some(300),
+            color_matrix: None,
+            color_range: None,
+            color_primaries: None,
+            color_transfer: None,
+        });
+        metadata.audio = Some(crate::state::AudioStreamMeta {
+            sample_rate: 48000,
+            channels: 2,
+            codec: "aac".into(),
+            start_pts_us: None,
+        });
+
+        let item = crate::state::MediaItem {
+            id,
+            label: None,
+            path_abs: std::path::PathBuf::from("/test/video.mp4"),
+            path_rel: None,
+            kind: crate::state::MediaKind::Video,
+            metadata,
+            decode_route: crate::state::DecodeRoute::Bypass,
+            waveform_path: None,
+            conform_path: None,
+            thumbnails_dir: None,
+            file_hash_blake3: hash.clone(),
+            file_size: 1000,
+            file_mtime: 1000,
+            imported_at: chrono::Utc::now(),
+        };
+
+        #[cfg(feature = "speech")]
+        {
+            let transcript_entry = crate::speech::transcript::CachedTranscript {
+                source_hash: hash.clone(),
+                is_full_source: true,
+                source_duration_us: Some(10_000_000),
+                in_us: 0,
+                out_us: 10_000_000,
+                backend: "test".into(),
+                language: Some("en".into()),
+                word_timing: crate::speech::transcript::WordTiming::Exact,
+                segments: vec![crate::speech::transcript::Segment {
+                    t_start_us: 1_000_000,
+                    t_end_us: 2_000_000,
+                    text: "hello world".into(),
+                    words: vec![
+                        crate::speech::transcript::Word {
+                            t_start_us: 1_000_000,
+                            t_end_us: 1_500_000,
+                            text: "hello".into(),
+                        },
+                        crate::speech::transcript::Word {
+                            t_start_us: 1_500_000,
+                            t_end_us: 2_000_000,
+                            text: "world".into(),
+                        },
+                    ],
+                }],
+            };
+            let key = crate::speech::transcript::transcript_cache_key(
+                &hash,
+                None,
+                "test",
+                Some("en"),
+                true,
+            );
+            let path = b.cache.transcript(&key);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, serde_json::to_vec(&transcript_entry).unwrap()).unwrap();
+
+            // 1. Overview mode
+            let overview =
+                build_media_context_json(&b.cache, &item, None, None, Some("overview")).await;
+            assert_eq!(overview["media"]["video_codec"], "h264");
+            assert_eq!(overview["media"]["audio_codec"], "aac");
+            assert_eq!(overview["detail"], "overview");
+            assert_eq!(overview["transcript"]["status"], "available");
+            assert_eq!(overview["transcript"]["segment_count"], 1);
+            assert!(
+                overview["transcript"].get("segments").is_none(),
+                "overview mode must not dump segment arrays"
+            );
+
+            // 2. Detail mode
+            let detail =
+                build_media_context_json(&b.cache, &item, None, None, Some("range")).await;
+            assert_eq!(detail["detail"], "range");
+            assert_eq!(detail["transcript"]["status"], "available");
+            let segs = detail["transcript"]["segments"]
+                .as_array()
+                .expect("detail mode must include segments array");
+            assert_eq!(segs.len(), 1);
+            assert_eq!(segs[0]["text"], "hello world");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn media_context_vlm_source_hash_isolation_and_covered_ranges() {
+        let b = Backend::new_for_test(std::sync::Arc::new(crate::events::VecEventSink::new()));
+        b.init().await.unwrap();
+
+        let hash_a = format!("hash-a-{}", uuid::Uuid::now_v7());
+        let hash_b = format!("hash-b-{}", uuid::Uuid::now_v7());
+
+        // Write a description cache for hash_a
+        let desc = crate::vlm::DescriptionCache {
+            covered_ranges: vec![[0, 5_000_000]],
+            segments: vec![crate::vlm::description::DescSegment {
+                t_start_us: 0,
+                t_end_us: 3_000_000,
+                text: "A person speaking in front of camera".into(),
+                tags: vec!["person".into(), "speaking".into()],
+            }],
+            source_hash: Some(hash_a.clone()),
+        };
+        let desc_path = b
+            .cache
+            .descriptions_dir()
+            .join(format!("desc-{hash_a}.json"));
+        std::fs::create_dir_all(desc_path.parent().unwrap()).unwrap();
+        std::fs::write(&desc_path, serde_json::to_vec(&desc).unwrap()).unwrap();
+
+        let make_item = |id: uuid::Uuid, hash: String| crate::state::MediaItem {
+            id,
+            label: None,
+            path_abs: std::path::PathBuf::from("/test/vid.mp4"),
+            path_rel: None,
+            kind: crate::state::MediaKind::Video,
+            metadata: crate::state::MediaMetadata {
+                duration_us: Some(10_000_000),
+                ..Default::default()
+            },
+            decode_route: crate::state::DecodeRoute::Bypass,
+            waveform_path: None,
+            conform_path: None,
+            thumbnails_dir: None,
+            file_hash_blake3: hash,
+            file_size: 1000,
+            file_mtime: 1000,
+            imported_at: chrono::Utc::now(),
+        };
+
+        // Query with hash_b -> must NOT see hash_a's descriptions!
+        let item_b = make_item(uuid::Uuid::now_v7(), hash_b);
+        let ctx_b =
+            build_media_context_json(&b.cache, &item_b, None, None, Some("overview")).await;
+        assert_eq!(
+            ctx_b["descriptions"]["status"], "not_generated",
+            "must not return descriptions belonging to a different media hash"
+        );
+
+        // Query with hash_a -> must see hash_a's descriptions and covered_ranges!
+        let item_a = make_item(uuid::Uuid::now_v7(), hash_a);
+        let ctx_a =
+            build_media_context_json(&b.cache, &item_a, None, None, Some("overview")).await;
+        assert_eq!(ctx_a["descriptions"]["status"], "available");
+        let covered = ctx_a["descriptions"]["covered_ranges"]
+            .as_array()
+            .expect("covered_ranges must be emitted");
+        assert_eq!(covered.len(), 1);
+        assert_eq!(covered[0][0], 0);
+        assert_eq!(covered[0][1], 5_000_000);
     }
 }

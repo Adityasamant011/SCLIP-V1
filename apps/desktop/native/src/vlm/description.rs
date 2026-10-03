@@ -66,6 +66,9 @@ pub struct DescriptionCache {
     /// All described segments, source-absolute, sorted by `t_start_us`.
     #[serde(default)]
     pub segments: Vec<DescSegment>,
+    /// The BLAKE3 hash of the source media described.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_hash: Option<String>,
 }
 
 impl DescriptionCache {
@@ -168,6 +171,23 @@ pub fn cache_key(
     h.finalize().to_hex().to_string()
 }
 
+/// Check if a cache key matches candidate keys generated from the given source hash.
+pub fn is_cache_key_for_source(key: &str, source_hash: &str) -> bool {
+    let languages = [Language::parse(None), Language::parse(Some("zh"))];
+    for backend in VlmBackend::all() {
+        for focus in [Focus::General, Focus::ShotType] {
+            for lang in &languages {
+                for fps_m in [1000, 2000, 500] {
+                    if cache_key(source_hash, *backend, backend.as_str(), fps_m, focus, lang) == key {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,6 +216,7 @@ mod tests {
         let c = DescriptionCache {
             covered_ranges: vec![[0, 4_000_000], [8_000_000, 10_000_000]],
             segments: vec![],
+            source_hash: None,
         };
         assert!(c.covers(1_000_000, 3_000_000));
         assert!(c.covers(0, 4_000_000));
@@ -232,6 +253,7 @@ mod tests {
         let c = DescriptionCache {
             covered_ranges: vec![[0, 10_000_000]],
             segments: vec![seg(5_000_000, 7_000_000, "mid"), seg(0, 2_000_000, "early")],
+            source_hash: None,
         };
         let got = c.segments_in(1_000_000, 3_000_000);
         assert_eq!(got.len(), 1);

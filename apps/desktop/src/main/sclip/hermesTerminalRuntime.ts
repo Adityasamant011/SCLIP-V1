@@ -2,12 +2,15 @@ import path from 'node:path'
 import fs from 'node:fs'
 import { createHash } from 'node:crypto'
 import * as pty from 'node-pty'
+import { readHermesProfile, writeHermesProfile } from './hermesRuntime.js'
+import { createHermesOutputRedactor, hermesBaseEnvironment } from './hermesSecrets.js'
+import type { HermesProfileConfig } from './hermesRuntime.js'
 
 // The WeftCut editor tools arrive through the authenticated MCP server in the
 // generated Hermes profile. In Hermes CLI, passing the configured MCP server name
 // `weftcut` matches CLI_CONFIG.mcp_servers and dynamically aliases to `mcp-weftcut`,
 // ensuring all 93 WeftCut tools are enabled without triggering startup warnings.
-const EDITOR_TOOLSETS = 'web,vision,skills,todo,memory,clarify,weftcut'
+const EDITOR_TOOLSETS = 'terminal,file,web,vision,skills,todo,memory,clarify,weftcut'
 const MAX_HISTORY_BYTES = 256 * 1024
 const MAX_INPUT_BYTES = 64 * 1024
 
@@ -18,17 +21,20 @@ export interface HermesTerminalOptions {
   executableOverride?: string
   sourceOverride?: string
   getMcpInfo: () => { url: string; bearer_token: string }
-  getProviderEnvironment: () => Record<string, string>
+  getProviderEnvironment: (profile: HermesProfileConfig) => Record<string, string>
   /** Reject stale renderer/project/session combinations before a PTY is created. */
   assertSession: (projectId: string, sessionId: string) => Promise<void>
-  onOutput: (event: { projectId: string; sessionId: string; data: string }) => void
+  onOutput: (event: { projectId: string; sessionId: string; sequence: number; data: string }) => void
   onExit: (event: { projectId: string; sessionId: string; code: number }) => void
 }
 
 interface TerminalSession {
   pty: pty.IPty
   history: string
+  sequence: number
 }
+
+export interface TerminalSnapshot { history: string; sequence: number }
 
 interface LaunchSpec { command: string; args: string[]; cwd: string }
 
@@ -43,68 +49,90 @@ export class HermesTerminalRuntime {
 
   constructor(private readonly options: HermesTerminalOptions) {}
 
-  async ensure(projectId: string, sessionId: string, cols = 100, rows = 30): Promise<string> {
+  async ensure(projectId: string, sessionId: string, cols = 100, rows = 30): Promise<TerminalSnapshot> {
     await this.options.assertSession(projectId, sessionId)
     const key = this.key(projectId, sessionId)
     const existing = this.sessions.get(key)
-    if (existing) return existing.history
+    if (existing) return { history: existing.history, sequence: existing.sequence }
     const launch = this.resolveLaunch()
     const home = path.join(this.options.userDataPath, 'sclip-hermes')
     fs.mkdirSync(home, { recursive: true, mode: 0o700 })
     const mcp = this.options.getMcpInfo()
     const configPath = path.join(home, 'config.yaml')
-    if (!fs.existsSync(configPath)) {
-      const config = [
-        'model:', '  provider: openrouter', '  default: dots-studio/dots-3-note-preview:free',
-        'mcp_servers:', '  weftcut:', '    url: "${SCLIP_MCP_URL}"', '    headers:', '      Authorization: "Bearer ${SCLIP_MCP_TOKEN}"', '    timeout: 120',
-        'terminal:', '  cwd: "."',
-        'agent:', '  max_iterations: 30', '',
-      ].join('\n')
-      fs.writeFileSync(configPath, config, { encoding: 'utf8', mode: 0o600 })
-    }
+    if (!fs.existsSync(configPath)) writeHermesProfile(home, 0)
+    const profile = readHermesProfile(home)
+    const providerEnv = this.options.getProviderEnvironment(profile)
     const env: Record<string, string | undefined> = {
-      ...process.env,
-      ...this.options.getProviderEnvironment(),
+      ...hermesBaseEnvironment(),
+      ...providerEnv,
       HERMES_HOME: home,
+      HERMES_INFERENCE_MODEL: profile.model,
+      HERMES_PROVIDER: profile.provider,
+      ...(profile.customBaseUrl ? { OPENAI_BASE_URL: profile.customBaseUrl } : {}),
+      ...(profile.provider === 'openrouter' ? { OPENROUTER_MODEL: profile.model } : {}),
       SCLIP_ACTIVE_PROJECT_ID: projectId,
       SCLIP_PROJECT_ID: projectId,
       SCLIP_MCP_URL: mcp.url,
       SCLIP_MCP_TOKEN: mcp.bearer_token,
       TERM: 'xterm-256color',
+      // Hermes already supports this hint; avoid a startup OSC query whose
+      // delayed response can land in the editable prompt. Matches xterm theme.
+      HERMES_TUI_BACKGROUND: '#0b0d12',
     }
     delete env.TERMINAL_CWD
-    const terminal = pty.spawn(launch.command, [
+    const chatArgs = [
       ...launch.args,
-      'chat', '--toolsets', EDITOR_TOOLSETS,
+      'chat',
+      '--toolsets', EDITOR_TOOLSETS,
+      '--skills', 'weftcut',
+      '--provider', profile.provider,
+      '-m', profile.model,
       // Hermes limits session titles to 100 chars; renderer-generated project
       // and session ids can be longer than that. Hash the ownership pair into
       // a stable, opaque title instead of leaking ids or failing to start.
       '--continue', this.hermesSessionTitle(projectId, sessionId),
-      '--create-if-missing', '--no-restore-cwd', '--ignore-rules', '--source', 'tool', '--cli',
-    ], {
+      '--create-if-missing',
+      '--no-restore-cwd',
+      '--ignore-rules',
+      '--source', 'tool',
+      '--cli',
+    ]
+    if (profile.maxIterations) {
+      chatArgs.push('--max-turns', String(profile.maxIterations))
+    }
+    const terminal = pty.spawn(launch.command, chatArgs, {
       name: 'xterm-256color',
       cols: this.dimension(cols, 100),
       rows: this.dimension(rows, 30),
       cwd: launch.cwd,
       env: env as Record<string, string>,
     })
-    const session: TerminalSession = { pty: terminal, history: '' }
+    const session: TerminalSession = { pty: terminal, history: '', sequence: 0 }
     this.sessions.set(key, session)
+    const redactor = createHermesOutputRedactor([...Object.values(providerEnv), mcp.bearer_token])
     terminal.onData(data => {
+      if (this.sessions.get(key) !== session) return
+      data = redactor.push(data)
+      if (!data) return
       // Keep a bounded in-memory replay buffer. It is never persisted because
       // output may contain sensitive project material.
       session.history = `${session.history}${data}`.slice(-MAX_HISTORY_BYTES)
-      this.options.onOutput({ projectId, sessionId, data })
+      this.options.onOutput({ projectId, sessionId, sequence: ++session.sequence, data })
     })
     terminal.onExit(({ exitCode }) => {
-      if (this.sessions.get(key)?.pty !== terminal) return
+      if (this.sessions.get(key) !== session) return
+      const tail = redactor.flush()
+      if (tail) {
+        session.history = `${session.history}${tail}`.slice(-MAX_HISTORY_BYTES)
+        this.options.onOutput({ projectId, sessionId, sequence: ++session.sequence, data: tail })
+      }
       this.sessions.delete(key)
       this.options.onExit({ projectId, sessionId, code: exitCode })
     })
-    return session.history
+    return { history: session.history, sequence: session.sequence }
   }
 
-  async restartSession(projectId: string, sessionId: string, cols = 100, rows = 30): Promise<string> {
+  async restartSession(projectId: string, sessionId: string, cols = 100, rows = 30): Promise<TerminalSnapshot> {
     const key = this.key(projectId, sessionId)
     const existing = this.sessions.get(key)
     if (existing) {
@@ -112,6 +140,16 @@ export class HermesTerminalRuntime {
       this.sessions.delete(key)
     }
     return this.ensure(projectId, sessionId, cols, rows)
+  }
+
+  async restartAll(cols = 100, rows = 30): Promise<void> {
+    const keys = Array.from(this.sessions.keys())
+    for (const key of keys) {
+      const [projectId, sessionId] = key.split('\u0000')
+      if (projectId && sessionId) {
+        await this.restartSession(projectId, sessionId, cols, rows)
+      }
+    }
   }
 
   async input(projectId: string, sessionId: string, data: string): Promise<void> {
@@ -151,13 +189,20 @@ export class HermesTerminalRuntime {
     }
     if (this.options.isPackaged) {
       const executable = path.join(this.options.resourcesPath, 'hermes', process.platform === 'win32' ? 'hermes.exe' : 'hermes')
-      if (!fs.existsSync(executable)) throw new Error('Bundled Hermes runtime is missing')
-      return { command: executable, args: [], cwd: path.dirname(executable) }
+      if (fs.existsSync(executable)) {
+        return { command: executable, args: [], cwd: path.dirname(executable) }
+      }
     }
     const source = this.options.sourceOverride?.trim()
-    if (!source) throw new Error('Set SCLIP_HERMES_SOURCE or SCLIP_HERMES_EXECUTABLE to use the Hermes terminal in development')
+    if (!source) {
+      if (this.options.isPackaged) throw new Error('Bundled Hermes runtime is missing')
+      throw new Error('Set SCLIP_HERMES_SOURCE or SCLIP_HERMES_EXECUTABLE to use the Hermes terminal in development')
+    }
     const python = path.join(source, '.venv', process.platform === 'win32' ? 'Scripts' : 'bin', process.platform === 'win32' ? 'python.exe' : 'python')
-    if (!fs.existsSync(python)) throw new Error('Hermes development virtual environment is missing')
+    if (!fs.existsSync(python)) {
+      if (this.options.isPackaged) throw new Error('Bundled Hermes runtime is missing')
+      throw new Error('Hermes development virtual environment is missing')
+    }
     return { command: python, args: ['-m', 'hermes_cli.main'], cwd: source }
   }
 }

@@ -26,7 +26,11 @@ export function AgentPanelHeader({ onRestartTerminal, onClearTerminal, isRestart
   useEffect(() => {
     void refresh()
     const timer = setInterval(() => void refresh(), 3000)
-    return () => clearInterval(timer)
+    const unsubscribe = window.api.on('sclip:hermes_config_changed', () => void refresh())
+    return () => {
+      clearInterval(timer)
+      unsubscribe()
+    }
   }, [])
 
   const modelLabel = config?.model ? config.model.split('/').pop() : 'default'

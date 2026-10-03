@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { installSkills } from './skillsInstall.js'
+import { installSkills, refreshHermesWeftcutSkill } from './skillsInstall.js'
 
 const tmps: string[] = []
 function tmpDir(): string {
@@ -30,6 +30,21 @@ function seedUserData(userData: string, body: string): string {
 }
 
 describe('installSkills', () => {
+  it('refreshes only the Sclip Hermes skill and preserves a differing prior copy', () => {
+    const userData = tmpDir()
+    stageSkills(path.join(userData, 'skills'), 'current skill')
+    const hermesSkills = path.join(userData, 'sclip-hermes', 'skills')
+    stageSkills(hermesSkills, 'prior skill')
+    const other = path.join(hermesSkills, 'other', 'SKILL.md')
+    fs.mkdirSync(path.dirname(other), { recursive: true })
+    fs.writeFileSync(other, 'unrelated Hermes skill')
+
+    expect(refreshHermesWeftcutSkill(userData)).toBe(true)
+    expect(fs.readFileSync(path.join(hermesSkills, 'weftcut', 'SKILL.md'), 'utf8')).toBe('current skill')
+    expect(fs.readFileSync(path.join(hermesSkills, 'weftcut', 'SKILL.md.before-sclip-refresh'), 'utf8')).toBe('prior skill')
+    expect(fs.readFileSync(other, 'utf8')).toBe('unrelated Hermes skill')
+  })
+
   it('copies the packaged tree into <userData>/skills and reports it installed', () => {
     const userData = tmpDir()
     const source = stageSkills(tmpDir(), 'skill v1')

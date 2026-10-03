@@ -56,6 +56,7 @@ export function applyMoveLayer(p: Project, id: Uuid, newTrackId: Uuid, newTStart
   const landings = shiftOnGrids(movers, delta, fps)
   const targetLanding = landings.get(id)!
   const newStart = targetLanding.tStartUs
+  if (newTrackId === srcTrackId && delta === 0) return
 
   // Remove the target layer.
   const layer = src.track.layers.splice(src.layerIndex, 1)[0]

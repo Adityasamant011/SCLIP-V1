@@ -59,6 +59,7 @@ export const HISTORY_SUMMARY = {
   layerSeparateAudio: { key: 'history.layer.separate_audio', text: 'Separated audio' },
   layerAddAvPair: { key: 'history.layer.add_av_pair', text: 'Added A/V pair' },
   layerRebindMotif: { key: 'history.layer.rebind_motif', text: 'Rebound motif clips' },
+  layerRoughCutApply: { key: 'history.layer.rough_cut_apply', text: 'Applied rough cut plan' },
 
   trackAdd: { key: 'history.track.add', text: 'Added track' },
   trackDelete: { key: 'history.track.delete', text: 'Deleted track' },

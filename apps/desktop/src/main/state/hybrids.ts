@@ -11,8 +11,10 @@ import type { ActorHandle } from './actor'
 import type { AudioParams, Composition, Layer, MediaItem, Rgba, VideoClipParams } from './model'
 import { eachLayer, rootComposition } from './model'
 import { parseDiscardSegments } from './mutations/split'
+import { sourceSignature } from './mutations/textCorrection'
 import { playsNoSoundError, resolvePauseSubject } from './pauseSubject'
 import { snapFrameRound } from './snap'
+import type { TranscriptPayload } from '../../shared/captionTiming'
 
 /** Rust compute facade — each method runs a native (no-actor-write) computation
  *  and returns a serialized result. Built in index.ts from the Backend napi. */
@@ -70,6 +72,9 @@ export interface ComputeNapi {
    *  Optional like the shot entries above: a build without it wired refuses
    *  with an actionable error rather than marking nothing. */
   detectPauses?(args: { layer_id: string; threshold_amp?: number; min_pause_us?: number }): Promise<DetectPausesResult>
+  /** Read the structured cached transcript for a MediaItem, optionally sliced to [inUs, outUs].
+   *  Returns serialized JSON or null if missing. */
+  readTranscript?(media: MediaItem, inUs?: number, outUs?: number): Promise<string | null>
 }
 
 /** One pause in the layer's OWN composition clock. Mirrors native `PauseRegion`
@@ -157,6 +162,263 @@ async function applySubtitleBody(
   if (!r.ok) throw new Error(JSON.stringify(r.error))
   return { track_id: r.value as string, simplified }
 }
+
+export interface TimelineWord {
+  text: string
+  t_start_us: number
+  t_end_us: number
+}
+
+export interface PhraseSegment {
+  text: string
+  t_start_us: number
+  t_end_us: number
+  words: TimelineWord[]
+}
+
+/** Group timeline words into concise 3-5 word caption phrases suitable for short-form video.
+ *  Breaks early on sentence/clause punctuation or speech pauses (>= 250ms), and bounds
+ *  every phrase within clipEndUs.
+ */
+export function chunkWordsToPhrases(
+  words: TimelineWord[],
+  clipEndUs: number,
+  targetMinWords = 3,
+  targetMaxWords = 5,
+): PhraseSegment[] {
+  if (words.length === 0) return []
+  const phrases: PhraseSegment[] = []
+  let currentWords: TimelineWord[] = []
+
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i]
+    currentWords.push(w)
+
+    const isLastWord = i === words.length - 1
+    const nextWord = isLastWord ? null : words[i + 1]
+
+    let shouldBreak = false
+    if (isLastWord) {
+      shouldBreak = true
+    } else if (currentWords.length >= targetMaxWords) {
+      shouldBreak = true
+    } else {
+      const trimmed = w.text.trim()
+      const endsWithSentencePunct = /[.?!]$/.test(trimmed)
+      const endsWithClausePunct = /[,;:\u2014-]$/.test(trimmed)
+      const pauseBeforeNext = nextWord ? nextWord.t_start_us - w.t_end_us : 0
+
+      if (endsWithSentencePunct && currentWords.length >= 2) {
+        shouldBreak = true
+      } else if (endsWithClausePunct && currentWords.length >= targetMinWords) {
+        shouldBreak = true
+      } else if (pauseBeforeNext >= 250_000 && currentWords.length >= 2) {
+        shouldBreak = true
+      }
+    }
+
+    if (shouldBreak && currentWords.length > 0) {
+      const phraseStart = currentWords[0].t_start_us
+      let phraseEnd = currentWords[currentWords.length - 1].t_end_us
+
+      if (nextWord && nextWord.t_start_us > phraseEnd) {
+        const gap = nextWord.t_start_us - phraseEnd
+        if (gap < 250_000) {
+          phraseEnd = Math.min(phraseEnd + 150_000, nextWord.t_start_us)
+        }
+      }
+      phraseEnd = Math.min(phraseEnd, clipEndUs)
+
+      if (phraseEnd > phraseStart) {
+        phrases.push({
+          text: currentWords.map((cw) => cw.text.trim()).filter(Boolean).join(' '),
+          t_start_us: phraseStart,
+          t_end_us: phraseEnd,
+          words: currentWords.map((cw) => ({
+            text: cw.text.trim(),
+            t_start_us: cw.t_start_us,
+            t_end_us: Math.min(cw.t_end_us, phraseEnd),
+          })),
+        })
+      }
+      currentWords = []
+    }
+  }
+
+  return phrases
+}
+
+/** Apply structured transcripts to generate a caption track preserving word timing.
+ *  If `transcripts` argument is omitted, reads the cached transcript for `layer_id`'s
+ *  source media, shifts timestamps to timeline coordinates, and commits.
+ */
+export async function applyTranscriptsHybrid(
+  args: Record<string, unknown>,
+  deps: HybridDeps,
+): Promise<string> {
+  const layerId = args.layer_id as string | undefined
+  if (!layerId || typeof layerId !== 'string') {
+    throw new Error('apply_transcripts: layer_id is required')
+  }
+
+  const { layer, composition } = findLayer(layerId, deps)
+  if (!layer) throw new Error(`apply_transcripts: layer ${layerId} not found`)
+
+  const compId = (args.composition_id as string | undefined) ?? composition.id
+  const snap = deps.actor.snapshot()
+
+  let payloads: TranscriptPayload[]
+  if (Array.isArray(args.transcripts) && args.transcripts.length > 0) {
+    payloads = (args.transcripts as TranscriptPayload[]).map((t) => ({
+      ...t,
+      source: t.source ? {
+        id: layer.id,
+        signature: sourceSignature(layer),
+        project_id: snap.project_id,
+        composition_id: compId,
+      } : undefined,
+    }))
+  } else {
+    // Read from cached transcript
+    if (layer.params.kind !== 'VideoClip' && layer.params.kind !== 'Audio') {
+      throw new Error(`apply_transcripts: layer ${layerId} is not a VideoClip or Audio layer`)
+    }
+    const mediaId = layer.params.media
+    const media = (snap.media_pool as Record<string, MediaItem>)[mediaId]
+    if (!media) throw new Error(`apply_transcripts: layer ${layerId} references missing media ${mediaId}`)
+
+    if (!deps.compute.readTranscript) {
+      throw new Error('apply_transcripts: transcript reading is not available in this build')
+    }
+
+    const srcInUs = layer.params.src_in_us
+    const srcOutUs = layer.params.src_out_us
+    const transcriptJson = await deps.compute.readTranscript(media, srcInUs, srcOutUs)
+    if (!transcriptJson) {
+      throw new Error(`apply_transcripts: no transcript available for media ${mediaId}`)
+    }
+
+    const parsed = JSON.parse(transcriptJson) as {
+      status?: string
+      message?: string
+      word_timing?: string
+      segments?: Array<{
+        text: string
+        t_start_us: number
+        t_end_us: number
+        words?: Array<{ text: string; t_start_us: number; t_end_us: number }>
+      }>
+    }
+
+    if (parsed.status === 'not_generated') {
+      throw new Error(parsed.message || `No transcript generated yet for media ${mediaId}. Call transcribe_clip first.`)
+    }
+
+    const wordTiming = (parsed.word_timing as 'exact' | 'interpolated_from_cue' | 'none') || 'exact'
+    const clipEndUs = layer.t_end_us
+    const rawSegments = parsed.segments || []
+
+    // Collect all valid timeline words inside [srcInUs, srcOutUs]
+    const timelineWords: TimelineWord[] = []
+    let hasExactWords = false
+
+    for (const seg of rawSegments) {
+      if (Array.isArray(seg.words) && seg.words.length > 0) {
+        // Words present: filter strictly to [srcInUs, srcOutUs]
+        const inRangeWords = seg.words.filter((w) => w.t_end_us > srcInUs && w.t_start_us < srcOutUs)
+        if (inRangeWords.length > 0) {
+          hasExactWords = true
+          for (const w of inRangeWords) {
+            const wStart = Math.max(0, Math.max(srcInUs, w.t_start_us) - srcInUs) + layer.t_start_us
+            const wEnd = Math.max(0, Math.min(srcOutUs, w.t_end_us) - srcInUs) + layer.t_start_us
+            const tlStart = Math.max(layer.t_start_us, Math.min(clipEndUs, wStart))
+            const tlEnd = Math.max(layer.t_start_us, Math.min(clipEndUs, wEnd))
+            if (tlEnd > tlStart && w.text.trim()) {
+              timelineWords.push({ text: w.text.trim(), t_start_us: tlStart, t_end_us: tlEnd })
+            }
+          }
+        }
+      }
+    }
+
+    let shiftedSegments: Array<{ text: string; t_start_us: number; t_end_us: number; words: TimelineWord[] }> = []
+
+    if (hasExactWords && timelineWords.length > 0) {
+      shiftedSegments = chunkWordsToPhrases(timelineWords, clipEndUs)
+    } else {
+      // Fallback when no word timings are present: clamp segment bounds and synthesize words for long sentences
+      for (const seg of rawSegments) {
+        if (seg.t_end_us <= srcInUs || seg.t_start_us >= srcOutUs) continue
+        const sStart = Math.max(srcInUs, seg.t_start_us)
+        const sEnd = Math.min(srcOutUs, seg.t_end_us)
+        if (sEnd <= sStart) continue
+        const tlStart = Math.max(layer.t_start_us, Math.min(clipEndUs, (sStart - srcInUs) + layer.t_start_us))
+        const tlEnd = Math.max(layer.t_start_us, Math.min(clipEndUs, (sEnd - srcInUs) + layer.t_start_us))
+        if (tlEnd <= tlStart) continue
+
+        const wordsInText = seg.text.trim().split(/\s+/).filter(Boolean)
+        if (wordsInText.length > 5) {
+          const segDuration = tlEnd - tlStart
+          const wordDur = Math.floor(segDuration / wordsInText.length)
+          const synthWords: TimelineWord[] = wordsInText.map((tw, idx) => ({
+            text: tw,
+            t_start_us: tlStart + idx * wordDur,
+            t_end_us: idx === wordsInText.length - 1 ? tlEnd : tlStart + (idx + 1) * wordDur,
+          }))
+          const chunks = chunkWordsToPhrases(synthWords, tlEnd)
+          shiftedSegments.push(...chunks)
+        } else {
+          shiftedSegments.push({
+            text: seg.text.trim(),
+            t_start_us: tlStart,
+            t_end_us: tlEnd,
+            words: [],
+          })
+        }
+      }
+    }
+
+    const payload: TranscriptPayload = {
+      source: {
+        id: layer.id,
+        signature: sourceSignature(layer),
+        project_id: snap.project_id,
+        composition_id: compId,
+      },
+      word_timing: wordTiming,
+      segments: shiftedSegments,
+    }
+    payloads = [payload]
+  }
+
+  // Compute may await transcript I/O while the GUI keeps editing. Diff against
+  // the immediate pre-dispatch state, not the older source-read snapshot.
+  const previousIds = new Set(deps.actor.snapshot().compositions[compId]?.tracks.flatMap(t => t.layers.map(l => l.id)) ?? [])
+  const r = deps.actor.dispatch('apply_transcripts', {
+    project_id: snap.project_id,
+    composition_id: compId,
+    transcripts: payloads,
+    source_ids: [layer.id],
+  })
+  if (!r.ok) throw new Error(JSON.stringify(r.error))
+
+  const trackId = r.value as string
+  // Return this operation's caption IDs, not unrelated tracks or word arrays.
+  // The actor still owns creation, timing, history and the authoritative state.
+  const createdTracks = deps.actor.snapshot().compositions[compId]?.tracks.map(t => ({
+    id: t.id, layers: t.layers.filter(l => !previousIds.has(l.id)),
+  })).filter(t => t.layers.length) ?? []
+  const captions = createdTracks.flatMap(t => t.layers)
+  return JSON.stringify({ track_id: trackId, layer_id: layer.id,
+    caption_track_ids: createdTracks.map(t => t.id),
+    caption_layer_ids: captions.map(c => c.id), caption_count: captions.length,
+    timeline_range: captions.length ? {
+      start_us: Math.min(...captions.map(c => c.t_start_us)),
+      end_us: Math.max(...captions.map(c => c.t_end_us)),
+    } : null,
+  })
+}
+
 
 /** The detection defaults as Rust states them (`Backend::shot_default_opts`):
  *  what `reduce` gets for a parameter every human surface may leave out, and
@@ -815,6 +1077,9 @@ export async function runHybrid(tool: string, args: Record<string, unknown>, dep
         deps,
       )
       return simplified ? `${track_id} (some ASS styling was simplified)` : track_id
+    }
+    case 'apply_transcripts': {
+      return applyTranscriptsHybrid(args, deps)
     }
     case 'synthesize_speech': {
       // The TS host applies the WRITES: add_media_item + enqueueDerivatives +

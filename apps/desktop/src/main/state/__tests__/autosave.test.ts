@@ -51,6 +51,30 @@ describe('autosave forceFlush', () => {
     ctl.start(); await ctl.forceFlush(); ctl.stop()
     expect(fs.files.size).toBe(0)
   })
+
+  it('allows switching away from a saved folder moved outside the app', async () => {
+    const { fs, ctl } = setup()
+    ctl.start()
+    await ctl.forceFlush()
+    fs.files.delete('/ws/project.json')
+    const write = vi.spyOn(fs, 'writeFile').mockImplementation(() => { throw new Error('ENOENT') })
+    await ctl.forceFlush({ skipMissingCleanWorkspace: true })
+    expect(write).not.toHaveBeenCalled()
+    // Explicit Save still reports the missing destination.
+    await expect(ctl.forceFlush()).rejects.toThrow('ENOENT')
+    ctl.stop()
+  })
+
+  it('never skips unsaved changes when the old folder is missing', async () => {
+    const { fs, actor, ctl } = setup()
+    ctl.start()
+    await ctl.forceFlush()
+    actor.dispatch('add_track', {})
+    fs.files.delete('/ws/project.json')
+    vi.spyOn(fs, 'writeFile').mockImplementation(() => { throw new Error('ENOENT: unsaved project destination missing') })
+    await expect(ctl.forceFlush({ skipMissingCleanWorkspace: true })).rejects.toThrow('unsaved project')
+    ctl.stop()
+  })
 })
 
 describe('autosave debounce', () => {

@@ -45,7 +45,7 @@ export interface AutosaveDeps {
 
 export interface AutosaveController {
   start(): void
-  forceFlush(): Promise<void>
+  forceFlush(options?: { skipMissingCleanWorkspace?: boolean }): Promise<void>
   stop(): void
 }
 
@@ -59,6 +59,7 @@ export function createAutosave(deps: AutosaveDeps): AutosaveController {
   let pending: ReturnType<typeof setTimeout> | null = null
   let commitsSinceSnapshot = 0
   let lastSnapshotAtMs = now().getTime()
+  let dirty = true
 
   /** ISO-8601, no colons/dashes/dots — sorts lexicographically == chronologically
    *  (Windows-filename-safe). */
@@ -68,6 +69,7 @@ export function createAutosave(deps: AutosaveDeps): AutosaveController {
 
   function persist(ws: string): void {
     deps.fs.writeFile(deps.join(ws, PROJECT_FILE), deps.serialize(deps.actor.snapshot()))
+    dirty = false
   }
 
   function takeSnapshot(ws: string): void {
@@ -106,6 +108,7 @@ export function createAutosave(deps: AutosaveDeps): AutosaveController {
   }
 
   function onChange(_e: ChangeEvent): void {
+    dirty = true
     if (pending !== null) clearTimer(pending)
     pending = setTimer(flushDebounced, debounceMs)
   }
@@ -117,10 +120,14 @@ export function createAutosave(deps: AutosaveDeps): AutosaveController {
     },
     /** Flush + snapshot right now, skipping the debounce (Cmd-S / quit gate). The
      *  force path always snapshots and resets the counters. */
-    async forceFlush(): Promise<void> {
+    async forceFlush(options): Promise<void> {
       if (pending !== null) { clearTimer(pending); pending = null }
       const ws = deps.workspaceDir()
       if (ws === null) return
+      // A saved project may have been moved to Trash while the dashboard is
+      // showing. Do not let a redundant flush block opening another project.
+      // Unsaved work still refuses normally; explicit Save never skips errors.
+      if (options?.skipMissingCleanWorkspace && !dirty && !deps.fs.exists(ws)) return
       persist(ws)
       takeSnapshot(ws)
       commitsSinceSnapshot = 0

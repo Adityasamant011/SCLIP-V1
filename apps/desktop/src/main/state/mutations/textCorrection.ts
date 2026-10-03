@@ -31,7 +31,7 @@ export function applyTranscripts(p: Project, ids: IdGen, transcripts: Transcript
       const timing: CaptionTiming = { version: 1, text: s.text, duration_us: end - start, provenance: t.word_timing,
         words: s.words.map(w => ({ text: w.text, start_us: Math.max(0, w.t_start_us - start), end_us: Math.max(0, w.t_end_us - start) })),
         ...(source ? { source: { id: source.id, signature: sourceSignature(source) } } : {}) }
-      cues.push({ text: s.text, start_us: start, end_us: end, metadata: readCaptionTiming(timing) ? { [CAPTION_TIMING_KEY]: timing } : undefined })
+      cues.push({ text: s.text, start_us: start, end_us: end, style: { bold: true }, metadata: readCaptionTiming(timing) ? { [CAPTION_TIMING_KEY]: timing } : undefined })
     }
   }
   return applyAddCaptionTrack(p, ids, cues, c.width, c.height, null, c.id)

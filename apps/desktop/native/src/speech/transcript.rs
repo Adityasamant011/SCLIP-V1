@@ -14,13 +14,13 @@
 //! `apply_subtitles` caption flow (SRT is cue-granular, so word spans are not
 //! represented there — by design; they live in the JSON `segments`).
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Provenance of the per-word timestamps in a [`Transcript`]. Downstream
 /// text-editing reads this to know whether a word boundary is frame-trustworthy
 /// (`Exact`, straight from an engine's token offsets) or approximate
 /// (`InterpolatedFromCue`, derived by splitting a cue span across its words).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WordTiming {
     /// Word times come straight from the engine's per-token offsets.
@@ -33,7 +33,7 @@ pub enum WordTiming {
 }
 
 /// One word with its own `[t_start_us, t_end_us]` span.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Word {
     pub t_start_us: i64,
     pub t_end_us: i64,
@@ -42,7 +42,7 @@ pub struct Word {
 
 /// One transcript segment — an SRT cue, or a whisper `transcription[]` entry:
 /// a timed span of text plus its constituent [`Word`]s.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Segment {
     pub t_start_us: i64,
     pub t_end_us: i64,
@@ -51,7 +51,7 @@ pub struct Segment {
 }
 
 /// The single normalized shape produced by every backend after parsing.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Transcript {
     pub segments: Vec<Segment>,
     pub language: Option<String>,
@@ -96,6 +96,122 @@ impl Transcript {
         }
         out
     }
+}
+
+/// Persistent transcript derivative stored at `<cache>/transcripts/{key}.json`.
+/// Timestamps in `segments` are in **source-media relative time** (0 = start of source media).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CachedTranscript {
+    pub source_hash: String,
+    pub is_full_source: bool,
+    pub source_duration_us: Option<i64>,
+    pub in_us: i64,
+    pub out_us: i64,
+    pub backend: String,
+    pub language: Option<String>,
+    pub word_timing: WordTiming,
+    pub segments: Vec<Segment>,
+}
+
+impl CachedTranscript {
+    /// Slice segments and words to a requested sub-window `[req_in_us, req_out_us]`.
+    /// Segments intersecting `[req_in_us, req_out_us]` are kept.
+    pub fn slice_window(&self, req_in_us: i64, req_out_us: i64) -> Self {
+        let mut sliced_segments = Vec::new();
+        for seg in &self.segments {
+            if seg.t_end_us > req_in_us && seg.t_start_us < req_out_us {
+                let mut s = seg.clone();
+                s.words.retain(|w| w.t_end_us > req_in_us && w.t_start_us < req_out_us);
+                if !seg.words.is_empty() && s.words.is_empty() {
+                    continue;
+                }
+                for w in &mut s.words {
+                    w.t_start_us = w.t_start_us.max(req_in_us);
+                    w.t_end_us = w.t_end_us.min(req_out_us);
+                }
+                if !s.words.is_empty() {
+                    s.t_start_us = s.words.first().unwrap().t_start_us.max(req_in_us);
+                    s.t_end_us = s.words.last().unwrap().t_end_us.min(req_out_us);
+                    s.text = s
+                        .words
+                        .iter()
+                        .map(|w| w.text.trim())
+                        .filter(|t| !t.is_empty())
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                } else {
+                    s.t_start_us = s.t_start_us.max(req_in_us);
+                    s.t_end_us = s.t_end_us.min(req_out_us);
+                }
+                if s.t_end_us > s.t_start_us {
+                    sliced_segments.push(s);
+                }
+            }
+        }
+        CachedTranscript {
+            source_hash: self.source_hash.clone(),
+            is_full_source: false,
+            source_duration_us: self.source_duration_us,
+            in_us: req_in_us,
+            out_us: req_out_us,
+            backend: self.backend.clone(),
+            language: self.language.clone(),
+            word_timing: self.word_timing,
+            segments: sliced_segments,
+        }
+    }
+
+    /// Convert back to a `Transcript` shifted to timeline placement:
+    /// `t_timeline = (t_source - source_in_us) + timeline_start_us`.
+    pub fn to_shifted_transcript(&self, source_in_us: i64, timeline_start_us: i64) -> Transcript {
+        let mut segments = self.segments.clone();
+        for seg in &mut segments {
+            seg.t_start_us = (seg.t_start_us - source_in_us).max(0) + timeline_start_us;
+            seg.t_end_us = (seg.t_end_us - source_in_us).max(0) + timeline_start_us;
+            for w in &mut seg.words {
+                w.t_start_us = (w.t_start_us - source_in_us).max(0) + timeline_start_us;
+                w.t_end_us = (w.t_end_us - source_in_us).max(0) + timeline_start_us;
+            }
+        }
+        Transcript {
+            segments,
+            language: self.language.clone(),
+            word_timing: self.word_timing,
+        }
+    }
+}
+
+/// Content-addressed transcript cache key:
+/// `blake3(source_hash | full_or_range | backend | language | want_word_timing)`
+pub fn transcript_cache_key(
+    source_hash: &str,
+    range: Option<(i64, i64)>,
+    backend: &str,
+    language: Option<&str>,
+    want_word_timing: bool,
+) -> String {
+    let mut h = blake3::Hasher::new();
+    h.update(source_hash.as_bytes());
+    h.update(b"\0");
+    match range {
+        None => {
+            h.update(b"full\0");
+        }
+        Some((in_us, out_us)) => {
+            h.update(b"range\0");
+            h.update(&in_us.to_le_bytes());
+            h.update(&out_us.to_le_bytes());
+            h.update(b"\0");
+        }
+    }
+    h.update(backend.as_bytes());
+    h.update(b"\0");
+    if let Some(lang) = language {
+        h.update(lang.as_bytes());
+    }
+    h.update(b"\0");
+    h.update(&[if want_word_timing { 1 } else { 0 }]);
+    h.finalize().to_hex().to_string()
 }
 
 fn shift_us(base_us: i64, offset_us: i64) -> i64 {
@@ -196,5 +312,109 @@ mod tests {
             serde_json::to_string(&WordTiming::None).unwrap(),
             "\"none\""
         );
+    }
+
+    #[test]
+    fn cached_transcript_roundtrip() {
+        let t = sample();
+        let cached = CachedTranscript {
+            source_hash: "abcd1234ef".into(),
+            is_full_source: true,
+            source_duration_us: Some(10_000_000),
+            in_us: 0,
+            out_us: 10_000_000,
+            backend: "openai".into(),
+            language: Some("en".into()),
+            word_timing: WordTiming::InterpolatedFromCue,
+            segments: t.segments,
+        };
+        let json = serde_json::to_string(&cached).unwrap();
+        let deserialized: CachedTranscript = serde_json::from_str(&json).unwrap();
+        assert_eq!(cached, deserialized);
+    }
+
+    #[test]
+    fn cached_transcript_slice_window() {
+        let t = sample();
+        let cached = CachedTranscript {
+            source_hash: "hash123".into(),
+            is_full_source: true,
+            source_duration_us: Some(10_000_000),
+            in_us: 0,
+            out_us: 10_000_000,
+            backend: "openai".into(),
+            language: Some("en".into()),
+            word_timing: WordTiming::InterpolatedFromCue,
+            segments: t.segments,
+        };
+        // Slice window [2_000_000, 3_500_000]:
+        // Segment 1 is [1_000_000, 2_500_000], intersects. Word "world" is [1_750_000, 2_500_000], intersects [2_000_000, 3_500_000].
+        // Segment 2 is [3_000_000, 4_000_000], intersects. Word "Bye" is [3_000_000, 4_000_000], intersects.
+        let sliced = cached.slice_window(2_000_000, 3_500_000);
+        assert_eq!(sliced.segments.len(), 2);
+        assert_eq!(sliced.segments[0].words.len(), 1);
+        assert_eq!(sliced.segments[0].words[0].text, "world");
+        assert_eq!(sliced.segments[1].words.len(), 1);
+        assert_eq!(sliced.segments[1].words[0].text, "Bye");
+
+        // Out of window:
+        let empty = cached.slice_window(5_000_000, 6_000_000);
+        assert!(empty.segments.is_empty());
+    }
+
+    #[test]
+    fn cached_transcript_slice_window_drops_ghost_and_clamps_bounds() {
+        let cached = CachedTranscript {
+            source_hash: "hash123".into(),
+            is_full_source: true,
+            source_duration_us: Some(10_000_000),
+            in_us: 0,
+            out_us: 10_000_000,
+            backend: "whisper_cpp".into(),
+            language: Some("en".into()),
+            word_timing: WordTiming::Exact,
+            segments: vec![
+                Segment {
+                    t_start_us: 0,
+                    t_end_us: 3_000_000,
+                    text: "Keep this".into(),
+                    words: vec![
+                        word(500_000, 1_000_000, "Keep"),
+                        word(1_000_000, 1_500_000, "this"),
+                    ],
+                },
+                // Ghost segment: t_start_us is inside window, but all words start after window!
+                Segment {
+                    t_start_us: 1_900_000,
+                    t_end_us: 4_000_000,
+                    text: "Ghost speech".into(),
+                    words: vec![
+                        word(2_200_000, 2_800_000, "Ghost"),
+                        word(2_800_000, 3_500_000, "speech"),
+                    ],
+                },
+            ],
+        };
+        // Window [0, 2_000_000]:
+        // Segment 0 words are in [500_000, 1_500_000], fully inside.
+        // Segment 1 intersects window [0, 2_000_000] at segment level (t_start=1.9s),
+        // but its first word is at 2.2s! After retain, words is empty -> MUST BE DROPPED!
+        let sliced = cached.slice_window(0, 2_000_000);
+        assert_eq!(sliced.segments.len(), 1);
+        assert_eq!(sliced.segments[0].text, "Keep this");
+        assert_eq!(sliced.segments[0].t_start_us, 500_000);
+        assert_eq!(sliced.segments[0].t_end_us, 1_500_000);
+    }
+
+    #[test]
+    fn transcript_cache_key_differs_by_range_and_params() {
+        let k_full = transcript_cache_key("hash", None, "openai", Some("en"), true);
+        let k_ranged = transcript_cache_key("hash", Some((0, 5_000_000)), "openai", Some("en"), true);
+        let k_whisper = transcript_cache_key("hash", None, "whisper_cpp", Some("en"), true);
+        let k_no_words = transcript_cache_key("hash", None, "openai", Some("en"), false);
+
+        assert_ne!(k_full, k_ranged);
+        assert_ne!(k_full, k_whisper);
+        assert_ne!(k_full, k_no_words);
     }
 }

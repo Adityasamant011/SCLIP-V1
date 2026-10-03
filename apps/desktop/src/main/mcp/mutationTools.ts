@@ -11,7 +11,7 @@ export type McpRoute = 'ts' | 'rust' | 'hybrid' | 'motif'
  *  has to merge into the catalog from the TS side. */
 export const HYBRID_TOOLS: ReadonlySet<string> = new Set([
   'import_media', 'apply_subtitles', 'synthesize_speech', 'auto_split_by_shot',
-  'remove_pauses',
+  'remove_pauses', 'apply_transcripts',
 ])
 
 /** Motif catalog-read + authoring + install + staleness tools, served in TS by

@@ -346,6 +346,8 @@ const VALIDATION_COPY: { [R in ValidationRule]: Spec<ValidationOf<R>> } = {
   // offers the user no anchor a live selection could not satisfy.
   MarkerAnchorNotInComposition: { tier: "generic" },
   MarkerAnchorLayerHasNoSourceWindow: { tier: "generic" },
+  RoughCutClipCountMismatch: { tier: "generic" },
+  RoughCutGapDetected: { tier: "generic" },
 };
 
 // ── Composition ─────────────────────────────────────────────────────────────

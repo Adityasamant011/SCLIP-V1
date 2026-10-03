@@ -84,8 +84,8 @@
 }
 
 .status-bar-source.source-user {
-  background: rgba(59, 130, 246, 0.12);
-  color: var(--color-blue-300);
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
 }
 
 .status-bar-source.source-agent {
@@ -111,7 +111,7 @@
 }
 
 .status-bar-level-dot.level-info {
-  background: var(--color-blue-400);
+  background: #ffffff;
 }
 
 .status-bar-level-dot.level-warn {
@@ -147,9 +147,9 @@
 }
 
 .status-bar-badge-running {
-  background: rgba(59, 130, 246, 0.12);
-  border-color: rgba(59, 130, 246, 0.3);
-  color: var(--color-blue-300);
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.3);
+  color: #ffffff;
 }
 
 /* A standing mode chip, not a button: the badges above open the log, this one

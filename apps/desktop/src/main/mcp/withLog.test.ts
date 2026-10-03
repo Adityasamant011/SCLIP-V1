@@ -74,7 +74,7 @@ function tsHostStub(compute: Record<string, unknown> = {}) {
     snapshotComposition: () => root(actor.snapshot()),
   }
   return {
-    actor, hybridDeps,
+    actor, hybridDeps, mcpHybridDeps: hybridDeps,
     mcpCall: (name: string, argsJson: string) => actor.mcpCall(name, argsJson),
     motifTool: () => [],
     beginAgentSessionSlot: () => {},
@@ -193,6 +193,53 @@ describe('all six request handlers are decorated', () => {
     const { entries, deps } = collector()
     await decoratedCallTool(deps)('ping')
     expect('client_info' in detailsOf(entries[0])).toBe(false)
+  })
+})
+
+describe('Phase 2E guard through the real MCP call handler', () => {
+  it('rejects a fourth timeline mutation even after checkpoint restore', async () => {
+    const registered = spyRegistrations()
+    const ts = tsHostStub()
+    const track = root(ts.actor.snapshot()).tracks[0].id
+    const added = ts.actor.dispatch('add_layer', { track, kind: 'color', t_start_us: 0, t_end_us: 10_000_000 })
+    expect(added.ok).toBe(true)
+    if (!added.ok) return
+    const layerId = added.value
+    buildMcpServer(fakeBackend(), { getTsHost: () => ts, revisionLoop: true })
+    const listed = await registered.get(ListToolsRequestSchema)!({ params: {} }, undefined) as { tools: Array<{ name: string }> }
+    expect(listed.tools.some((tool) => tool.name === 'revision_control')).toBe(true)
+    const handler = registered.get(CallToolRequestSchema)!
+    const call = (name: string, args: Record<string, unknown> = {}) => handler({ params: { name, arguments: args } }, undefined) as Promise<any>
+    for (let i = 0; i < 8; i++) expect((await call('get_timeline_context')).isError).not.toBe(true)
+    const overBudget = await call('get_timeline_context')
+    expect(overBudget.isError).toBe(true)
+    expect(overBudget.content[0].text).toContain('inspection budget reached')
+    const comp = root(ts.actor.snapshot())
+    const review = { version: 1, project_id: ts.actor.snapshot().project_id, composition_id: comp.id,
+      summary: 'A reviewed cut with one unresolved issue', total_duration_us: comp.duration_us,
+      clip_count: 1, inspections: [], identified_issues: [{ id: 'issue-1', severity: 'critical',
+        timeline_t_us: 5_000_000, affected_range_us: [4_000_000, 6_000_000],
+        issue_type: 'other', description: 'Test issue', suggestion: 'Agent chooses' }], ready_for_next_stage: false }
+    const initial = await call('validate_rough_cut_review', { review })
+    expect(JSON.parse(initial.content[0].text).valid).toBe(true)
+    const checkpoint = await call('checkpoint', { label: 'Before AI Revision — issue-1' })
+    expect(checkpoint.isError).not.toBe(true)
+    const checkpointId = checkpoint.content[0].text
+    const selected = await call('revision_control', { action: 'select_issue', issue_id: 'issue-1' })
+    expect(selected.isError).not.toBe(true)
+    for (const end of [9_000_000, 8_000_000, 7_000_000]) {
+      const edit = await call('trim_layer', { layer_id: layerId, edge: 'out', new_t_us: end })
+      expect(edit.isError).not.toBe(true)
+    }
+    const restored = await call('restore_checkpoint', { checkpoint_id: checkpointId })
+    expect(restored.isError).not.toBe(true)
+    const beforeFourth = JSON.stringify(ts.actor.snapshot())
+    const blocked = await call('trim_layer', { layer_id: layerId, edge: 'out', new_t_us: 6_000_000 })
+    expect(blocked.isError).toBe(true)
+    expect(blocked.content[0].text).toContain('attempt limit reached')
+    expect(JSON.stringify(ts.actor.snapshot())).toBe(beforeFourth)
+    const state = await call('revision_control', { action: 'status' })
+    expect(JSON.parse(state.content[0].text).attempts['issue-1']).toBe(3)
   })
 })
 
@@ -446,9 +493,10 @@ describe('hybrids keep the mechanical line — a wrong attribution is worse', ()
     const ts = tsHostStub({ parseSubtitles: async () => { await gate; return parsed } })
     const call = sessionCallTool(deps, ts)
 
+    const srtPath = process.platform === 'win32' ? 'C:/media/captions.srt' : '/media/captions.srt'
     const both = Promise.all([
       call('apply_subtitles', { body: '1\n00:00:00,000 --> 00:00:01,000\nhi\n' }),
-      call('import_media', { path: 'C:/media/captions.srt' }),
+      call('import_media', { path: srtPath }),
     ])
     release()
     await both

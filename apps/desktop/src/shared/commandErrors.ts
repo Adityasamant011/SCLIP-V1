@@ -94,6 +94,10 @@ export type ValidationError =
   // CompositionRef) — the derivation reads `params.src_in_us`. `kind` names
   // what was found, because the fix is a different layer, not a different time.
   | { rule: 'MarkerAnchorLayerHasNoSourceWindow'; marker: Uuid; layer: Uuid; kind: string }
+  // Post-commit rough-cut consistency checks; preserve their structured
+  // ValidationFailed wire shape rather than reporting an unrelated backend error.
+  | { rule: 'RoughCutClipCountMismatch'; expected: number; actual: number }
+  | { rule: 'RoughCutGapDetected'; at_us: TimeUs; next_start_us: TimeUs }
 
 // ── CommandError — the full mutation-error vocabulary. Individual dispatch
 // arms construct only the variants they need. ──

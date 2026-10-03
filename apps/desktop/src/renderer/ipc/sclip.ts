@@ -1,7 +1,6 @@
 import { invoke } from '@/bridge/ipc'
 
 export const sclipRestartHermes = () => invoke('sclip_restart_hermes')
-export const sclipSetOpenRouterKey = (key: string) => invoke('sclip_set_openrouter_key', { key })
 
 export interface HermesStatus {
   online: boolean
@@ -75,9 +74,11 @@ export async function sclipArchiveProjectSession(projectId: string, sessionId: s
   return invoke<void>('sclip_archive_project_session', { projectId, sessionId })
 }
 
-/** Opens the project-scoped interactive Hermes PTY and returns its in-memory replay buffer. */
-export async function sclipOpenTerminal(projectId: string, sessionId: string, cols: number, rows: number): Promise<string> {
-  return invoke<string>('sclip_open_terminal', { projectId, sessionId, cols, rows })
+/** Opens the project-scoped interactive Hermes PTY and returns a replay snapshot. */
+export interface SclipTerminalSnapshot { history: string; sequence: number }
+
+export async function sclipOpenTerminal(projectId: string, sessionId: string, cols: number, rows: number): Promise<SclipTerminalSnapshot> {
+  return invoke<SclipTerminalSnapshot>('sclip_open_terminal', { projectId, sessionId, cols, rows })
 }
 
 export async function sclipTerminalInput(projectId: string, sessionId: string, data: string): Promise<void> {
@@ -96,10 +97,12 @@ export interface HermesConfigView {
   configuredKeys: {
     anthropic: boolean
     openai: boolean
+    'openai-api'?: boolean
     openrouter: boolean
     groq: boolean
     deepseek: boolean
     gemini: boolean
+    custom?: boolean
   }
 }
 
@@ -119,8 +122,16 @@ export async function sclipSetHermesConfig(update: HermesConfigUpdate): Promise<
   return invoke<{ ok: boolean }>('sclip_set_hermes_config', update as unknown as Record<string, unknown>)
 }
 
-export async function sclipRestartTerminal(projectId: string, sessionId: string, cols = 100, rows = 30): Promise<string> {
-  return invoke<string>('sclip_restart_terminal', { projectId, sessionId, cols, rows })
+export async function sclipRemoveHermesKey(provider: string): Promise<{ ok: boolean }> {
+  return invoke<{ ok: boolean }>('sclip_remove_hermes_key', { provider })
+}
+
+export async function sclipTestHermesConnection(selection: { provider: string; model: string; customBaseUrl?: string }): Promise<{ ok: boolean; message: string }> {
+  return invoke<{ ok: boolean; message: string }>('sclip_test_hermes_connection', selection)
+}
+
+export async function sclipRestartTerminal(projectId: string, sessionId: string, cols = 100, rows = 30): Promise<SclipTerminalSnapshot> {
+  return invoke<SclipTerminalSnapshot>('sclip_restart_terminal', { projectId, sessionId, cols, rows })
 }
 
 export function openSclipSettings(category = 'agent'): void {

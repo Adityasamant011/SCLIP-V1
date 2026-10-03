@@ -297,7 +297,7 @@ process.on('exit', () => {
 /// same-userData relaunch: mint the dir with `tmpDir` and hand it to both
 /// launches (see the lifecycle comment above).
 export async function launchApp(
-  opts: { userDataDir?: string; locale?: string; env?: Record<string, string> } = {},
+  opts: { userDataDir?: string; locale?: string; env?: Record<string, string>; realKeychain?: boolean } = {},
 ): Promise<{ app: ElectronApplication; page: Page }> {
   const locale = opts.locale ?? 'en-US'
   const localeBase = locale.split('-')[0] ?? locale
@@ -314,7 +314,7 @@ export async function launchApp(
     mintedUserDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'weftcut-e2e-'))
     args.push(`--user-data-dir=${mintedUserDataDir}`)
   }
-  args.push(MAIN)
+  args.push(opts.realKeychain ? path.join(__dirname, 'realKeychainEntry.cjs') : MAIN)
   const app = await electron.launch({
     args,
     // The elevated-run notice is a modal dialog; suppress it so it can't block the

@@ -1,4 +1,6 @@
 import { readFileSync } from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { MCP_ARG_PARSERS, MCP_TOOL_DEFS } from '../mcp-commands'
 import { PRODUCTION_OPS } from '../commands'
@@ -7,7 +9,8 @@ import { createActor } from '../actor'
 import { seededGen } from '../ids'
 import { blankProject, rootComposition, type TextParams } from '../model'
 
-const doc = readFileSync('../../docs/mcp.md', 'utf8')
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../../../..')
+const doc = readFileSync(path.join(repoRoot, 'docs/mcp.md'), 'utf8')
 const editDocs = doc.split('### Edit tools')[1]!.split('\n### ')[0]!
 const positionDocs = editDocs.split('Position and motion paths:')[1]!.split('\nEffects (')[0]!
 

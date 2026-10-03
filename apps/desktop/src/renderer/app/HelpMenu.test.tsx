@@ -78,7 +78,7 @@ describe("HelpMenu", () => {
     render(<HelpMenu />);
 
     fireEvent.click(screen.getByRole("button", { name: /Help/ }));
-    fireEvent.click(await screen.findByText("About WeftCut"));
+    fireEvent.click(await screen.findByText("About Sclip"));
 
     expect(versions).toHaveBeenCalledOnce();
     expect(await screen.findByText("Version 1.2.3")).toBeTruthy();
@@ -89,7 +89,7 @@ describe("HelpMenu", () => {
     render(<HelpMenu />);
 
     fireEvent.click(screen.getByRole("button", { name: /Help/ }));
-    fireEvent.click(await screen.findByText("About WeftCut"));
+    fireEvent.click(await screen.findByText("About Sclip"));
 
     fireEvent.click(await screen.findByRole("button", { name: "MIT" }));
     expect(open).toHaveBeenCalledWith(LICENSE_URL);

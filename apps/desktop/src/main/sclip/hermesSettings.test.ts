@@ -1,0 +1,145 @@
+import { describe, expect, it, vi } from 'vitest'
+import { configuredHermesKeys, credentialTags, resolveHermesProviderEnvironment, testHermesConnection, validateHermesProfile } from './hermesSettings.js'
+import { createHermesOutputRedactor, hermesBaseEnvironment, redactHermesSecrets } from './hermesSecrets.js'
+import { readHermesProfile, writeHermesProfile } from './hermesRuntime.js'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+
+const SECRET = 'SCLIP_TEST_SECRET_DO_NOT_LEAK_12345'
+const base = { provider: 'openrouter', model: 'nex-agi/nex-n2.5-pro:free', maxIterations: 30 }
+
+describe('secure Hermes settings', () => {
+  it('uses the existing Hermes max_turns setting, migrating only the old Sclip default', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'sclip-hermes-budget-'))
+    try {
+      expect(readHermesProfile(dir).maxIterations).toBe(100)
+      writeFileSync(path.join(dir, 'config.yaml'), 'agent:\n  max_iterations: 30\n')
+      expect(readHermesProfile(dir).maxIterations).toBe(100)
+      writeHermesProfile(dir, 1234)
+      expect(readFileSync(path.join(dir, 'config.yaml'), 'utf8')).toContain('max_turns: 100')
+      expect(readFileSync(path.join(dir, 'config.yaml'), 'utf8')).not.toContain('max_iterations:')
+      writeHermesProfile(dir, 1234, { maxIterations: 30 })
+      expect(readHermesProfile(dir).maxIterations).toBe(30)
+      writeFileSync(path.join(dir, 'config.yaml'), 'agent:\n  max_iterations: 42\n')
+      expect(readHermesProfile(dir).maxIterations).toBe(42)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+  it('keeps provider credentials separate, gives secure storage priority, and never puts a key in the safe view', () => {
+    const keys = new Map([['sclip_openrouter', SECRET], ['openai', 'other-secret']])
+    const read = (tag: string) => keys.get(tag)
+    expect(configuredHermesKeys(read)).toMatchObject({ openrouter: true, 'openai-api': true, anthropic: false })
+    expect(JSON.stringify(configuredHermesKeys(read))).not.toContain(SECRET)
+    expect(resolveHermesProviderEnvironment(base, read, { OPENROUTER_API_KEY: 'fallback' })).toEqual({ OPENROUTER_API_KEY: SECRET })
+    expect(resolveHermesProviderEnvironment({ ...base, provider: 'openai-api' }, read, {})).toEqual({ OPENAI_API_KEY: 'other-secret' })
+    expect(credentialTags('openrouter')).toEqual(['sclip_openrouter', 'openrouter'])
+    keys.delete('sclip_openrouter')
+    expect(resolveHermesProviderEnvironment(base, read, { OPENROUTER_API_KEY: 'fallback' })).toEqual({ OPENROUTER_API_KEY: 'fallback' })
+    expect(() => resolveHermesProviderEnvironment(base, read, {})).toThrow('OpenRouter API key is not configured')
+  })
+
+  it('rejects credential-bearing URLs and YAML-breaking model IDs', () => {
+    expect(() => validateHermesProfile({ ...base, model: 'valid\napi_key: secret' })).toThrow('model')
+    expect(() => validateHermesProfile({ ...base, customBaseUrl: 'https://user:secret@example.com/v1' })).toThrow('without credentials')
+    expect(() => validateHermesProfile({ ...base, customBaseUrl: 'https://example.com/v1?key=secret' })).toThrow('without credentials')
+  })
+
+  it('does not leak provider errors or credentials through connection status', async () => {
+    const request = vi.fn(async () => new Response(JSON.stringify({ error: SECRET }), { status: 401 })) as unknown as typeof fetch
+    const result = await testHermesConnection(base, () => SECRET, {}, request)
+    expect(result).toEqual({ ok: false, message: 'Provider authentication failed.' })
+    expect(JSON.stringify(result)).not.toContain(SECRET)
+    const thrown = vi.fn(async () => { throw new Error(`Authorization: ${SECRET}`) }) as unknown as typeof fetch
+    expect(JSON.stringify(await testHermesConnection(base, () => SECRET, {}, thrown))).not.toContain(SECRET)
+  })
+
+  it('does not treat OpenRouter public model listing as proof a key works', async () => {
+    const request = vi.fn(async (url: string) => url.endsWith('/key')
+      ? new Response(JSON.stringify({ error: SECRET }), { status: 401 })
+      : new Response(JSON.stringify({ data: [{ id: base.model }] }), { status: 200 })) as unknown as typeof fetch
+    const result = await testHermesConnection(base, () => SECRET, {}, request)
+    expect(result).toEqual({ ok: false, message: 'Provider authentication failed.' })
+    expect(request).toHaveBeenCalledTimes(1)
+  })
+
+  it('probes the configured base URL after authenticating the provider key', async () => {
+    const request = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({ data: [{ id: base.model }] }), { status: 200 }))
+    const result = await testHermesConnection({ ...base, customBaseUrl: 'https://gateway.example/v1' }, () => SECRET, {}, request)
+    expect(result).toEqual({ ok: true, message: 'Connected successfully.' })
+    expect(request.mock.calls.map(([url]) => url)).toEqual([
+      'https://openrouter.ai/api/v1/key',
+      'https://gateway.example/v1/models',
+    ])
+  })
+
+  it('only injects the selected key and redacts split terminal output', () => {
+    const baseEnv = hermesBaseEnvironment({ OPENROUTER_API_KEY: SECRET, OPENAI_API_KEY: 'other', PATH: '/usr/bin' })
+    expect(baseEnv).toEqual({ PATH: '/usr/bin' })
+    const redactor = createHermesOutputRedactor([SECRET])
+    const output = redactor.push(`prefix ${SECRET.slice(0, 12)}`) + redactor.push(`${SECRET.slice(12)} suffix`) + redactor.flush()
+    expect(output).toContain('[REDACTED]')
+    expect(output).not.toContain(SECRET)
+    expect(redactHermesSecrets(`Authorization: ${SECRET}`, [SECRET])).not.toContain(SECRET)
+    expect(redactHermesSecrets('Authorization: Bearer unexpected-secret', [])).not.toContain('unexpected-secret')
+    expect(redactHermesSecrets('Bearer unexpected-secret', [])).not.toContain('unexpected-secret')
+    expect(redactHermesSecrets('token=unguarded-value', [])).toBe('token=[REDACTED]')
+  })
+
+  it('shows ordinary PTY echo immediately while withholding split credentials', () => {
+    const redactor = createHermesOutputRedactor([SECRET])
+    expect(['h', 'e', 'l', 'l', 'o', '\r', '\n'].map(char => redactor.push(char)).join('')).toBe('hello\r\n')
+    expect(redactor.push(SECRET.slice(0, 9))).toBe('')
+    expect(redactor.push(SECRET.slice(9))).toBe('[REDACTED]')
+    expect(redactor.flush()).toBe('')
+  })
+
+  it('redacts unknown bearer and token values split across PTY chunks', () => {
+    const bearer = createHermesOutputRedactor([])
+    const bearerOutput = bearer.push('Autho') + bearer.push('rization: Bearer abc') + bearer.push('123\r\nready> ') + bearer.flush()
+    expect(bearerOutput).toBe('Authorization: [REDACTED]\r\nready> ')
+    const token = createHermesOutputRedactor([])
+    const tokenOutput = token.push('token=abc') + token.push('123 ') + token.flush()
+    expect(tokenOutput).toBe('token=[REDACTED] ')
+  })
+
+  it('preserves redaction across every chunk size without delaying normal prompt text', () => {
+    const known = `ready> ${SECRET} done\r\n`
+    const unknown = 'Authorization: Bearer abc123\r\nready> '
+    for (const sample of [known, unknown]) {
+      for (let size = 1; size <= sample.length; size++) {
+        const redactor = createHermesOutputRedactor([SECRET])
+        let output = ''
+        for (let offset = 0; offset < sample.length; offset += size) output += redactor.push(sample.slice(offset, offset + size))
+        output += redactor.flush()
+        expect(output).not.toContain(SECRET)
+        expect(output).not.toContain('abc123')
+        expect(output).toContain('ready> ')
+        expect(output).toContain('[REDACTED]')
+      }
+    }
+  })
+
+  it('writes a secret-free profile with normal Hermes tools even from a restricted legacy profile', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'sclip-hermes-profile-'))
+    try {
+      writeFileSync(path.join(dir, 'config.yaml'), `model:\n  provider: openrouter\n  default: ${base.model}\ntools:\n  tool_search: false\nagent:\n  max_iterations: 30\n  disabled_toolsets:\n    - terminal\n    - web\n`)
+      writeHermesProfile(dir, 1234, base)
+      const saved = readFileSync(path.join(dir, 'config.yaml'), 'utf8')
+      expect(saved).toContain('tool_search: true')
+      expect(saved).not.toContain('disabled_toolsets')
+      expect(saved).not.toContain('    - terminal')
+      expect(saved).not.toContain(SECRET)
+      expect(saved).not.toContain('api_key:')
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  it('does not return a credential-bearing legacy base URL to renderer settings', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'sclip-hermes-profile-'))
+    try {
+      writeFileSync(path.join(dir, 'config.yaml'), `model:\n  provider: custom\n  default: local-model\n  base_url: "https://user:${SECRET}@gateway.example/v1"\n`)
+      const profile = readHermesProfile(dir)
+      expect(profile.customBaseUrl).toBeUndefined()
+      expect(JSON.stringify(profile)).not.toContain(SECRET)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+})

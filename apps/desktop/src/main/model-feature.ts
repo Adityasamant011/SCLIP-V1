@@ -60,6 +60,12 @@ export function createModelFeature(deps: {
         deps.speech.apply({ local: { backend: p.backend, config: l } });
         deps.backend.setLocalBackend(p.backend, l.binary, l.model, l.device ?? null, l.threads ?? null, l.tokens ?? null);
       } else deps.backend.setCloudKey("openai", getKey(p.keyTag ?? "openai"));
+    } else {
+      const speechLocal = deps.speech.get().local;
+      if (speechLocal["whisper_cpp"]) {
+        const l = speechLocal["whisper_cpp"];
+        deps.backend.setLocalBackend("whisper_cpp", l.binary, l.model, l.device ?? null, l.threads ?? null, l.tokens ?? null);
+      }
     }
     const v = manager.active("vlm");
     if (v) {

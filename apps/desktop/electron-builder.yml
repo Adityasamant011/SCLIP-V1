@@ -1,6 +1,6 @@
 appId: dev.weftcut.desktop
-productName: WeftCut
-executableName: WeftCut
+productName: Sclip
+executableName: Sclip
 # OS + arch, no version: GitHub's releases/latest/download/<asset> URL then always
 # resolves to the current build, so a download page never embeds a version. An
 # exact build stays addressable through its tag (releases/download/v<version>/
@@ -43,6 +43,7 @@ files:
   - "**/node_modules/@weftcut/native-decode/*.so"
   - "**/node_modules/@weftcut/native-decode/*.so.*"
   - "**/node_modules/@weftcut/native-decode/*.dylib"
+  - "node_modules/node-pty/**"
 asarUnpack:
   - "**/*.node"
   - "**/node_modules/node-pty/**"
@@ -160,6 +161,15 @@ mac:
   identity: "-"
   notarize: false
   extraResources:
+    # Worker code runs from a real file outside app.asar. The Qwen model weights
+    # and Python environment remain in the user's external vision-sidecar dir.
+    - from: src/vision/sidecar/vlm_worker.py
+      to: vision/sidecar/vlm_worker.py
+    - from: src/vision/sidecar/audio_analyzer.py
+      to: vision/sidecar/audio_analyzer.py
+    - from: src/vision/sidecar/kokoro_tts_worker.py
+      to: vision/sidecar/kokoro_tts_worker.py
+
     # LGPL §6 obligations for @weftcut/native-decode's ffmpeg runtime. The
     # .dylib themselves ride co-located beside the .node (files + asarUnpack
     # above) so @loader_path resolves in the packaged app exactly as in dev;

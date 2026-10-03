@@ -1,6 +1,6 @@
 ---
 name: weftcut
-description: Drive the WeftCut video editor over its MCP tools. Use BEFORE calling any weftcut MCP tool — when the user wants to edit video in WeftCut (cut, trim, arrange a timeline, add captions or voiceover) or author/update a Motif (animated overlay).
+description: Edit video in Sclip using its WeftCut MCP tools. Use before editing a Sclip project (cuts, timeline, captions, voiceover, or Motifs).
 ---
 
 # Driving WeftCut
@@ -37,49 +37,208 @@ should go.
 7. Export is deliberately not a tool. When the user wants a rendered file,
    point them to the app's Export UI.
 
-## Working rhythm
+## Agentic editing guidance
 
-Read → analyze → mutate → **verify**: after mutating, re-read what you changed
-(`project://tracks`, `project://current`) and confirm the edit landed as
-intended before reporting it done.
+Keep the overall user goal and important unfinished work in view. Choose your
+own next action: you may skip, reorder or revisit editing categories, read
+original evidence, ignore a helper, or decide that no further edit is justified.
+There is no required transcribe → rough cut → captions → review pipeline.
+Your finite interaction budget serves the whole request, not endless refinement
+of one cosmetic variable. Before declaring completion, consider whether the
+actual result addresses the request and honestly report remaining uncertainty.
 
-Common flows, one line each — parameters and caveats live in the tool
-descriptions:
+## Professional Editorial Judgment & Knowledge Base
 
-- Cut pauses: `remove_pauses` cuts every pause out of a clip and closes the
-  gaps, as one undoable edit — `pad_us` of each pause stays at both ends, so
-  the speech either side keeps its breath (or mark them to review first:
-  `detect_pauses` → an anchored region `add_marker` per pause; both packaged
-  as the `/cut-pauses` prompt).
-- Captions: `transcribe_clip` → inspect the returned SRT → `apply_subtitles`
-  (also `/auto-caption`).
-- Captions with your own speech model: `extract_clip_audio` returns a 16 kHz
-  mono WAV block plus the window it covers (60 s per call — walk a long clip in
-  consecutive windows). Transcribe it yourself, add the reported `t_start_us` to
-  every offset you get back, then `apply_subtitles`.
-- Voiceover: `synthesize_speech` appends a spoken script to the timeline
-  (also `/voiceover`).
-- Rough cut: `analyze_clip` or `auto_split_by_shot`, then trim and delete
-  segments — `ripple_delete_layers` instead of `delete_layer` when the gap a
-  cut leaves should close behind it.
+Before making creative decisions (choosing candidate moments, cutting, framing, adding B-roll, pacing, or scoring), consult the professional editing knowledge base located in `references/editing-knowledge/`:
+
+1. **Format Defaults (`references/editing-knowledge/content-types.md`)**:
+   - Matches the footage and brief (talking-head, podcast, UGC/ad, tutorial, vlog, sports, gaming, montage).
+   - Establishes what the audience expects and what good looks like for that specific medium. Never port one format's grammar blindly into another.
+
+2. **Universal Principles (`references/editing-knowledge/editing-foundations.md`)**:
+   - The 10 core principles: Attention, Clarity, Storytelling, Rhythm, Emotion, Continuity, Visual Hierarchy, Audio, Coherence, Restraint.
+   - Walter Murch's Rule of Six priority when values conflict: **Emotion (51%) > Story (23%) > Rhythm (10%) > Eye-trace (7%) > 2D screen space (5%) > 3D space (4%)**.
+
+3. **Narrative & Pacing (`references/editing-knowledge/storytelling-and-pacing.md`)**:
+   - Finding the narrative spine before touching the timeline.
+   - Crafting authentic hooks (contract with the viewer), managing pacing waves, and opening/closing story loops.
+
+4. **Visual & Audio Craft (`references/editing-knowledge/visual-editing.md` & `references/editing-knowledge/audio-editing.md`)**:
+   - Framing, scale-in vs. scale-out, motivated B-roll (showing what is named, avoiding generic wallpaper), and eye-trace continuity.
+   - Dialogue intelligibility, natural pauses (never arbitrary silence removal), J-cuts/L-cuts, room tone, and music underscoring.
+
+5. **Editorial Taste Check (`references/editing-knowledge/editorial-taste.md`)**:
+   - Core question: *"What does the viewer understand or feel because of this choice that they would not without it?"* If no answer, do not make the edit.
+
+6. **Self-Review Rubric (`references/editing-knowledge/editing-review.md`)**:
+   - Objective defects (Tier-1 in review rubric: black frames, clipped audio, mid-word speech cuts, caption overlaps/out-of-bounds) — verified automatically by `get_timeline_critique`.
+   - Editorial concerns (Tier-2 in review rubric: weak hook, flat pacing, unmotivated B-roll, over-edited takes).
+   - Subjective preferences (Tier-3 in review rubric: defer to creator's style profile).
+
+7. **Anti-Pattern Check (`references/editing-knowledge/common-ai-editing-failures.md`)**:
+   - Review planned actions against the 15 common AI failure modes (metronome zooms, wallpaper B-roll, breathless pause stripping, cutting on every beat, Frankenbites).
+
+Tool choices below are options, not stages or creative recipes:
+
+- Source understanding: `get_media_context` overview reports availability.
+  Prefer `detail="segments"` for broad source exploration, discovering candidate
+  stories, and reading surrounding context; it gives chronological exact text
+  and segment start/end times (`start_us`/`end_us`) without verbose word arrays.
+  Do not request detailed word timing arrays for an entire long video merely to
+  discover candidate stories. Reserve `detail="range"` strictly for when
+  sub-second word-level timing is genuinely needed to set accurate cut boundaries.
+  Full/detailed transcript resources and range reads remain available whenever
+  you need original evidence or precise speech boundaries.
+- Jev — when and how to use it: Jev (`typesafe/jev-1.13`) is a small, fast
+  classification model that answers structured yes/no questions with Noul
+  probability scores (0.0–1.0). It is excellent at filtering, ranking, and
+  routing over text. It does NOT understand raw video/audio, cannot make
+  creative decisions, and cannot manage a workflow — Hermes does all of that.
+  The division is: **Jev filters the possibilities → Hermes makes the creative
+  choices → WeftCut executes the edits.** Jev uses the OpenRouter credential
+  and adds cost/latency; treat its Noul scores as fallible, non-exhaustive
+  evidence. Always read original transcript context around promising passages
+  to recover setup/payoff. Hermes makes every editorial choice.
+
+  **Priority-ordered use cases — reach for Jev in this order:**
+
+  1. **Semantic Passage Search** *(highest value)*: When you need to find the
+     best moments across a long cached transcript without reading every 60-second
+     window, call `evaluate_source_passages` with a focused `request` question,
+     `media_ids: [<imported UUID>]`, and a `limit` (top-K, max 12). Use
+     `get_media_context detail="segments"` with flat `start_us`/`end_us` to
+     inspect surrounding context. Do NOT read word arrays for the full video.
+     `detail="range"` and full transcript resources remain available for precise
+     speech boundaries once candidates are selected.
+
+  2. **Hook & Cold-Open Scouting**: Ask Jev to rank the top 3–5 passages most
+     likely to make a compelling 5-second hook — something surprising, emotional,
+     or that poses an unresolved question. Formulate the question around viewer
+     retention rather than topic.
+
+  3. **Multi-Take Winner Selection**: When the same scene was shot multiple
+     times, present each take's transcript excerpt to Jev and ask which is most
+     energetic, most natural, or best matches the creative brief. Jev ranks;
+     Hermes selects and cuts.
+
+  4. **Fluff & Tangent Pruning**: Ask Jev to score each segment for whether it
+     directly advances the video's stated goal/brief. Score below ~0.35 flags
+     candidate sections to trim. Verify flagged clips with `vision_inspect`
+     before cutting.
+
+  5. **Chapter & Section Boundary Detection**: When building a structured video
+     (tutorial, explainer, documentary), ask Jev to identify where topic or
+     scene shifts occur across the transcript. Use detected boundaries as chapter
+     cut candidates; Hermes chooses the final in/out points.
+
+  6. **Pacing & Energy Curve Mapping**: Score transcript segments for spoken
+     energy (fast delivery, punchy language, enthusiastic tone) vs calm/slow
+     sections. Map the resulting Noul curve to identify where the video needs
+     B-roll acceleration or music swells.
+
+  7. **Semantic B-Roll Matching**: Given a list of available B-roll clip labels
+     or descriptions, ask Jev which best matches a specific dialogue passage
+     ("which of these clips best illustrates what is being said here?"). Jev
+     narrows; Hermes confirms with `vision_inspect`.
+
+  8. **Music Mood Matching**: When selecting background music from a library,
+     pass track metadata/descriptions alongside the video brief and ask Jev to
+     rank tracks by mood alignment. Always confirm final choice aurally.
+
+  9. **Sound Effect (SFX) Motivation**: Score each edit cut or visual moment
+     for whether it would benefit from a punctuating sound effect (impact,
+     whoosh, etc.). High-scoring cuts become candidates for SFX placement.
+
+  10. **Caption Punch-Word Highlighting**: Ask Jev to identify which word(s) in
+      each caption should receive emphasis styling (bold, color pop, scale-up).
+      Provide the caption text and the creative brief; Jev scores each candidate
+      word. Apply with Motif or text-style params.
+
+  11. **On-Screen Motif / Sticker Triggering**: When placing reaction stickers
+      or animated overlays, ask Jev to score moments across the transcript for
+      emotional intensity, humor, or surprise — these become Motif trigger
+      candidates. Hermes reviews, user approves all Motifs.
+
+  For all use cases: find `evaluate_source_passages` with `tool_search`, inspect
+  its schema with `tool_describe` if needed, scope with optional
+  `start_us`/`end_us`, and never treat a Noul ranking as a final editorial
+  decision — it is evidence, not instruction.
+- Already-decided assembly: `apply_rough_cut_plan` places all ranges in your
+  structured plan in one atomic operation, in exactly your specified order,
+  with linked A/V and returned layer/link mappings. It does not choose ranges.
+  It replaces the target track from time zero; read its contract before use.
+  Optional `dry_run` reports snapping/mappings without writing. You can instead
+  use ordinary placement, trim, split, move, delete or undo tools at any time.
+  A plan is not mandatory for other editing tools. For a duration-constrained
+  brief, compare the combined duration of your chosen ranges with the target
+  before investing in downstream polish. The plan's optional
+  `estimated_duration_us` can be omitted; Sclip derives the exact sum from
+  validated ranges. If the ranges are materially too long, revise your
+  editorial selection rather than changing the estimate to disguise that.
+  ALWAYS calculate your cut durations upfront so the rough cut hits the exact
+  target duration (e.g. 60s) in ONE atomic call; never call `trim_layer` on 15+ clips
+  in a row, which creates black dead gaps and wastes reasoning steps.
+- Captions: cached `apply_transcripts` preserves word timing and returns the
+  caption IDs/count/range, avoiding a full tracks dump just to obtain IDs.
+  `apply_subtitles` supports imported/user-supplied subtitles. Transcription
+  is available when evidence is missing, not a compulsory first stage. When the user asks to use video footage as B-roll or without original audio, do NOT transcribe the audio or loop reading the transcript; mute the source audio, write a fresh script with `synthesize_speech`, and use `vision_inspect` to identify the best visual moments.
+- Compulsory Memory & Continuous Learning: always consult `USER.md` and `MEMORY.md` for recorded preferences (e.g. favorite fonts, full-screen coverage, pacing). When the user gives a new rule or correction, immediately record it with the `memory` tool (`target='user'` or `target='memory'`). Never repeat known mistakes.
+- Scoped observations: `get_timeline_context` can answer topology, linked A/V,
+  gaps and cut-boundary questions over a range. Full `project://tracks` remains
+  available, but do not load unrelated state for a narrow question.
+- Visual evidence: you are a text-first agent. `inspect_timeline_frame` returns raw image bytes meant for multimodal clients that process raw PNGs. To actually perceive and describe what is visible on the preview or in the video, ALWAYS call `vision_inspect`!
+  To inspect what is currently visible on the user's screen in the live Sclip preview, omit `t_us` to capture the active playhead frame directly, or supply `t_us` to inspect any specific timeline timestamp. Qwen runs on the local Metal GPU and returns structured descriptions of what is actually on screen (subject, position, framing, actions, graphics). Ask neutral questions allowing
+  either a good or bad result, not questions presupposing a defect. Verify
+  meaningful visual changes rather than assuming transform values prove them.
+  ALWAYS fill the canvas: call `calculate_video_fit` with `mode="cover"` so that video completely covers the entire screen (1080x1920 in vertical shorts, or the active canvas aspect) with zero black bars or corner letterboxing, unless the user explicitly requested a PIP/inset. Supply `focus_x` and `focus_y` to center the main subject/action, apply the patch with `update_layer_params`, and verify with `vision_inspect`.
+  Qwen can misjudge partially cropped heads; null confidence, transform bounds
+  and black-pixel fractions do not prove semantic face/head completeness.
+  `inspect_timeline_frame` provides composed pixels to image-capable clients. If `t_us` is omitted, both tools inspect the active playhead frame.
+- Speech/pacing evidence: use transcript/word timing, timeline speech cues, or
+  an appropriate short `render_timeline_range` preview. Do not claim to have
+  heard audio unless you actually received and perceived it. Frame-grid or
+  transcript timing mismatch alone does not establish an audible defect.
+- Continuous feedback loop: Sclip runs an autonomous background audio/visual reviewer in parallel. Call `get_timeline_critique` after major edits (rough cutting, applying captions, or adding motifs) and before declaring an edit complete. It identifies physical defects (e.g. off-screen captions, motif collisions, audio speech chops mid-word, or awkward silence). Address any reported `critical` issues before finishing.
+- Optional structured plans/reviews can be mechanically checked with
+  `validate_rough_cut_plan` / `validate_rough_cut_review`. Validators enforce
+  bounds/schema, not editorial quality. The historical Phase 2E
+  `revision_control` protocol is not a mandatory general editing workflow.
+- `remove_pauses`, `detect_pauses`, `synthesize_speech` and the normal Hermes
+  tools remain available when they serve your chosen strategy.
+- Speech synthesis (Voiceover TTS): `synthesize_speech` generates voiceover audio
+  and places it directly on an Audio track with role='voiceover'. It supports cloud
+  OpenAI TTS and automatically falls back to local high-quality TTS (edge-tts / macOS say)
+  with zero API keys required. Pass `text`, optional `voice` (e.g. 'alloy', 'echo',
+  'fable', 'onyx', 'nova', 'shimmer'), and optional `speed`. ALWAYS call
+  `synthesize_speech` to create an actual voiceover audio track when the user asks
+  for their own script or review audio — never leave the timeline silent with only
+  text captions when voiceover is requested.
+- External B-Roll & Visual Sourcing:
+  - Check creator footage first: always inspect local project media (`get_source_observations`, transcripts, visual observations) before searching externally. If a strong creator-owned shot exists, use it instead of external sourcing.
+  - Editorial purpose: B-roll must have an editorial reason (visual proof, cutaway, explanation, atmosphere). Search externally only when it materially improves the video. No B-roll is always a valid editorial decision.
+  - Authenticity priority: prefer authentic discovery (`video_search_external_media` across YouTube discovery, Wikimedia Commons, Openverse) for specific people, historical events, launches, speeches, sports, or factual references. Never substitute generic stock for a specific real-world event (e.g. do not substitute a generic athlete for Messi lifting the World Cup).
+  - Stock fallback: stock footage and images (`pexels`, `pixabay`) are the broad fallback for generic concepts (e.g. typing on a laptop, office, city timelapse, nature, gym).
+  - Images are first-class B-roll: high-quality still images with proper canvas framing (`calculate_video_fit`) are fully valid visual assets.
+  - Strict rights compliance: respect `rights_status` and `import_mode`. Only candidates marked `AUTO_IMPORT` with verified licenses can be downloaded via `import_external_media`. Standard YouTube content is reference/discovery only (`USER_IMPORT` or `DISCOVERY_ONLY`); never bypass import restrictions.
+  - Inspect imported media before placement: after calling `import_external_media`, use `get_source_observations` on the returned `media_id` to inspect what the footage actually shows, then select the exact useful source time range (`src_in_us` / `src_out_us`) for timeline placement.
+  - Stalled search protection: do not loop retrying queries if search results are weak or unchanged. If search returns `EXHAUSTED` or no suitable candidates exist, change search strategy, use local media, request media from the user, or skip B-roll.
+
 
 ## Evidence and sync rules
 
-- Never invent spoken dialogue, quotations, captions, or subtitles. Caption
-  text must come from `transcribe_clip`'s returned transcript/SRT or text the
-  user supplied. If transcription is unavailable or fails, report that and
-  stop caption generation.
-- Before `describe_clip`, `analyze_clip`, or a frame request, read the layer
-  and media metadata. Use only the layer's legal source/timeline range; do not
-  repeatedly guess invalid windows.
-- For visual sampling, read the media frame resource (media://{media_id}/frame/{t_us}) through WeftCut,
-  then send the returned image to vision analysis. Do not assume direct video
-  file inspection is available.
-- Linked video and audio stay synchronized by default. Do not set
-  `escape_link=true` during a trim unless the user explicitly wants to unlink
-  them; after trimming, re-read both linked bounds before continuing.
-- If an edit call fails, inspect the error and current project state before
-  attempting another mutation. Do not repeat an identical destructive call.
+- Full screen coverage rule: every video clip MUST completely fill the composition canvas (full screen). Never leave a video unscaled or floating in a corner with black space around it, unless the user explicitly requests an inset or picture-in-picture layout. When framing or placing video clips, ALWAYS use `calculate_video_fit` with `mode="cover"` to ensure 100% of the screen is filled edge-to-edge.
+- Never invent spoken dialogue or captions. Use source transcription or
+  user-supplied text; if unavailable, report that rather than fabricating it.
+- Read relevant current layer/media bounds before source inspection or
+  mutation. Choose evidence that can actually answer the question.
+- Linked A/V stays synchronized by default. Do not use `escape_link=true`
+  unless the user explicitly wants unlinking; verify the affected pair.
+- A risky experiment can preserve a known-good state with checkpoint/undo.
+  If the result is clearly worse, restore or revise rather than knowingly
+  leaving it in place. Inspect errors/current state before correcting a failed
+  call; never repeat an identical destructive call.
+- Hermes chooses what to improve, which tools to use, and when the request is
+  adequately addressed. No helper or external stage controller chooses that.
 
 ## Motifs (animated overlays)
 

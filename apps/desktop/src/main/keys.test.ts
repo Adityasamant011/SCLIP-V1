@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import path from "node:path";
 
-const disk = vi.hoisted(() => ({ files: new Map<string, string>(), failRename: false }));
+const disk = vi.hoisted(() => ({ files: new Map<string, string>(), failRename: false, encryptionAvailable: true }));
 vi.mock("electron", () => ({
   app: { getPath: () => "/test-credentials" },
   safeStorage: {
+    isEncryptionAvailable: () => disk.encryptionAvailable,
     encryptString: (value: string) => Buffer.from(`encrypted:${value}`),
     decryptString: (value: Buffer) => {
       const text = value.toString();
@@ -23,14 +24,17 @@ vi.mock("node:fs", () => ({ default: {
 } }));
 import { clearKey, loadAllKeys, setKey } from "./keys";
 const target = path.join("/test-credentials", "cloud_keys.json");
-beforeEach(() => { disk.files.clear(); disk.failRename = false; });
+beforeEach(() => { disk.files.clear(); disk.failRename = false; disk.encryptionAvailable = true; });
 
 describe("credential persistence", () => {
   it("persists keys independently and clears only the requested credential", () => {
     setKey("openai", " first "); setKey("model-custom-test", "second");
     expect(loadAllKeys()).toEqual({ openai: "first", "model-custom-test": "second" });
+    setKey("openai", "SCLIP_TEST_SECRET_DO_NOT_LEAK_12345");
+    expect(loadAllKeys()).toEqual({ openai: "SCLIP_TEST_SECRET_DO_NOT_LEAK_12345", "model-custom-test": "second" });
+    expect(disk.files.get(target)).not.toContain("SCLIP_TEST_SECRET_DO_NOT_LEAK_12345");
     clearKey("model-custom-test");
-    expect(loadAllKeys()).toEqual({ openai: "first" });
+    expect(loadAllKeys()).toEqual({ openai: "SCLIP_TEST_SECRET_DO_NOT_LEAK_12345" });
   });
   it("reports a failed atomic replacement and preserves all previous keys", () => {
     setKey("openai", "previous"); setKey("model-custom-test", "other");
@@ -43,5 +47,10 @@ describe("credential persistence", () => {
     disk.files.set(target, JSON.stringify({ ...JSON.parse(disk.files.get(target)!), corrupt: "invalid" }));
     disk.failRename = true;
     expect(loadAllKeys()).toEqual({ openai: "valid" });
+  });
+  it("refuses to persist a credential without OS-backed encryption", () => {
+    disk.encryptionAvailable = false;
+    expect(() => setKey("openai", "SCLIP_TEST_SECRET_DO_NOT_LEAK_12345")).toThrow("Secure OS key storage");
+    expect(disk.files.size).toBe(0);
   });
 });

@@ -56,7 +56,7 @@ describe('HermesTerminalRuntime', () => {
       userDataPath: tmpDir,
       executableOverride: '/usr/bin/python3',
       getMcpInfo: () => ({ url: 'http://127.0.0.1:44555/mcp', bearer_token: 'secret-token-123' }),
-      getProviderEnvironment: () => ({ OPENROUTER_API_KEY: 'sk-test-key' }),
+      getProviderEnvironment: () => ({ OPENROUTER_API_KEY: 'SCLIP_TEST_SECRET_DO_NOT_LEAK_12345' }),
       assertSession: async () => {},
       onOutput: (e) => outputEvents.push(e),
       onExit: (e) => exitEvents.push(e),
@@ -68,12 +68,27 @@ describe('HermesTerminalRuntime', () => {
     const toolsetsIdx = spawnedArgs.indexOf('--toolsets')
     expect(toolsetsIdx).toBeGreaterThan(-1)
     expect(spawnedArgs[toolsetsIdx + 1]).toContain('weftcut')
+    expect(spawnedArgs[toolsetsIdx + 1].split(',')).toEqual(expect.arrayContaining(['terminal', 'file']))
+    expect(spawnedArgs[spawnedArgs.indexOf('--max-turns') + 1]).toBe('100')
+    const skillsIdx = spawnedArgs.indexOf('--skills')
+    expect(skillsIdx).toBeGreaterThan(-1)
+    expect(spawnedArgs[skillsIdx + 1]).toBe('weftcut')
 
     expect(spawnedEnv.SCLIP_MCP_URL).toBe('http://127.0.0.1:44555/mcp')
     expect(spawnedEnv.SCLIP_MCP_TOKEN).toBe('secret-token-123')
     expect(spawnedEnv.SCLIP_ACTIVE_PROJECT_ID).toBe('proj-123')
     expect(spawnedEnv.SCLIP_PROJECT_ID).toBe('proj-123')
-    expect(spawnedEnv.OPENROUTER_API_KEY).toBe('sk-test-key')
+    expect(spawnedEnv.HERMES_TUI_BACKGROUND).toBe('#0b0d12')
+    expect(spawnedEnv.OPENROUTER_API_KEY).toBe('SCLIP_TEST_SECRET_DO_NOT_LEAK_12345')
+    expect(JSON.stringify(spawnedArgs)).not.toContain('SCLIP_TEST_SECRET_DO_NOT_LEAK_12345')
+    onDataCallback!('provider error: SCLIP_TEST_SECRET_DO_NOT_LEAK_12345')
+    onExitCallback!({ exitCode: 1 })
+    expect(JSON.stringify(outputEvents)).not.toContain('SCLIP_TEST_SECRET_DO_NOT_LEAK_12345')
+    expect(JSON.stringify(exitEvents)).not.toContain('SCLIP_TEST_SECRET_DO_NOT_LEAK_12345')
+    expect(spawnedArgs).toContain('--provider')
+    expect(spawnedArgs).toContain('-m')
+    expect(spawnedEnv.HERMES_INFERENCE_MODEL).toBeDefined()
+    expect(spawnedEnv.HERMES_PROVIDER).toBeDefined()
   })
 
   it('routes terminal input to the active pty and handles output events', async () => {
@@ -89,19 +104,20 @@ describe('HermesTerminalRuntime', () => {
       onExit: (e) => exitEvents.push(e),
     })
 
-    await runtime.ensure('proj-123', 'sess-456')
+    expect(await runtime.ensure('proj-123', 'sess-456')).toEqual({ history: '', sequence: 0 })
     expect(onDataCallback).toBeDefined()
     onDataCallback!('Welcome to Hermes\r\n')
 
-    expect(outputEvents).toEqual([
-      { projectId: 'proj-123', sessionId: 'sess-456', data: 'Welcome to Hermes\r\n' },
-    ])
+    expect(outputEvents.map(e => e.data).join('')).toBe('Welcome to Hermes\r\n')
+    expect(outputEvents.map(e => e.sequence)).toEqual([1])
+    expect(await runtime.ensure('proj-123', 'sess-456')).toEqual({ history: 'Welcome to Hermes\r\n', sequence: 1 })
 
     await runtime.input('proj-123', 'sess-456', 'hello\n')
     expect(ptyWriteMock).toHaveBeenCalledWith('hello\n')
 
     expect(onExitCallback).toBeDefined()
     onExitCallback!({ exitCode: 0 })
+    expect(outputEvents.map(e => e.data).join('')).toBe('Welcome to Hermes\r\n')
     expect(exitEvents).toEqual([
       { projectId: 'proj-123', sessionId: 'sess-456', code: 0 },
     ])
@@ -142,7 +158,35 @@ describe('HermesTerminalRuntime', () => {
 
     await runtime.ensure('proj-1', 'sess-1')
     expect(ptyKillMock).not.toHaveBeenCalled()
+    const oldData = onDataCallback!
+    const oldExit = onExitCallback!
     await runtime.restartSession('proj-1', 'sess-1')
     expect(ptyKillMock).toHaveBeenCalledTimes(1)
+    oldData('stale output')
+    oldExit({ exitCode: 1 })
+    expect(outputEvents).toEqual([])
+    expect(exitEvents).toEqual([])
+  })
+
+  it('restarts all active sessions on restartAll', async () => {
+    ptyKillMock.mockClear()
+    const runtime = new HermesTerminalRuntime({
+      isPackaged: false,
+      resourcesPath: '/test/resources',
+      userDataPath: tmpDir,
+      executableOverride: '/usr/bin/python3',
+      getMcpInfo: () => ({ url: 'http://127.0.0.1:44555/mcp', bearer_token: 'secret-token-123' }),
+      getProviderEnvironment: () => ({}),
+      assertSession: async () => {},
+      onOutput: () => {},
+      onExit: () => {},
+    })
+
+    await runtime.ensure('proj-1', 'sess-1')
+    await runtime.ensure('proj-2', 'sess-2')
+    expect(ptyKillMock).not.toHaveBeenCalled()
+
+    await runtime.restartAll()
+    expect(ptyKillMock).toHaveBeenCalledTimes(2)
   })
 })

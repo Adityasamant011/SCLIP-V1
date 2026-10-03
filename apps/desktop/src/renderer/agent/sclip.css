@@ -4,7 +4,7 @@
   width: 100%;
   display: flex;
   flex-direction: column;
-  background: #0b0d12;
+  background: #000000;
   overflow: hidden;
 }
 
@@ -12,8 +12,8 @@
   height: 36px;
   min-height: 36px;
   flex-shrink: 0;
-  background: #111319;
-  border-bottom: 1px solid #1e222d;
+  background: #0a0a0a;
+  border-bottom: 1px solid #1c1c1c;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -26,12 +26,12 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  background: #181b24;
-  border: 1px solid #282d3c;
+  background: #141414;
+  border: 1px solid #262626;
   border-radius: 6px;
   padding: 3px 8px;
   font: 11px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  color: #d1d5db;
+  color: #e5e5e5;
   cursor: pointer;
   transition: background 0.15s ease, border-color 0.15s ease;
   max-width: 65%;
@@ -39,8 +39,8 @@
 }
 
 .sclip-agent-model-badge:hover {
-  background: #202432;
-  border-color: #3b4256;
+  background: #1f1f1f;
+  border-color: #383838;
   color: #ffffff;
 }
 
@@ -52,8 +52,8 @@
 }
 
 .sclip-agent-status-dot.online {
-  background: #10b981;
-  box-shadow: 0 0 6px rgba(16, 185, 129, 0.6);
+  background: #ffffff;
+  box-shadow: 0 0 6px rgba(255, 255, 255, 0.4);
 }
 
 .sclip-agent-status-dot.offline {
@@ -61,22 +61,22 @@
 }
 
 .sclip-agent-bot-icon {
-  color: #818cf8;
+  color: #ffffff;
   flex-shrink: 0;
 }
 
 .sclip-agent-provider-tag {
   font-weight: 600;
-  color: #93c5fd;
+  color: #ffffff;
   text-transform: capitalize;
 }
 
 .sclip-agent-separator {
-  color: #4b5563;
+  color: #52525b;
 }
 
 .sclip-agent-model-tag {
-  color: #e5e7eb;
+  color: #d4d4d8;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -91,7 +91,7 @@
 .sclip-agent-action-btn {
   background: transparent;
   border: none;
-  color: #9ca3af;
+  color: #a1a1aa;
   padding: 5px;
   border-radius: 5px;
   cursor: pointer;
@@ -102,8 +102,8 @@
 }
 
 .sclip-agent-action-btn:hover:not(:disabled) {
-  background: #1f2430;
-  color: #f3f4f6;
+  background: #262626;
+  color: #ffffff;
 }
 
 .sclip-agent-action-btn:disabled {
@@ -112,12 +112,12 @@
 }
 
 .sclip-agent-settings-btn {
-  color: #a5b4fc;
+  color: #ffffff;
 }
 
 .sclip-agent-settings-btn:hover {
-  background: rgba(99, 102, 241, 0.15) !important;
-  color: #c7d2fe !important;
+  background: #262626 !important;
+  color: #ffffff !important;
 }
 
 @keyframes spin {
@@ -134,15 +134,16 @@
   min-height: 0;
   position: relative;
   overflow: hidden;
-  background: #0b0d12;
+  background: #000000;
 }
 
 .sclip-live-terminal {
   position: absolute;
   inset: 0;
-  background: #0b0d12;
+  background: #000000;
   overflow: hidden;
 }
+
 
 .sclip-terminal-host {
   position: absolute;
@@ -175,6 +176,40 @@
   color: #a1a1aa;
   font: 12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   text-align: center;
+}
+
+.sclip-terminal-error-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  max-width: 420px;
+}
+
+.sclip-terminal-error-text {
+  color: #f87171;
+  line-height: 1.5;
+}
+
+.sclip-terminal-retry-btn {
+  background: #1e293b;
+  color: #e2e8f0;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.sclip-terminal-retry-btn:hover:not(:disabled) {
+  background: #334155;
+  border-color: #475569;
+}
+
+.sclip-terminal-retry-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .sclip-terminal-error {
@@ -229,9 +264,9 @@
 }
 
 .sclip-settings-mode-tab.active {
-  color: #a5b4fc;
-  background: rgba(99, 102, 241, 0.12);
-  border-color: rgba(99, 102, 241, 0.3);
+  color: #ffffff;
+  background: #262626;
+  border-color: #3f3f46;
 }
 
 .sclip-settings-body {
@@ -241,8 +276,8 @@
 }
 
 .sclip-settings-header-card {
-  background: #12141c;
-  border: 1px solid #232734;
+  background: #0f0f0f;
+  border: 1px solid #222222;
   border-radius: 8px;
   padding: 12px 16px;
 }
@@ -264,9 +299,9 @@
 }
 
 .sclip-settings-status-pill.online {
-  background: rgba(16, 185, 129, 0.15);
-  color: #34d399;
-  border: 1px solid rgba(16, 185, 129, 0.3);
+  background: rgba(255, 255, 255, 0.15);
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.3);
 }
 
 .sclip-settings-status-pill.offline {
@@ -303,8 +338,8 @@
 }
 
 .sclip-provider-card {
-  background: #131620;
-  border: 1px solid #242938;
+  background: #0f0f0f;
+  border: 1px solid #222222;
   border-radius: 8px;
   padding: 10px 12px;
   text-align: left;
@@ -316,14 +351,14 @@
 }
 
 .sclip-provider-card:hover {
-  background: #1a1e2c;
-  border-color: #3b4256;
+  background: #191919;
+  border-color: #383838;
 }
 
 .sclip-provider-card.selected {
-  background: #181d2e;
-  border-color: #6366f1;
-  box-shadow: 0 0 0 1px #6366f1;
+  background: #191919;
+  border-color: #ffffff;
+  box-shadow: 0 0 0 1px #ffffff;
 }
 
 .sclip-provider-card-top {
@@ -349,8 +384,8 @@
 }
 
 .sclip-provider-card.selected .sclip-provider-card-badge {
-  background: rgba(99, 102, 241, 0.2);
-  color: #a5b4fc;
+  background: #ffffff;
+  color: #000000;
 }
 
 .sclip-provider-card-desc {
@@ -364,19 +399,20 @@
   align-items: center;
   gap: 4px;
   font-size: 10px;
-  color: #34d399;
+  color: #ffffff;
   margin-top: 4px;
 }
 
 .sclip-provider-form-box {
-  background: #12141c;
-  border: 1px solid #232734;
+  background: #0f0f0f;
+  border: 1px solid #222222;
   border-radius: 8px;
   padding: 16px;
   display: flex;
   flex-direction: column;
   gap: 14px;
 }
+
 
 .sclip-form-row {
   display: flex;
@@ -503,8 +539,8 @@
 }
 
 .sclip-save-btn {
-  background: #4f46e5 !important;
-  color: #ffffff !important;
+  background: #ffffff !important;
+  color: #000000 !important;
   font-size: 12px;
   font-weight: 500;
   display: inline-flex;
@@ -514,7 +550,7 @@
 }
 
 .sclip-save-btn:hover:not(:disabled) {
-  background: #4338ca !important;
+  background: #e5e5e5 !important;
 }
 
 .sclip-settings-loading {
