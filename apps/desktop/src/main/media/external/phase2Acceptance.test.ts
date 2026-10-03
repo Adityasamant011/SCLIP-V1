@@ -1,19 +1,16 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import type {
   BatchVisualIntentItem,
   ExternalMediaCandidate,
-  ExternalMediaProvider,
-  ExternalMediaSearchOptions,
 } from './types.js'
 import { ExternalMediaService } from './externalMediaService.js'
 import { cheapFilterCandidates } from './cheapFilter.js'
 import {
   evaluateVisualCandidates,
   parseQwenJudgments,
-  createHeuristicJudgment,
   clearJudgmentCache,
 } from './visualIntelligence.js'
 import { downloadExternalMediaCandidate } from './downloader.js'

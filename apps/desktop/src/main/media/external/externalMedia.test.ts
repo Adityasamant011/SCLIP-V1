@@ -588,7 +588,7 @@ describe('External Media B-Roll System (Phase 1)', () => {
         mcpCatalog: async () => JSON.stringify({ tools: [], resources: [] }),
       } as any
 
-      const tools = await registeredMcpTools(fakeBackend)
+      const tools = await registeredMcpTools(fakeBackend, { enableExternalMedia: true })
       const searchTool = tools.find((t) => t.name === 'video_search_external_media')
       const importTool = tools.find((t) => t.name === 'import_external_media')
 

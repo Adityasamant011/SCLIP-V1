@@ -47,22 +47,31 @@ describe('mergeMcpCatalog', () => {
 })
 
 describe('Hermes-facing registered catalog count', () => {
-  it('counts the authoritative merged list with optional Jev off and on', async () => {
+  it('counts the authoritative merged list with external media disabled by default in V1', async () => {
     const catalog = readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../fixtures/mcp/rust-catalog-snapshot.json'), 'utf8')
     const backend = { mcpCatalog: async () => catalog } as Parameters<typeof registeredMcpTools>[0]
     const disabled = await registeredMcpTools(backend)
     const enabled = await registeredMcpTools(backend, { evaluateSourcePassages: async () => ({}) })
-    expect(disabled).toHaveLength(107)
-    expect(enabled).toHaveLength(108)
+    expect(disabled).toHaveLength(104)
+    expect(enabled).toHaveLength(105)
     expect(disabled.some(tool => tool.name === 'calculate_video_fit')).toBe(true)
     expect(disabled.some(tool => tool.name === 'get_timeline_critique')).toBe(true)
-    expect(disabled.some(tool => tool.name === 'video_search_external_media')).toBe(true)
-    expect(disabled.some(tool => tool.name === 'resolve_visual_intents')).toBe(true)
-    expect(disabled.some(tool => tool.name === 'import_external_media')).toBe(true)
+    expect(disabled.some(tool => tool.name === 'video_search_external_media')).toBe(false)
+    expect(disabled.some(tool => tool.name === 'resolve_visual_intents')).toBe(false)
+    expect(disabled.some(tool => tool.name === 'import_external_media')).toBe(false)
     expect(new Set(enabled.map(tool => tool.name)).size).toBe(enabled.length)
     expect(disabled.some(tool => tool.name === 'evaluate_source_passages')).toBe(false)
     expect(enabled.some(tool => tool.name === 'evaluate_source_passages')).toBe(true)
     expect(enabled.some(tool => tool.name === 'export_timeline')).toBe(false)
+
+    // With enableExternalMedia flag:
+    const externalOn = await registeredMcpTools(backend, { enableExternalMedia: true })
+    const externalAndJevOn = await registeredMcpTools(backend, { enableExternalMedia: true, evaluateSourcePassages: async () => ({}) })
+    expect(externalOn).toHaveLength(107)
+    expect(externalAndJevOn).toHaveLength(108)
+    expect(externalOn.some(tool => tool.name === 'video_search_external_media')).toBe(true)
+    expect(externalOn.some(tool => tool.name === 'resolve_visual_intents')).toBe(true)
+    expect(externalOn.some(tool => tool.name === 'import_external_media')).toBe(true)
   })
 })
 

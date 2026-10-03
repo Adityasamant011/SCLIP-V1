@@ -159,6 +159,7 @@ describe('Full MCP Tool Catalog & Handler Execution Audit', () => {
 
     const server = buildMcpServer(backend, {
       getTsHost: () => tsHost,
+      enableExternalMedia: true,
       evaluateSourcePassages: async () => ({
         ranked: [{ start_us: 0, end_us: 1000000, text: 'Sample evidence', score: 0.9 }],
         evaluated: 1,

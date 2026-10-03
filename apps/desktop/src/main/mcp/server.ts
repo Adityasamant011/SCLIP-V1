@@ -374,6 +374,7 @@ export async function handleCallTool(
   getReviewerSummary?: (immediate?: boolean) => import('../sclip/reviewer/reviewerTypes.js').TimelineReviewSummary,
   sourceObservationIndex?: SourceObservationIndex,
   externalMediaService?: ExternalMediaService,
+  enableExternalMedia?: boolean,
 ): Promise<ServerResult> {
   // Final delivery belongs to the user, including for clients with an old
   // cached catalog. Short temporary QA rendering remains available below.
@@ -694,6 +695,9 @@ export async function handleCallTool(
       return { content: [{ type: 'text', text: JSON.stringify(res) }] } as unknown as ServerResult
     }
     if (name === 'video_search_external_media') {
+      if (enableExternalMedia === false) {
+        return revisionToolError('External B-roll discovery is disabled in Sclip V1. Enable with SCLIP_ENABLE_EXTERNAL_BROLL=1.')
+      }
       const query = typeof args.query === 'string' ? args.query.trim() : ''
       if (!query) {
         return revisionToolError('query is required for video_search_external_media')
@@ -716,6 +720,9 @@ export async function handleCallTool(
       }
     }
     if (name === 'resolve_visual_intents') {
+      if (enableExternalMedia === false) {
+        return revisionToolError('External B-roll discovery is disabled in Sclip V1. Enable with SCLIP_ENABLE_EXTERNAL_BROLL=1.')
+      }
       const rawIntents = Array.isArray(args.intents) ? args.intents : []
       if (rawIntents.length === 0) {
         return revisionToolError('intents array must contain at least 1 visual intent')
@@ -737,6 +744,9 @@ export async function handleCallTool(
       }
     }
     if (name === 'import_external_media') {
+      if (enableExternalMedia === false) {
+        return revisionToolError('External B-roll discovery is disabled in Sclip V1. Enable with SCLIP_ENABLE_EXTERNAL_BROLL=1.')
+      }
       const candidateId = typeof args.candidate_id === 'string' ? args.candidate_id.trim() : ''
       if (!candidateId) {
         return revisionToolError('candidate_id is required for import_external_media')
@@ -1093,6 +1103,9 @@ export interface McpServerOptions {
   getReviewerSummary?: (immediate?: boolean) => import('../sclip/reviewer/reviewerTypes.js').TimelineReviewSummary
   sourceObservationIndex?: SourceObservationIndex
   externalMediaService?: ExternalMediaService
+  /** Enable external B-roll discovery tools (video_search_external_media, resolve_visual_intents, import_external_media).
+   *  Frozen/disabled by default in Sclip V1. Can also be enabled via SCLIP_ENABLE_EXTERNAL_BROLL=1 environment variable. */
+  enableExternalMedia?: boolean
 }
 
 /** The same merged catalog advertised to Hermes by tools/list. */
@@ -1105,7 +1118,22 @@ export async function registeredMcpTools(backend: Backend, opts: McpServerOption
       detail: { type: 'string', enum: ['overview', 'range'], description: 'Overview = counts/status; range = detailed text/word timing and modalities. Defaults to range when time bounds supplied, otherwise overview.' },
     } },
   } : MEDIA_CONTEXT_TOOL
-  const all = mergeMcpCatalog(rust, [...MCP_TOOL_DEFS, ...MOTIF_TOOL_DEFS, REVISION_CONTROL_TOOL, mediaContextTool, VISION_INSPECT_TOOL, CALCULATE_VIDEO_FIT_TOOL, GET_TIMELINE_CRITIQUE_TOOL, VIDEO_SEARCH_EXTERNAL_MEDIA_TOOL, RESOLVE_VISUAL_INTENTS_TOOL, IMPORT_EXTERNAL_MEDIA_TOOL, ...(opts.sourceObservationIndex ? [GET_SOURCE_OBSERVATIONS_TOOL] : []), ...(opts.evaluateSourcePassages ? [SOURCE_PASSAGE_TOOL] : [])]).filter(t => t.name !== 'export_timeline')
+  const externalEnabled = opts.enableExternalMedia ?? (process.env.SCLIP_ENABLE_EXTERNAL_BROLL === '1')
+  const externalTools = externalEnabled
+    ? [VIDEO_SEARCH_EXTERNAL_MEDIA_TOOL, RESOLVE_VISUAL_INTENTS_TOOL, IMPORT_EXTERNAL_MEDIA_TOOL]
+    : []
+  const all = mergeMcpCatalog(rust, [
+    ...MCP_TOOL_DEFS,
+    ...MOTIF_TOOL_DEFS,
+    REVISION_CONTROL_TOOL,
+    mediaContextTool,
+    VISION_INSPECT_TOOL,
+    CALCULATE_VIDEO_FIT_TOOL,
+    GET_TIMELINE_CRITIQUE_TOOL,
+    ...externalTools,
+    ...(opts.sourceObservationIndex ? [GET_SOURCE_OBSERVATIONS_TOOL] : []),
+    ...(opts.evaluateSourcePassages ? [SOURCE_PASSAGE_TOOL] : []),
+  ]).filter(t => t.name !== 'export_timeline')
   return opts.toolFilter ? all.filter(t => opts.toolFilter!(t.name)) : all
 }
 
@@ -1149,6 +1177,10 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
     try {
       const name = req.params.name
       const args = (req.params.arguments ?? {}) as Record<string, unknown>
+      const externalEnabled = opts.enableExternalMedia ?? (process.env.SCLIP_ENABLE_EXTERNAL_BROLL === '1')
+      if ((name === 'video_search_external_media' || name === 'resolve_visual_intents' || name === 'import_external_media') && !externalEnabled) {
+        return revisionToolError('External B-roll discovery is disabled in Sclip V1. Enable with SCLIP_ENABLE_EXTERNAL_BROLL=1.')
+      }
       if (name === 'get_media_context' && args.detail === 'segments' && opts.compactSourceEvidence === false) {
         return revisionToolError('Compact source evidence is disabled; use overview or range. No source detail was removed.')
       }
@@ -1180,7 +1212,7 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
         if (refusal) return revisionToolError(refusal)
       }
       const before = mutation ? JSON.stringify(getTsHost()?.actor.snapshot()) : null
-      const result = await handleCallTool(backend, getTsHost, name, args, getPreferredEngine, getVlm, peaksPathFor, opts.getActiveWindow, opts.getReviewerSummary, opts.sourceObservationIndex, opts.externalMediaService)
+      const result = await handleCallTool(backend, getTsHost, name, args, getPreferredEngine, getVlm, peaksPathFor, opts.getActiveWindow, opts.getReviewerSummary, opts.sourceObservationIndex, opts.externalMediaService, externalEnabled)
       if (mutation && before !== JSON.stringify(getTsHost()?.actor.snapshot())) {
         revisionGuard.mutationCommitted()
         getVisionRuntime().clearCache?.()
