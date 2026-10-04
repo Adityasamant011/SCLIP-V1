@@ -13,7 +13,9 @@ import { launchApp, newProject, invokeCmd, summary, tmpDir, waitForHook } from '
 // Phase 3 autonomous output. This spec only orchestrates the production app,
 // production MCP host, real Hermes launcher, and native export callback.
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..')
-const artifactRoot = path.join(repoRoot, 'apps/desktop/e2e/bench-results/phase3-general')
+const manifestRoot = path.join(repoRoot, 'apps/desktop/e2e/bench-results/phase3-general')
+const phase3b = process.env.SCLIP_PHASE3B_RUN === '1'
+const artifactRoot = phase3b ? path.join(repoRoot, 'apps/desktop/e2e/bench-results/phase3b-opening-review') : manifestRoot
 const profileRoot = path.join(os.homedir(), 'Library/Application Support/Sclip')
 const python = '/Users/adityasamant/SCLIP/hermes-agent-src/.venv/bin/python'
 const electronBinary = createRequire(import.meta.url)('electron') as string
@@ -32,7 +34,7 @@ interface BenchmarkCase {
   prompt: string
 }
 
-const manifest = JSON.parse(fs.readFileSync(path.join(artifactRoot, 'cases.json'), 'utf8')) as { cases: BenchmarkCase[] }
+const manifest = JSON.parse(fs.readFileSync(path.join(manifestRoot, 'cases.json'), 'utf8')) as { cases: BenchmarkCase[] }
 const lockedIds = ['talking-head', 'vlog', 'screen-recording', 'product-demo']
 if (manifest.cases.map(row => row.id).join('|') !== lockedIds.join('|')) throw new Error('Phase 3 case identities changed')
 
@@ -147,6 +149,7 @@ test.describe('Phase 3 general editing quality @serial', () => {
   for (const entry of manifest.cases) {
     test(entry.id, async ({}, testInfo) => {
       test.skip(process.env.SCLIP_PHASE3_CASE && process.env.SCLIP_PHASE3_CASE !== entry.id, 'Another locked case selected')
+      test.skip(phase3b && entry.id !== 'talking-head', 'Phase 3B is the single locked talking-head comparison')
       test.setTimeout(6_000_000)
       const caseDir = path.join(artifactRoot, entry.id)
       const workspaceParent = path.join(caseDir, 'workspace')
@@ -157,7 +160,12 @@ test.describe('Phase 3 general editing quality @serial', () => {
       expect(fs.existsSync(firstDir)).toBe(false)
       expect(fs.existsSync(reviewedDir)).toBe(false)
       expect(await sha256(entry.source), 'Source changed since locked manifest').toBe(entry.source_sha256)
-      expect(fs.readFileSync(path.join(caseDir, 'prompt.txt'), 'utf8').trim()).toBe(entry.prompt)
+      expect(fs.readFileSync(path.join(manifestRoot, entry.id, 'prompt.txt'), 'utf8').trim()).toBe(entry.prompt)
+      if (phase3b) {
+        fs.mkdirSync(caseDir, { recursive: true })
+        fs.copyFileSync(path.join(manifestRoot, entry.id, 'prompt.txt'), path.join(caseDir, 'prompt.txt'))
+        fs.copyFileSync(path.join(manifestRoot, entry.id, 'source-manifest.json'), path.join(caseDir, 'source-manifest.json'))
+      }
       fs.mkdirSync(workspaceParent, { recursive: true })
 
       const userData = tmpDir(`sclip-phase3-${entry.id}-`)
@@ -174,6 +182,7 @@ test.describe('Phase 3 general editing quality @serial', () => {
         pass_timeout_ms: passTimeoutMs, max_render_duration_us: maxRenderDurationUs,
         profile_source: profileRoot, credential_transfer: 'encrypted blob copied into isolated userData',
         creator_style_profile_copied: false, external_broll_enabled: false, retries: 0,
+        baseline_manifest: manifestRoot, comparison: phase3b ? 'PHASE_3B_ONE_LOCKED_RUN' : 'PHASE_3',
       })
 
       const { app, page } = await launchApp({ userDataDir: userData, realKeychain: true,
@@ -201,6 +210,8 @@ test.describe('Phase 3 general editing quality @serial', () => {
         const firstTrace = path.join(caseDir, 'first-pass.hermes-trace.txt')
         const firstRun = await runHermes(helperPath, { ...common, prompt: entry.prompt, maxTurns: firstPassMaxTurns }, firstTrace)
         const firstSaved = await savePass(page, projectDir, firstDir)
+        const firstLogs = await invokeCmd<any[]>(page, 'log_list')
+        json(path.join(firstDir, 'mcp-events.json'), firstLogs.filter(row => row.category?.kind === 'Mcp'))
         firstResult = { ...firstRun, ...firstSaved, trace: firstTrace }
         json(path.join(caseDir, 'first-pass-result.json'), firstResult)
 
@@ -210,6 +221,9 @@ test.describe('Phase 3 general editing quality @serial', () => {
         const reviewTrace = path.join(caseDir, 'reviewed-pass.hermes-trace.txt')
         const reviewRun = await runHermes(helperPath, { ...common, prompt: reviewPrompt, maxTurns: reviewMaxTurns }, reviewTrace)
         const reviewedSaved = await savePass(page, projectDir, reviewedDir)
+        const seenLogIds = new Set(firstLogs.map(row => row.id))
+        const reviewedLogs = await invokeCmd<any[]>(page, 'log_list')
+        json(path.join(reviewedDir, 'mcp-events.json'), reviewedLogs.filter(row => row.category?.kind === 'Mcp' && !seenLogIds.has(row.id)))
         reviewResult = { ...reviewRun, ...reviewedSaved, trace: reviewTrace }
         json(path.join(caseDir, 'reviewed-pass-result.json'), reviewResult)
         expect(reviewRun.providerFailed).toBe(false)
