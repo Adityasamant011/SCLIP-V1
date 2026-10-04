@@ -65,10 +65,20 @@ async function runHermes(helperPath: string, request: Record<string, unknown>, t
   })
   child.stdin.end(JSON.stringify(request))
   let tail = ''
+  let outputLine = ''
+  let reasoningDisplay = false
   const receive = (chunk: Buffer) => {
     const value = String(chunk)
-    trace.write(value)
     tail = `${tail}${value}`.slice(-32_000)
+    outputLine += value
+    let newline: number
+    while ((newline = outputLine.indexOf('\n')) >= 0) {
+      const line = outputLine.slice(0, newline + 1)
+      outputLine = outputLine.slice(newline + 1)
+      if (line.includes('┌─ Reasoning')) { reasoningDisplay = true; trace.write('[Reasoning display omitted]\n'); continue }
+      if (reasoningDisplay) { if (line.includes('└─')) reasoningDisplay = false; continue }
+      trace.write(line)
+    }
   }
   child.stdout?.on('data', receive)
   child.stderr?.on('data', receive)
@@ -78,7 +88,7 @@ async function runHermes(helperPath: string, request: Record<string, unknown>, t
   const code = await new Promise<number>((resolve, reject) => {
     child.once('error', reject)
     child.once('close', value => resolve(value ?? 1))
-  }).finally(async () => { clearInterval(progress); clearTimeout(deadline); await new Promise<void>(resolve => trace.end(resolve)) })
+  }).finally(async () => { clearInterval(progress); clearTimeout(deadline); if (!reasoningDisplay && outputLine) trace.write(outputLine); await new Promise<void>(resolve => trace.end(resolve)) })
   // Preserve only observable actions/results, excluding CLI thinking display.
   const safeTrace = fs.readFileSync(tracePath, 'utf8').replace(/┌─ Reasoning [^\n]*\n[\s\S]*?└─+┘/g, '[Reasoning display omitted]')
   fs.writeFileSync(tracePath, safeTrace)
@@ -94,8 +104,8 @@ test('Phase 3B review-only live acceptance @serial', async ({}) => {
   test.skip(process.env.SCLIP_PHASE3B_REVIEW_ONLY !== '1', 'One real review is opt-in')
   test.setTimeout(2_000_000)
   const sourceRoot = path.join(repoRoot, 'apps/desktop/e2e/bench-results/phase3b-opening-review/talking-head')
-  const iteration2 = process.env.SCLIP_PHASE3B_REVIEW_ITERATION === '2'
-  const resultDir = path.join(sourceRoot, iteration2 ? 'review-only-iteration2' : 'review-only')
+  const iteration = process.env.SCLIP_PHASE3B_REVIEW_ITERATION
+  const resultDir = path.join(sourceRoot, iteration === '3' ? 'review-only-iteration3' : iteration === '2' ? 'review-only-iteration2' : 'review-only')
   expect(fs.existsSync(resultDir), 'Never overwrite or repeat the live review').toBe(false)
   const startingFile = path.join(sourceRoot, 'first-pass/project.json')
   const originalHash = await sha256(startingFile)

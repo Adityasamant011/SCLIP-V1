@@ -50,7 +50,7 @@ const resourceUris = new Set([
 const promptNames = new Set(rust.prompts.map((p) => p.name))
 // Built-in Hermes discovery operations, enabled by the Sclip Hermes profile.
 // They are not WeftCut MCP tools and must not be counted in the MCP catalog.
-const HERMES_DISCOVERY_TOOLS = new Set(['tool_search', 'tool_describe'])
+const HERMES_DISCOVERY_TOOLS = new Set(['tool_search', 'tool_describe', 'memory'])
 
 // Backticked snake_case tokens in the skill sources that are NOT tool names:
 // manifest fields, props_schema variants, lifecycle identifiers, tool params.
@@ -58,7 +58,7 @@ const HERMES_DISCOVERY_TOOLS = new Set(['tool_search', 'tool_describe'])
 // with a live tool name (checked below).
 const KNOWN_NON_TOOLS = new Set([
   // SKILL.md — tool params
-  'from', 'request', 'start_us', 'end_us', 'limit', 'range', 't_us', 'estimated_duration_us', 'critical',
+  'from', 'request', 'start_us', 'end_us', 'limit', 't_us', 'estimated_duration_us', 'critical', 'focus_x', 'focus_y', 'text', 'voice', 'speed',
   // motif-authoring.md — manifest fields
   'id', 'version', 'name', 'size', 'default_duration_s', 'max_duration_s',
   'max_duration_prop', 'content_duration_s', 'settle_rafs', 'fonts',

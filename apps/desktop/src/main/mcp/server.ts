@@ -36,7 +36,7 @@ import { inspectTimelineFrame } from '../sclip/timelineFrame.js'
 import { renderComposedTimelineRange } from '../sclip/rangeRender.js'
 import { validateRoughCutReview } from '../sclip/roughCutReview.js'
 import { EvidenceCoordinateError, timelineTime, validateEvidenceTime, validateTimelineRange, reviewState } from '../sclip/evidenceCoordinates.js'
-import { RevisionLoopGuard } from '../sclip/revisionLoopGuard.js'
+import { RevisionLoopGuard, ReviewProtocolError } from '../sclip/revisionLoopGuard.js'
 import { getVisionRuntime } from '../sclip/visionRuntime.js'
 import { compactMediaContext } from '../sclip/compactTranscript.js'
 import { calculateVideoFit } from '../sclip/framingGeometry.js'
@@ -53,11 +53,28 @@ type Backend = import('@weftcut/core').Backend
 
 const REVISION_CONTROL_TOOL = {
   name: 'revision_control',
-  description: 'Bounded action-oriented review. Deliberate review launches are already active across reconnects; status shows the stage. Use begin only for an ad-hoc review in an ordinary editing session. Four initial evidence calls plus one reasoned two-call extension; validate at most three prioritized, current-timeline issues. Checkpoint, select one issue, promptly repair using ordinary tools, reinspect the changed timeline, then finish resolved or honestly unresolved. At most three mutations per issue. Diagnosis cannot consume the repair/verification budget. This guard supplies no editorial decision.',
+  description: 'Bounded action-oriented review. Deliberate review launches are already active across reconnects; status shows the stage. Use begin only for an ad-hoc review in an ordinary editing session. Four initial evidence calls plus one reasoned two-call extension; Use record_issue for at most three prioritized current-timeline issues; you do not need a nested RoughCutReview. Select one returned issue_id, checkpoint before mutation, promptly repair using ordinary tools, reinspect the changed timeline, then finish resolved or honestly unresolved. At most three mutations per issue. Diagnosis cannot consume the repair/verification budget. This guard supplies no editorial decision.',
   inputSchema: { type: 'object', properties: {
-    action: { type: 'string', enum: ['begin', 'status', 'extend_inspection', 'select_issue', 'finish_issue', 'finalize', 'conclude_no_repair', 'reground'] },
+    action: { type: 'string', enum: ['begin', 'status', 'extend_inspection', 'select_issue', 'finish_issue', 'finalize', 'conclude_no_repair', 'reground', 'complete'] },
     evidence_id: { type: 'string', description: 'Receipt id from fresh current timeline evidence.' }, issue_id: { type: 'string' }, status: { type: 'string', enum: ['resolved', 'unresolved'] }, reason: { type: 'string' },
   }, required: ['action'] },
+} as const
+
+const RECORD_ISSUE_TOOL = {
+  name: 'record_issue',
+  description: 'Register YOUR editorial issue during an active review. Supply flat description, severity, repairable, observed evidence_receipt_ids, and affected_range_us or layer_ids. Sclip derives state identity, provenance and layer bounds; no nested inspections or RoughCutReview required. At least one fresh CURRENT_TIMELINE receipt must overlap the issue; source receipts may supplement it. Returns accepted and issue.id. If repairable, select that issue.id with revision_control select_issue, checkpoint, then use your chosen ordinary editing tools and reinspect. You are authorized to make justified repairs autonomously; do not ask permission. Infrastructure never chooses the issue or repair.',
+  inputSchema: { type: 'object', properties: {
+    description: { type: 'string' }, severity: { type: 'string', enum: ['minor', 'moderate', 'critical'] },
+    repairable: { type: 'boolean', description: 'Your judgment whether a justified repair can be made.' },
+    evidence_receipt_ids: { type: 'array', items: { type: 'string' }, minItems: 1 },
+    affected_range_us: { type: 'array', items: { type: 'integer', minimum: 0 }, minItems: 2, maxItems: 2, description: 'Affected current TIMELINE range. May omit if layer_ids supplied.' },
+    layer_ids: { type: 'array', items: { type: 'string' }, description: 'Current composition layers affected; Sclip derives their bounds if range omitted.' },
+  }, required: ['description', 'severity', 'repairable', 'evidence_receipt_ids'], additionalProperties: false },
+} as const
+const WITHDRAW_ISSUE_TOOL = {
+  name: 'withdraw_issue',
+  description: 'Explicitly withdraw/reclassify YOUR registered issue after reconsideration. Supply its issue_id, editorial reason and fresh current evidence_receipt_ids overlapping the issue. This removes its repairable classification, permitting a consistent no-repair conclusion. Does not edit or choose your judgment. A committed repair must first be reinspected.',
+  inputSchema: { type: 'object', properties: { issue_id: { type: 'string' }, reason: { type: 'string' }, evidence_receipt_ids: { type: 'array', items: { type: 'string' }, minItems: 1 } }, required: ['issue_id', 'reason', 'evidence_receipt_ids'], additionalProperties: false },
 } as const
 
 const MEDIA_CONTEXT_TOOL = {
@@ -1204,6 +1221,8 @@ export async function registeredMcpTools(backend: Backend, opts: McpServerOption
     ...MCP_TOOL_DEFS,
     ...MOTIF_TOOL_DEFS,
     REVISION_CONTROL_TOOL,
+    RECORD_ISSUE_TOOL,
+    WITHDRAW_ISSUE_TOOL,
     mediaContextTool,
     VISION_INSPECT_TOOL,
     CALCULATE_VIDEO_FIT_TOOL,
@@ -1272,6 +1291,17 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
         const evidence = await opts.evaluateSourcePassages(args, (extra as { signal?: AbortSignal }).signal)
         return { content: [{ type: 'text', text: JSON.stringify(evidence) }] } as ServerResult
       }
+      if (name === 'record_issue' || name === 'withdraw_issue') {
+        const snap = getTsHost()?.actor.snapshot()
+        if (!snap) throw new ReviewProtocolError({ code: 'CURRENT_PROJECT_REQUIRED', correction: 'Open a current project before review.' })
+        const comp = snap.compositions[snap.root_id]!
+        const layers = new Map<string, [number, number]>(comp.tracks.flatMap(track => track.layers.map(layer => [layer.id, [layer.t_start_us, layer.t_end_us]] as [string, [number, number]])))
+        const result = name === 'record_issue' ? revisionGuard.recordIssue(args, reviewState(snap), comp.duration_us, layers) : revisionGuard.withdrawIssue(args, reviewState(snap))
+        const auditDir = process.env.SCLIP_REVIEW_EVIDENCE_DIR
+        if (auditDir) { try { fs.mkdirSync(auditDir, { recursive: true }); fs.writeFileSync(path.join(auditDir, `${Date.now()}-${randomUUID()}.json`), JSON.stringify({ tool: name, args, result })) } catch {} }
+        emitReviewState(name)
+        return { content: [{ type: 'text', text: JSON.stringify(result) }] } as ServerResult
+      }
       if (name === 'revision_control') {
         let status: ReturnType<RevisionLoopGuard['begin']>
         switch (args.action) {
@@ -1281,6 +1311,7 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
           case 'select_issue': status = revisionGuard.selectIssue(args.issue_id, reviewState(getTsHost()?.actor.snapshot())); break
           case 'finish_issue': status = revisionGuard.finishIssue(args.status); break
           case 'finalize': status = revisionGuard.finalize(); break
+          case 'complete': status = revisionGuard.complete(); break
           case 'reground': status = revisionGuard.reground(args.reason, reviewState(getTsHost()?.actor.snapshot())); break
           case 'conclude_no_repair': status = revisionGuard.concludeNoRepair(args.reason, args.evidence_id, reviewState(getTsHost()?.actor.snapshot())); break
           default: return revisionToolError('Unknown revision_control action')
@@ -1302,7 +1333,7 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
       if (name === 'validate_rough_cut_review' && revisionGuard.status.phase !== 'idle') {
         const review = typeof args.review === 'string' ? JSON.parse(args.review) : args.review
         const refusal = revisionGuard.validateEvidence(review, reviewState(getTsHost()?.actor.snapshot()))
-        if (refusal) return { content: [{ type: 'text', text: JSON.stringify({ valid: false, errors: [refusal] }) }] } as ServerResult
+        if (refusal) return { content: [{ type: 'text', text: JSON.stringify({ valid: false, code: 'INVALID_REVIEW_RECORD', errors: [refusal], correction: 'Use record_issue with flat description, severity, repairable, evidence_receipt_ids and affected_range_us or layer_ids; do not build nested inspections.', review_session: revisionGuard.status }) }] } as ServerResult
       }
       const evidenceState = reviewState(getTsHost()?.actor.snapshot())
       const auditBefore = mutation && process.env.SCLIP_REVIEW_EVIDENCE_DIR ? getTsHost()?.actor.snapshot() : undefined
@@ -1364,7 +1395,7 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
       }
       return result
     } catch (e) {
-      return { isError: true, content: [{ type: 'text', text: e instanceof EvidenceCoordinateError ? e.message : `Tool '${req.params.name}' error: ${e instanceof Error ? e.message : String(e)}` }] } as unknown as ServerResult
+      return { isError: true, content: [{ type: 'text', text: e instanceof ReviewProtocolError ? JSON.stringify({ ...e.details, review_session: revisionGuard.status }) : e instanceof EvidenceCoordinateError ? e.message : `Tool '${req.params.name}' error: ${e instanceof Error ? e.message : String(e)}` }] } as unknown as ServerResult
     }
   }, log, clientInfo))
   server.setRequestHandler(ListResourcesRequestSchema, track('resources/list', async () => {

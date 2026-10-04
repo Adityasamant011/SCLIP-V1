@@ -125,3 +125,84 @@ describe('Product autonomous review lifecycle', () => {
     } finally { await f.close() }
   })
 })
+
+const simpleIssue = (f: Awaited<ReturnType<typeof reviewFixture>>, receipts = ['e1']) => ({ description: 'Synthetic brief requests a shorter endpoint', severity: 'moderate', repairable: true, evidence_receipt_ids: receipts, layer_ids: [f.layerId] })
+describe('Executable editorial issue interface', () => {
+  it('accepts a flat issue and derives current layer bounds and state bookkeeping', async () => {
+    const f = await reviewFixture()
+    try {
+      await f.call('get_timeline_context')
+      const r = body(await f.call('record_issue', simpleIssue(f)))
+      expect(r).toMatchObject({ accepted: true, issue: { id: 'issue-1', affected_range_us: [0, 60_000_000], evidence_receipt_ids: ['e1'], repairable: true } })
+      expect(r.review_session.workflow_stage).toBe('REPAIRING')
+    } finally { await f.close() }
+  })
+  it('returns missing fields with a concise correction and accepts a corrected submission', async () => {
+    const f = await reviewFixture()
+    try {
+      await f.call('get_timeline_context')
+      const { evidence_receipt_ids: _ids, ...bad } = simpleIssue(f)
+      const r = await f.call('record_issue', { ...bad, evidence_id: 'e1' })
+      expect(r.isError).toBe(true)
+      expect(body(r)).toMatchObject({ code: 'INVALID_ISSUE', fields: ['evidence_receipt_ids'] })
+      expect(body(r).correction).toContain('flat record_issue')
+      expect(body(await f.call('record_issue', simpleIssue(f))).accepted).toBe(true)
+    } finally { await f.close() }
+  })
+  it('blocks contradictory no-repair decisions until explicit evidence-backed withdrawal', async () => {
+    const f = await reviewFixture()
+    try {
+      await f.call('get_timeline_context'); await f.call('record_issue', simpleIssue(f))
+      const cleanLegacy = { ...diagnosis(f, 'e1'), identified_issues: [] }
+      expect(body(await f.call('validate_rough_cut_review', { review: cleanLegacy })).valid).toBe(true)
+      expect((await f.call('revision_control', { action: 'finalize' })).isError).toBe(true)
+      await f.call('revision_control', { action: 'select_issue', issue_id: 'issue-1' })
+      const conclude = { action: 'conclude_no_repair', evidence_id: 'e1', reason: 'Reviewer prefers no edit' }
+      expect(body(await f.call('revision_control', conclude)).code).toBe('ACTIVE_REPAIRABLE_ISSUES')
+      expect((await f.call('withdraw_issue', { issue_id: 'issue-1', reason: '', evidence_receipt_ids: ['e1'] })).isError).toBe(true)
+      expect((await f.call('withdraw_issue', { issue_id: 'issue-1', reason: 'Reviewer reconsiders brief', evidence_receipt_ids: ['invented'] })).isError).toBe(true)
+      expect(body(await f.call('withdraw_issue', { issue_id: 'issue-1', reason: 'Reviewer judges current duration intentional after reconsidering brief', evidence_receipt_ids: ['e1'] })).accepted).toBe(true)
+      expect(body(await f.call('revision_control', conclude)).workflow_stage).toBe('COMPLETE')
+    } finally { await f.close() }
+  })
+  it('selects, checkpoints, mutates ProjectActor, reinspects, verifies and completes', async () => {
+    const f = await reviewFixture()
+    try {
+      await f.call('get_timeline_context'); await f.call('record_issue', simpleIssue(f))
+      expect((await f.call('revision_control', { action: 'select_issue', issue_id: 'issue-1' })).isError).not.toBe(true)
+      const trim = { layer_id: f.layerId, edge: 'out', new_t_us: 50_000_000 }
+      expect((await f.call('trim_layer', trim)).isError).toBe(true)
+      await f.call('checkpoint', { label: 'Reviewer selected endpoint repair' })
+      expect((await f.call('trim_layer', trim)).isError).not.toBe(true)
+      expect(f.actor.snapshot().compositions[f.actor.snapshot().root_id]!.duration_us).toBe(50_000_000)
+      expect((await f.call('revision_control', { action: 'finish_issue', status: 'resolved' })).isError).toBe(true)
+      expect((await f.call('withdraw_issue', { issue_id: 'issue-1', reason: 'Reconsider', evidence_receipt_ids: ['e1'] })).isError).toBe(true)
+      await f.call('get_timeline_context', { start_us: 40_000_000, end_us: 50_000_000 })
+      expect((await f.call('revision_control', { action: 'finish_issue', status: 'resolved' })).isError).not.toBe(true)
+      expect(body(await f.call('revision_control', { action: 'complete' })).workflow_stage).toBe('COMPLETE')
+    } finally { await f.close() }
+  })
+  it('preserves stale receipt and mutation blocking in the simplified protocol', async () => {
+    const f = await reviewFixture()
+    try {
+      await f.call('get_timeline_context'); await f.call('record_issue', simpleIssue(f)); await f.call('checkpoint', { label: 'Review' })
+      await f.call('revision_control', { action: 'select_issue', issue_id: 'issue-1' })
+      f.actor.mcpCall('update_layer_params', JSON.stringify({ layer_id: f.layerId, patch: { kind: 'Color', color: { r: 90, g: 0, b: 0, a: 255 } } }))
+      expect((await f.call('trim_layer', { layer_id: f.layerId, edge: 'out', new_t_us: 50_000_000 })).isError).toBe(true)
+      expect(body(await f.call('withdraw_issue', { issue_id: 'issue-1', reason: 'Changed externally', evidence_receipt_ids: ['e1'] })).code).toBe('STALE_OR_UNKNOWN_EVIDENCE')
+      await f.call('get_timeline_context')
+      expect(body(await f.call('withdraw_issue', { issue_id: 'issue-1', reason: 'New state changes editorial judgment', evidence_receipt_ids: ['e2'] })).accepted).toBe(true)
+    } finally { await f.close() }
+  })
+  it('rejects source-only or unrelated receipts and permits consistent non-repairable judgments', async () => {
+    const f = await reviewFixture()
+    try {
+      await f.call('get_media_context', { media_id: f.mediaId })
+      expect(body(await f.call('record_issue', simpleIssue(f))).code).toBe('CURRENT_TIMELINE_EVIDENCE_REQUIRED')
+      await f.call('get_timeline_context', { start_us: 0, end_us: 10_000_000 })
+      expect(body(await f.call('record_issue', { ...simpleIssue(f, ['e2']), affected_range_us: [40_000_000, 60_000_000] })).code).toBe('EVIDENCE_RANGE_MISMATCH')
+      expect(body(await f.call('record_issue', { ...simpleIssue(f, ['e2']), repairable: false })).accepted).toBe(true)
+      expect(body(await f.call('revision_control', { action: 'conclude_no_repair', evidence_id: 'e2', reason: 'Reviewer judges optional polish unjustified' })).workflow_stage).toBe('COMPLETE')
+    } finally { await f.close() }
+  })
+})
