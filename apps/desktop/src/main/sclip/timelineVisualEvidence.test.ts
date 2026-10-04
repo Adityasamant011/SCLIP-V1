@@ -5,13 +5,13 @@ import { inspectTimelineRangeVisuals, representativeTimes, subjectObservations }
 const analyze = vi.hoisted(() => vi.fn(async (_req: any) => ({ ok: true, description: 'Sample 0 shows wall/light; later samples show a visible person near left boundary.', subjectVisible: true, subjectPosition: 'center-left', framingOk: false, confidence: null, visibleContent: ['person'], model: 'synthetic', latencyMs: 0 })))
 vi.mock('./visionRuntime', () => ({ getVisionRuntime: () => ({ analyze }) }))
 describe('Representative visual evidence', () => {
-  it('captures five grounded timeline samples and uses one bounded model request', async () => {
+  it('captures five grounded timeline samples and uses bounded independent per-frame requests', async () => {
     analyze.mockClear()
     const project = blankProject(uuidV7Gen(), 'Synthetic visuals'); project.compositions[project.root_id]!.duration_us = 60_000_000
     const execute = vi.fn(async (code: string) => ({ pngBase64: Buffer.from('synthetic image').toString('base64'), tUs: Number(code.match(/captureFrameAt\((\d+)/)![1]), factualEvidence: { layer_bounds: [{ canvas_coverage: { geometry: 'full' } }] } }))
     const result = await inspectTimelineRangeVisuals(project, { start_us: 0, end_us: 7_000_000 }, () => ({ isDestroyed: () => false, webContents: { executeJavaScript: execute } }))
-    expect(execute).toHaveBeenCalledTimes(5); expect(analyze).toHaveBeenCalledTimes(1)
-    expect(analyze.mock.calls[0]![0].imagePaths).toHaveLength(5)
+    expect(execute).toHaveBeenCalledTimes(5); expect(analyze).toHaveBeenCalledTimes(5)
+    expect(analyze.mock.calls.every(c=>c[0].imagePaths.length===1)).toBe(true)
     expect(result.representative_samples).toHaveLength(5)
     for (const sample of result.representative_samples) {
       expect(sample).toMatchObject({ coordinate_space: 'timeline', evidence_origin: 'CURRENT_TIMELINE', composition_id: project.root_id })
@@ -33,5 +33,16 @@ describe('Representative visual evidence', () => {
     expect(result.bounding_regions).toBeNull(); expect(result.confidence).toBeNull()
     expect(JSON.stringify(result)).not.toContain('framingOk'); expect(JSON.stringify(result)).not.toContain('framing_ok')
     expect(result.limitations).toContain('No aesthetic verdict')
+  })
+})
+
+describe('Per-frame epistemic distinctions',()=>{
+  it('retains contradictory observations without a pooled unanimous summary',async()=>{
+    analyze.mockClear();analyze.mockImplementation(async(req:any)=>({...await Promise.resolve({ok:true,description:req.context.includes('sample 0')?'No person; wall visible':'Person intersects left edge',visibleContent:[],confidence:null,model:'synthetic',latencyMs:0}),subjectVisible:!req.context.includes('sample 0'),subjectPosition:'uncertain',framingOk:false}))
+    const p=blankProject(uuidV7Gen(),'Contrasting synthetic frames');p.compositions[p.root_id].duration_us=23000000
+    const execute=vi.fn(async(code:string)=>({pngBase64:Buffer.from('distinct-synthetic-pixels').toString('base64'),tUs:Number(code.match(/captureFrameAt\((\d+)/)![1])}))
+    const r=await inspectTimelineRangeVisuals(p,{start_us:0,end_us:23000000,representative_samples:2,question:'Synthetic distinct question'},()=>({isDestroyed:()=>false,webContents:{executeJavaScript:execute}}))
+    expect(r.frame_observations.map(o=>o.subject_visible)).toEqual([false,true]);expect(r.visual_observations.description).toContain('No person');expect(r.visual_observations.description).toContain('intersects left edge');expect(analyze).toHaveBeenCalledTimes(2)
+    const cached=await inspectTimelineRangeVisuals(p,{start_us:0,end_us:23000000,representative_samples:2,question:'Synthetic distinct question'},()=>({isDestroyed:()=>false,webContents:{executeJavaScript:execute}}));expect(cached.frame_observations).toEqual(r.frame_observations);expect(analyze).toHaveBeenCalledTimes(2)
   })
 })

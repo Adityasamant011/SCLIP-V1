@@ -1,5 +1,5 @@
 import path from 'node:path'
-import { startAutonomousReview } from './autonomousReview.js'
+import { startAutonomousReview, initialEditorialEvidence, stageEditorialEvidence } from './autonomousReview.js'
 import fs from 'node:fs'
 import { createHash } from 'node:crypto'
 import * as pty from 'node-pty'
@@ -64,6 +64,8 @@ export class HermesTerminalRuntime {
     fs.mkdirSync(home, { recursive: true, mode: 0o700 })
     const mcp = this.options.getMcpInfo()
     const review = mode === 'review' ? await startAutonomousReview(mcp, projectId) : null
+    const packet=review?.editorial_evidence_packet ?? await initialEditorialEvidence(mcp,projectId)
+    const stagedEvidence=stageEditorialEvidence(home,packet)
     const configPath = path.join(home, 'config.yaml')
     if (!fs.existsSync(configPath)) writeHermesProfile(home, 0)
     const profile = readHermesProfile(home)
@@ -90,7 +92,7 @@ export class HermesTerminalRuntime {
       ...launch.args,
       'chat',
       '--toolsets', EDITOR_TOOLSETS,
-      '--skills', 'weftcut',
+      '--skills', `weftcut,${stagedEvidence.name}`,
       '--provider', profile.provider,
       '-m', profile.model,
       // Hermes limits session titles to 100 chars; renderer-generated project
@@ -126,6 +128,7 @@ export class HermesTerminalRuntime {
       this.options.onOutput({ projectId, sessionId, sequence: ++session.sequence, data })
     })
     terminal.onExit(({ exitCode }) => {
+      stagedEvidence.cleanup()
       if (this.sessions.get(key) !== session) return
       const tail = redactor.flush()
       if (tail) {

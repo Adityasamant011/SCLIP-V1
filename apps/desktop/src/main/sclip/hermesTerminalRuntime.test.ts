@@ -1,3 +1,4 @@
+vi.mock('./autonomousReview', () => ({startAutonomousReview: vi.fn(async()=>({url:'http://127.0.0.1:44555/mcp?review_session=synthetic',review_id:'synthetic',editorial_evidence_packet:{identity:{state_version:'synthetic'}}})),initialEditorialEvidence:vi.fn(async()=>({identity:{state_version:'synthetic'}})),stageEditorialEvidence:()=>({name:'synthetic-evidence',cleanup:()=>{}})}))
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import os from 'node:os'
@@ -72,7 +73,7 @@ describe('HermesTerminalRuntime', () => {
     expect(spawnedArgs[spawnedArgs.indexOf('--max-turns') + 1]).toBe('100')
     const skillsIdx = spawnedArgs.indexOf('--skills')
     expect(skillsIdx).toBeGreaterThan(-1)
-    expect(spawnedArgs[skillsIdx + 1]).toBe('weftcut')
+    expect(spawnedArgs[skillsIdx + 1]).toBe('weftcut,synthetic-evidence')
 
     expect(spawnedEnv.SCLIP_MCP_URL).toBe('http://127.0.0.1:44555/mcp')
     expect(spawnedEnv.SCLIP_MCP_TOKEN).toBe('secret-token-123')

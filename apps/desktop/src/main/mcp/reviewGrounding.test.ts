@@ -66,7 +66,9 @@ describe('Evidence coordinates', () => {
 })
 async function reviewFixture(activeWindow?: any, visual = false) {
   const f = fixture(visual); const host = await startMcpHost(f.backend, { getTsHost: () => f.ts, getActiveWindow: () => activeWindow ?? null })
-  const started = await startAutonomousReview(host.getInfo(), f.actor.snapshot().project_id); const clients: Client[] = []
+  const started = await startAutonomousReview(host.getInfo(), f.actor.snapshot().project_id);
+  expect(started.editorial_evidence_packet).toMatchObject({identity:{project_id:f.actor.snapshot().project_id},evidence_receipt:{id:'p0',modalities:['timeline','text']}});
+  const clients: Client[] = []
   async function connect() {
     const client = new Client({ name: 'synthetic-reviewer', version: '1' }, {})
     await client.connect(new StreamableHTTPClientTransport(new URL(started.url), { requestInit: { headers: { Authorization: `Bearer ${host.getInfo().bearer_token}` } } }))
@@ -128,7 +130,7 @@ describe('Product autonomous review lifecycle', () => {
   })
 })
 
-const simpleIssue = (f: Awaited<ReturnType<typeof reviewFixture>>, receipts = ['e1']) => ({ description: 'Synthetic brief requests a shorter endpoint', severity: 'moderate', repairable: true, evidence_receipt_ids: receipts, layer_ids: [f.layerId] })
+const simpleIssue = (f: Awaited<ReturnType<typeof reviewFixture>>, receipts = ['e1']) => ({ description: 'Synthetic brief requests a shorter endpoint', severity: 'moderate', repairable: true, evidence_dimensions:['timeline'], evidence_receipt_ids: receipts, layer_ids: [f.layerId] })
 describe('Executable editorial issue interface', () => {
   it('accepts a flat issue and derives current layer bounds and state bookkeeping', async () => {
     const f = await reviewFixture()
@@ -227,13 +229,13 @@ describe('Visual repair state correctness', () => {
     try {
       const range = { start_us: 0, end_us: 60_000_000, representative_samples: 3 }
       expect((await f.call('inspect_timeline_range_visuals', range)).isError).not.toBe(true)
-      await f.call('record_issue', simpleIssue(f)); await f.call('checkpoint', { label: 'Reviewer choice' }); await f.call('revision_control', { action: 'select_issue', issue_id: 'issue-1' })
+      await f.call('record_issue', {...simpleIssue(f),evidence_dimensions:['visual']}); await f.call('checkpoint', { label: 'Reviewer choice' }); await f.call('revision_control', { action: 'select_issue', issue_id: 'issue-1' })
       expect((await f.call('update_layer_params', { layer_id: f.layerId, patch: { kind: 'VideoClip', x: 10 } })).isError).not.toBe(true)
-      expect((await f.call('get_timeline_context')).isError).toBe(true)
+      expect((await f.call('get_timeline_context')).isError).not.toBe(true)
       expect((await f.call('revision_control', { action: 'finish_issue', status: 'resolved' })).isError).toBe(true)
       expect((await f.call('inspect_timeline_range_visuals', range)).isError).not.toBe(true)
       expect((await f.call('revision_control', { action: 'finish_issue', status: 'resolved' })).isError).not.toBe(true)
-      expect(execute).toHaveBeenCalledTimes(6)
+      expect(execute.mock.calls.filter(c=>c[0].includes('captureFrameAt('))).toHaveLength(6)
     } finally { await f.close() }
   })
 })

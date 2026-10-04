@@ -138,7 +138,7 @@ export interface TimelineContextOptions {
   transcriptLoader?: (mediaId: string, fileHash: string | undefined) => CachedTranscriptData | null
 }
 
-function loadTranscriptFromDir(transcriptsDir: string, fileHash: string): CachedTranscriptData | null {
+export function loadTranscriptFromDir(transcriptsDir: string, fileHash: string): CachedTranscriptData | null {
   try {
     if (!fs.existsSync(transcriptsDir)) return null
     // Transcripts might be named <hash>.json or <subhash>.json
@@ -234,15 +234,18 @@ export function buildTimelineContext(
     process.env.SCLIP_TRANSCRIPTS_DIR ??
     (fs.existsSync(defaultDir) ? defaultDir : undefined)
 
-  // Helper to load transcript
+  const transcriptCache=new Map<string,CachedTranscriptData | null>()
+  // Reuse source cache reads across all layers and cut boundaries in this snapshot.
   const getTranscript = (mediaId: string): CachedTranscriptData | null => {
+    if(transcriptCache.has(mediaId))return transcriptCache.get(mediaId)!
     const item = project.media_pool[mediaId]
     if (options.transcriptLoader) {
-      return options.transcriptLoader(mediaId, item?.file_hash_blake3)
+      const value=options.transcriptLoader(mediaId, item?.file_hash_blake3);transcriptCache.set(mediaId,value);return value
     }
     if (transcriptsDir && item?.file_hash_blake3) {
-      return loadTranscriptFromDir(transcriptsDir, item.file_hash_blake3)
+      const value=loadTranscriptFromDir(transcriptsDir, item.file_hash_blake3);transcriptCache.set(mediaId,value);return value
     }
+    transcriptCache.set(mediaId,null)
     return null
   }
 

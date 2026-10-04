@@ -1,3 +1,4 @@
+import fs from 'node:fs'
 /**
  * Electron-main entrypoint for the real-Hermes benchmark. It is bundled to a
  * temporary script by the test harness, decrypts the same Sclip credential as
@@ -12,7 +13,7 @@ import { readHermesProfile } from './hermesRuntime.js'
 import { resolveHermesProviderEnvironment, testHermesConnection } from './hermesSettings.js'
 import { createHermesOutputRedactor, hermesBaseEnvironment } from './hermesSecrets.js'
 import { installSkills, refreshHermesWeftcutSkill } from '../mcp/skillsInstall.js'
-import { startAutonomousReview } from './autonomousReview.js'
+import { startAutonomousReview, initialEditorialEvidence, stageEditorialEvidence } from './autonomousReview.js'
 import { DESKTOP_PRODUCT_NAME } from '../appIdentity.js'
 
 // Set identity before awaiting stdin or Electron readiness: macOS safeStorage
@@ -30,6 +31,7 @@ interface Request {
   maxTurns?: number
   transcriptsDir: string
   mode?: 'edit' | 'review'
+  initialEvidencePath?: string
   probeOnly?: boolean
   toolsets?: string
 }
@@ -67,8 +69,11 @@ async function main(): Promise<void> {
     app.exit(result.ok ? 0 : 1)
     return
   }
-  const review = request.mode === 'review' ? await startAutonomousReview({ url: request.mcpUrl, bearer_token: request.mcpToken }, request.projectId) : null
+  const review = request.mode === 'review' ? await startAutonomousReview({ url: request.mcpUrl, bearer_token: request.mcpToken }, request.projectId, request.transcriptsDir) : null
   if (review) process.stdout.write(`REVIEW_INITIALIZED ${JSON.stringify({ review_id: review.review_id, lifecycle: 'DIAGNOSING' })}\n`)
+  const packet=review?.editorial_evidence_packet ?? await initialEditorialEvidence({url:request.mcpUrl,bearer_token:request.mcpToken},request.projectId)
+  if(request.initialEvidencePath)fs.writeFileSync(request.initialEvidencePath,JSON.stringify(packet,null,2)+'\n',{mode:0o600})
+  const stagedEvidence=stageEditorialEvidence(home,packet)
   const env = {
     ...hermesBaseEnvironment(), ...providerEnv,
     HERMES_HOME: home,
@@ -80,7 +85,7 @@ async function main(): Promise<void> {
   }
   const args = [
     '-m', 'hermes_cli.main', 'chat', '--toolsets', request.toolsets ?? 'terminal,file,web,vision,skills,todo,memory,clarify,weftcut',
-    '--skills', 'weftcut',
+    '--skills', `weftcut,${stagedEvidence.name}`,
     '--provider', profile.provider, '-m', profile.model,
     '--yolo', '--max-turns', String(maxTurns), '-q', request.prompt,
   ]
@@ -97,6 +102,7 @@ async function main(): Promise<void> {
   const code = await new Promise<number>((resolve) => child.once('exit', code => resolve(code ?? 1)))
   process.stdout.write(stdout.flush())
   process.stderr.write(stderr.flush())
+  stagedEvidence.cleanup()
   app.exit(code)
 }
 

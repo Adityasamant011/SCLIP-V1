@@ -101,10 +101,10 @@ async function runHermes(helperPath: string, request: Record<string, unknown>, t
 }
 
 test('Phase 3C frozen model comparison @serial', async ({}) => {
-  test.skip(process.env.SCLIP_PHASE3C_BAKEOFF !== '1', 'One real review is opt-in')
+  test.skip(process.env.SCLIP_PHASE3C_BAKEOFF !== '1' && process.env.SCLIP_PHASE3D_ACCEPTANCE !== '1', 'One real review is opt-in')
   test.setTimeout(2_000_000)
   const sourceRoot = path.join(repoRoot, 'apps/desktop/e2e/bench-results/phase3b-opening-review/talking-head')
-  const resultDir = path.join(sourceRoot, 'phase3c-luna-pro')
+  const resultDir = path.join(sourceRoot, process.env.SCLIP_PHASE3D_ACCEPTANCE === '1' ? 'phase3d-luna-acceptance' : 'phase3c-luna-pro')
   expect(fs.existsSync(resultDir), 'Never overwrite or repeat the live review').toBe(false)
   const startingFile = path.join(sourceRoot, 'first-pass/project.json')
   const originalHash = await sha256(startingFile)
@@ -156,7 +156,7 @@ test('Phase 3C frozen model comparison @serial', async ({}) => {
       max_turns: 24, session_retries: 0, original_hash: originalHash, external_broll: false,
       source_media: 'existing workspace media copied without import', transcripts: 'existing copied cache', prompt })
     const result = await runHermes(helperPath, { userDataPath: userData, python, cwd: repoRoot,
-      mcpUrl: mcp.url, mcpToken: mcp.bearer_token, projectId: current.project_id,
+      mcpUrl: mcp.url, mcpToken: mcp.bearer_token, projectId: current.project_id, initialEvidencePath:path.join(resultDir,'initial-editorial-evidence.json'),
       transcriptsDir: path.join(projectDir, 'Cache/transcripts'), mode: 'review', prompt, maxTurns: 24 }, path.join(resultDir, 'hermes-trace.txt'))
     await invokeCmd(page, 'project_save')
     fs.copyFileSync(path.join(projectDir, 'project.json'), path.join(resultDir, 'reviewed-project.json'))

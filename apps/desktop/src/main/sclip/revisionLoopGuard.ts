@@ -1,8 +1,10 @@
+import { createHash } from 'node:crypto'
+import { evidenceDimensions, toolDimensions, type EvidenceDimension } from './evidenceModalities.js'
 export class ReviewProtocolError extends Error {
   constructor(readonly details: { code: string; fields?: string[]; correction: string; issue_ids?: string[] }) { super(JSON.stringify(details)) }
 }
 function reject(code: string, correction: string, fields?: string[], issue_ids?: string[]): never { throw new ReviewProtocolError({ code, correction, fields, issue_ids }) }
-type RecordedIssue = { id: string; description: string; severity: string; repairable: boolean; evidence_receipt_ids: string[]; affected_range_us: [number, number]; layer_ids: string[]; state: string; withdrawal?: { reason: string; evidence_receipt_ids: string[] } }
+type RecordedIssue = { id: string; description: string; severity: string; repairable: boolean; evidence_receipt_ids: string[]; affected_range_us: [number, number]; layer_ids: string[]; evidence_dimensions: EvidenceDimension[]; state: string; withdrawal?: { reason: string; evidence_receipt_ids: string[] } }
 
 /** MCP-session-only execution guard. It never inspects content or chooses an edit. */
 export class RevisionLoopGuard {
@@ -20,12 +22,13 @@ export class RevisionLoopGuard {
   private verificationPending = false
   private repairInspections = 0
   private finalInspections = 0
-  private readonly visualIssues = new Set<string>()
+  private readonly verifiedDimensions = new Set<EvidenceDimension>()
   private readonly issueRanges = new Map<string, [number, number]>()
   private readonly recordedIssues = new Map<string, RecordedIssue>()
   private reviewedState: string | undefined
   private readonly regroundedStates = new Set<string>()
-  private readonly evidence = new Map<string, { id: string; tool: string; state: string; coordinate_space: string; range: [number, number] }>()
+  private receiptCounter = 0
+  private readonly evidence = new Map<string, { id: string; tool: string; state: string; coordinate_space: string; range: [number, number]; modalities: EvidenceDimension[]; coverage: Partial<Record<EvidenceDimension,[number,number][]>> }>()
 
   constructor(autoBegin = false, private readonly now: () => number = Date.now) { if (autoBegin) this.begin() }
 
@@ -33,6 +36,7 @@ export class RevisionLoopGuard {
     return {
       workflow_stage: this.phase === 'initial' ? 'DIAGNOSING' : this.phase === 'decision' ? 'READY_TO_DECIDE' : this.phase === 'repair' ? this.verificationPending ? 'VERIFYING' : 'REPAIRING' : this.phase === 'done' ? 'COMPLETE' : this.phase.toUpperCase(),
       evidence_ids: [...this.evidence.keys()],
+      verification_dimensions_observed: [...this.verifiedDimensions],
       issues: [...this.recordedIssues.values()].map(({ state: _state, ...issue }) => issue),
       autonomous_authorization: 'Perform justified repairs with ordinary editing tools and verify them; do not ask the user for permission during this autonomous review.',
       phase: this.phase, inspection_calls: this.inspectionCalls,
@@ -141,23 +145,24 @@ export class RevisionLoopGuard {
     const issue = this.recordedIssues.get(this.activeIssue)
     if (issue && currentState !== undefined) issue.state = currentState
     this.verificationPending = true
+    this.verifiedDimensions.clear()
     this.repairInspections = 0
   }
 
   inspectionCompleted(name: string, args: Record<string, unknown>) {
     if (!this.verificationPending || !this.activeIssue) return
-    if (this.isRelevantTimelineInspection(name, args)) this.verificationPending = false
+    // Legacy RoughCutReview compatibility; flat declared issues verify only through typed receipts.
+    if (!this.recordedIssues.has(this.activeIssue) && this.isRelevantTimelineInspection(name, args)) this.verificationPending = false
   }
 
   private isRelevantTimelineInspection(name: string, args: Record<string, unknown>): boolean {
-    if (this.visualIssues.has(this.activeIssue ?? '') && !['inspect_timeline_range_visuals', 'vision_inspect', 'inspect_timeline_frame', 'render_timeline_range'].includes(name)) return false
     const range = this.issueRanges.get(this.activeIssue ?? '')
     const t = args.timeline_t_us ?? args.t_us
     const start = typeof t === 'number' ? t : typeof args.start_us === 'number' ? args.start_us : 0
     const end = typeof t === 'number' ? t : typeof args.end_us === 'number' ? args.end_us : Infinity
     // Source evidence or a background critique alone cannot verify the changed timeline.
-    if (!['get_timeline_context', 'inspect_timeline_range_visuals', 'vision_inspect', 'inspect_timeline_frame', 'render_timeline_range'].includes(name)) return false
-    if (name !== 'get_timeline_context' && typeof t !== 'number' && typeof args.start_us !== 'number') return false
+    if (!['get_editorial_evidence_packet', 'get_timeline_context', 'inspect_timeline_range_visuals', 'vision_inspect', 'inspect_timeline_frame', 'render_timeline_range'].includes(name)) return false
+    if (!['get_timeline_context', 'get_editorial_evidence_packet'].includes(name) && typeof t !== 'number' && typeof args.start_us !== 'number') return false
     return !range || (end >= range[0] && start <= range[1])
   }
 
@@ -174,11 +179,16 @@ export class RevisionLoopGuard {
     return this.status
   }
 
-  recordEvidence(tool: string, coordinate_space: string, range: [number, number], state: string) {
-    const receipt = { id: `e${this.evidence.size + 1}`, tool, coordinate_space, range, state }
+  recordEvidence(tool: string, coordinate_space: string, range: [number, number], state: string, modalities: EvidenceDimension[] = toolDimensions(tool), receiptId?: string, coverage: Partial<Record<EvidenceDimension,[number,number][]>> = Object.fromEntries(modalities.map(d=>[d,[range]]))) {
+    const receipt = { id: receiptId ?? `e${++this.receiptCounter}`, tool, coordinate_space, range, state, modalities, coverage }
     this.evidence.set(receipt.id, receipt)
+    const issue = this.activeIssue ? this.recordedIssues.get(this.activeIssue) : undefined
+    if (this.verificationPending && issue && coordinate_space === 'timeline' && state === this.reviewedState && range[1] >= issue.affected_range_us[0] && range[0] <= issue.affected_range_us[1]) {
+      for (const dimension of modalities) if(coverage[dimension]?.some(r=>r[1]>=issue.affected_range_us[0]&&r[0]<=issue.affected_range_us[1])) this.verifiedDimensions.add(dimension)
+      if (issue.evidence_dimensions.every(d => this.verifiedDimensions.has(d))) this.verificationPending = false
+    }
     const { state: _state, ...observable } = receipt
-    return observable
+    return { ...observable, state_version: createHash('sha256').update(state).digest('hex'), freshness: 'current_at_acquisition' }
   }
 
   private currentReceipts(ids: unknown, state: string, range?: [number, number]) {
@@ -193,7 +203,7 @@ export class RevisionLoopGuard {
 
   recordIssue(args: Record<string, unknown>, state: string, duration: number, layers: Map<string, [number, number]>) {
     if (!['initial', 'decision', 'repair'].includes(this.phase) || this.activeIssue) reject('INVALID_REVIEW_STAGE', 'Finish the selected issue before registering another; completed reviews cannot reopen.')
-    const missing = ['description', 'severity', 'repairable', 'evidence_receipt_ids'].filter(k => args[k] === undefined)
+    const missing = ['description', 'severity', 'repairable', 'evidence_receipt_ids', 'evidence_dimensions'].filter(k => args[k] === undefined)
     if (missing.length) reject('INVALID_ISSUE', 'Supply the missing flat record_issue fields. No nested RoughCutReview is needed.', missing)
     if (typeof args.description !== 'string' || !args.description.trim()) reject('INVALID_ISSUE', 'Describe the issue you observed.', ['description'])
     if (!['minor', 'moderate', 'critical'].includes(String(args.severity))) reject('INVALID_ISSUE', 'severity must be minor, moderate, or critical.', ['severity'])
@@ -205,11 +215,14 @@ export class RevisionLoopGuard {
     if (!Array.isArray(range) || range.length !== 2 || !range.every(Number.isSafeInteger) || range[0] < 0 || range[1] < range[0] || range[1] > duration) reject('INVALID_ISSUE', 'Provide affected_range_us: [timeline_start_us, timeline_end_us], or current layer_ids so Sclip derives their bounds.', ['affected_range_us', 'layer_ids'])
     const bounded = range as [number, number]
     const receipts = this.currentReceipts(args.evidence_receipt_ids, state, bounded)
+    let dimensions: EvidenceDimension[]
+    try { dimensions = evidenceDimensions(args.evidence_dimensions) } catch(e) { reject('INVALID_EVIDENCE_DIMENSIONS', String(e), ['evidence_dimensions']) }
+    const observed = new Set(receipts.flatMap(id => {const r=this.evidence.get(id)!;return r.modalities.filter(d=>r.coverage[d]?.some(x=>x[1]>=bounded[0]&&x[0]<=bounded[1]))}))
+    if (dimensions.some(d => !observed.has(d))) reject('UNSUPPORTED_EVIDENCE_DIMENSION', 'Selected receipts must observe each declared dimension. Acquire relevant evidence; infrastructure does not infer your issue from its description.', ['evidence_dimensions','evidence_receipt_ids'])
     if (this.recordedIssues.size >= 3) reject('ISSUE_LIMIT', 'Three issues are already registered; prioritize those and finish this bounded session.')
     const id = `issue-${this.recordedIssues.size + 1}`
-    const issue: RecordedIssue = { id, description: args.description as string, severity: String(args.severity), repairable: args.repairable as boolean, evidence_receipt_ids: receipts, affected_range_us: bounded, layer_ids: layerIds as string[], state }
+    const issue: RecordedIssue = { id, description: args.description as string, severity: String(args.severity), repairable: args.repairable as boolean, evidence_receipt_ids: receipts, affected_range_us: bounded, layer_ids: layerIds as string[], evidence_dimensions: dimensions, state }
     this.recordedIssues.set(id, issue)
-    if (receipts.some(id => ['inspect_timeline_range_visuals', 'vision_inspect', 'inspect_timeline_frame', 'render_timeline_range'].includes(this.evidence.get(id)!.tool))) this.visualIssues.add(id)
     this.reviewedIssueIds ??= new Set()
     if (issue.repairable) this.reviewedIssueIds.add(id)
     this.issueRanges.set(id, bounded)
@@ -264,7 +277,8 @@ export class RevisionLoopGuard {
     return this.status
   }
 
-  finishIssue(status: unknown) {
+  finishIssue(status: unknown, currentState?: string) {
+    if(currentState !== undefined && currentState !== this.reviewedState) reject('STALE_VERIFICATION', 'State changed after observation. Acquire current evidence and reground before resolving.')
     if (this.phase !== 'repair' || !this.activeIssue) throw new Error('No active revision issue')
     if (status !== 'resolved' && status !== 'unresolved') throw new Error('status must be resolved or unresolved')
     if (this.verificationPending) throw new Error('A committed mutation requires relevant timeline reinspection before closing the issue')

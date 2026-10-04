@@ -30,6 +30,9 @@ import { MCP_TOOL_DEFS } from '../state/mcp-commands.js'
 import { MOTIF_TOOL_DEFS, MOTIF_RESOURCE_DEFS } from './motifToolDefs.js'
 import { withLog, NO_MCP_LOG, type McpCommitWindow, type McpLogDeps, type McpRowSummary } from './withLog.js'
 import { validateRoughCutPlan } from '../sclip/roughCutPlan.js'
+import { buildEditorialEvidencePacket } from '../sclip/editorialEvidencePacket.js'
+import { changedAVRelationships } from '../sclip/mediaRelationships.js'
+import { evidenceCoverage, toolDimensions } from '../sclip/evidenceModalities.js'
 import { buildTimelineContext } from '../sclip/timelineContext.js'
 import { openingSourceWindow, openingTranscriptEvidence } from '../sclip/openingContext.js'
 import { inspectTimelineFrame } from '../sclip/timelineFrame.js'
@@ -61,16 +64,19 @@ const REVISION_CONTROL_TOOL = {
   }, required: ['action'] },
 } as const
 
+const EDITORIAL_PACKET_TOOL = { name: 'get_editorial_evidence_packet', description:'Compact current editorial observation index: state identity, timeline/source ranges, video/audio relationships, cached speech and word boundaries, text, technical facts, visual evidence entry points. No editorial verdict or repair prescription. Reacquire after changes; use targeted deeper tools for omitted evidence.', inputSchema:{type:'object',properties:{start_us:{type:'integer',minimum:0},end_us:{type:'integer',minimum:1},composition_id:{type:'string'},transcripts_dir:{type:'string'}},additionalProperties:false} } as const
+
 const RECORD_ISSUE_TOOL = {
   name: 'record_issue',
-  description: 'Register YOUR editorial issue during an active review. Supply flat description, severity, repairable, observed evidence_receipt_ids, and affected_range_us or layer_ids. Sclip derives state identity, provenance and layer bounds; no nested inspections or RoughCutReview required. At least one fresh CURRENT_TIMELINE receipt must overlap the issue; source receipts may supplement it. Returns accepted and issue.id. If repairable, select that issue.id with revision_control select_issue, checkpoint, then use your chosen ordinary editing tools and reinspect. You are authorized to make justified repairs autonomously; do not ask permission. Infrastructure never chooses the issue or repair.',
+  description: 'Register YOUR editorial issue during an active review. Supply flat description, severity, repairable, declared evidence_dimensions (list each relevant modality for multimodal claims), observed evidence_receipt_ids, and affected_range_us or layer_ids. Sclip derives state identity, provenance and layer bounds; no nested inspections or RoughCutReview required. At least one fresh CURRENT_TIMELINE receipt must overlap the issue; source receipts may supplement it. Returns accepted and issue.id. If repairable, select that issue.id with revision_control select_issue, checkpoint, then use your chosen ordinary editing tools and reinspect. You are authorized to make justified repairs autonomously; do not ask permission. Infrastructure never chooses the issue or repair.',
   inputSchema: { type: 'object', properties: {
     description: { type: 'string' }, severity: { type: 'string', enum: ['minor', 'moderate', 'critical'] },
     repairable: { type: 'boolean', description: 'Your judgment whether a justified repair can be made.' },
+    evidence_dimensions: { type:'array',items:{type:'string',enum:['visual','audio','speech','text','geometry','timeline']},minItems:1,description:'Observable dimensions YOU claim require observation, not editorial issue categories. Fresh verification must cover every declared dimension.' },
     evidence_receipt_ids: { type: 'array', items: { type: 'string' }, minItems: 1 },
     affected_range_us: { type: 'array', items: { type: 'integer', minimum: 0 }, minItems: 2, maxItems: 2, description: 'Affected current TIMELINE range. May omit if layer_ids supplied.' },
     layer_ids: { type: 'array', items: { type: 'string' }, description: 'Current composition layers affected; Sclip derives their bounds if range omitted.' },
-  }, required: ['description', 'severity', 'repairable', 'evidence_receipt_ids'], additionalProperties: false },
+  }, required: ['description', 'severity', 'repairable', 'evidence_receipt_ids', 'evidence_dimensions'], additionalProperties: false },
 } as const
 const WITHDRAW_ISSUE_TOOL = {
   name: 'withdraw_issue',
@@ -91,7 +97,7 @@ const MEDIA_CONTEXT_TOOL = {
 
 const RANGE_VISUALS_TOOL = {
   name: 'inspect_timeline_range_visuals',
-  description: 'Inspect representative CURRENT_TIMELINE visuals across a shot/range instead of assuming one frame represents it. Captures 2–5 composed frames (default 5), from start through end-exclusive, and analyzes them in ONE existing local vision request. Returns labelled timeline samples, geometric coverage, current layer state/source mappings, and uncertain subject/content observations. Geometry is not good framing: wall/light can cover the canvas fully. Hermes decides whether an issue exists and what repair to make. Samples cannot certify unsampled motion. Use this before a visual diagnosis and repeat over the affected range after repair.',
+  description: 'Inspect representative CURRENT_TIMELINE visuals across a shot/range instead of assuming one frame represents it. Captures 2–5 composed frames (default 5), from start through end-exclusive, and observes each independently through the existing local vision runtime, bounded to 2–5 requests. Returns labelled timeline samples, geometric coverage, current layer state/source mappings, and uncertain subject/content observations. Geometry is not good framing: wall/light can cover the canvas fully. Hermes decides whether an issue exists and what repair to make. Samples cannot certify unsampled motion. Use this before a visual diagnosis and repeat over the affected range after repair.',
   inputSchema: { type: 'object', properties: { start_us: { type: 'integer', minimum: 0, description: 'TIMELINE start, not source time.' }, end_us: { type: 'integer', minimum: 1, description: 'Exclusive TIMELINE end, within current composition.' }, composition_id: { type: 'string' }, representative_samples: { type: 'integer', minimum: 2, maximum: 5 }, question: { type: 'string', description: 'Optional observable visual question; no editing instruction.' } }, required: ['start_us', 'end_us'], additionalProperties: false },
 } as const
 
@@ -233,7 +239,7 @@ export const IMPORT_EXTERNAL_MEDIA_TOOL = {
 } as const
 
 const REVISION_INSPECTION_TOOLS = new Set([
-  'get_timeline_context', 'get_media_context', 'inspect_timeline_frame', 'render_timeline_range',
+  'get_editorial_evidence_packet', 'get_timeline_context', 'get_media_context', 'inspect_timeline_frame', 'render_timeline_range',
   'analyze_clip', 'describe_clip', 'compare_frames', 'detect_pauses', 'extract_clip_audio',
   'inspect_timeline_range_visuals', 'vision_inspect', 'get_timeline_critique', 'calculate_video_fit', 'get_param_track', 'get_source_observations', 'evaluate_source_passages',
 ])
@@ -241,7 +247,7 @@ const REVISION_NONMUTATING_TOOLS = new Set([
   'revision_control', 'validate_rough_cut_review', 'validate_rough_cut_plan', 'dry_run',
   'checkpoint', 'list_checkpoints', 'undo', 'redo', 'restore_checkpoint',
   'begin_agent_session', 'end_agent_session', 'lock_history', 'unlock_history',
-  'get_timeline_context', 'inspect_timeline_frame', 'render_timeline_range', 'get_param_track',
+  'get_editorial_evidence_packet', 'get_timeline_context', 'inspect_timeline_frame', 'render_timeline_range', 'get_param_track',
   'inspect_timeline_range_visuals', 'vision_inspect', 'get_timeline_critique', 'video_search_external_media', 'resolve_visual_intents',
 ])
 const isRevisionMutation = (name: string) => (name === 'import_external_media' || MCP_TOOL_DEFS.some((def) => def.name === name) || HYBRID_TOOLS.has(name)) && !REVISION_NONMUTATING_TOOLS.has(name)
@@ -517,6 +523,10 @@ export async function handleCallTool(
       }
       const res = validateRoughCutPlan(planObj, snap.media_pool)
       return { content: [{ type: 'text', text: JSON.stringify(res) }] } as unknown as ServerResult
+    }
+    if (name === 'get_editorial_evidence_packet') {
+      const packet = buildEditorialEvidencePacket(tsHost.actor.snapshot(), { compositionId:args.composition_id as string | undefined, transcriptsDir:args.transcripts_dir as string | undefined, range:args.start_us!==undefined||args.end_us!==undefined ? {start_us:Number(args.start_us??0),end_us:Number(args.end_us??tsHost.actor.snapshot().compositions[String(args.composition_id??tsHost.actor.snapshot().root_id)].duration_us)} : undefined })
+      return { content:[{type:'text',text:JSON.stringify(packet)}] } as ServerResult
     }
     if (name === 'get_timeline_context') {
       const snap = tsHost.actor.snapshot()
@@ -1233,6 +1243,7 @@ export async function registeredMcpTools(backend: Backend, opts: McpServerOption
   const all = mergeMcpCatalog(rust, [
     ...MCP_TOOL_DEFS,
     ...MOTIF_TOOL_DEFS,
+    EDITORIAL_PACKET_TOOL,
     REVISION_CONTROL_TOOL,
     RECORD_ISSUE_TOOL,
     WITHDRAW_ISSUE_TOOL,
@@ -1323,7 +1334,7 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
           case 'status': status = revisionGuard.status; break
           case 'extend_inspection': status = revisionGuard.extendInspection(args.reason); break
           case 'select_issue': status = revisionGuard.selectIssue(args.issue_id, reviewState(getTsHost()?.actor.snapshot())); break
-          case 'finish_issue': status = revisionGuard.finishIssue(args.status); break
+          case 'finish_issue': status = revisionGuard.finishIssue(args.status, reviewState(getTsHost()?.actor.snapshot())); break
           case 'finalize': status = revisionGuard.finalize(); break
           case 'complete': status = revisionGuard.complete(); break
           case 'reground': status = revisionGuard.reground(args.reason, reviewState(getTsHost()?.actor.snapshot())); break
@@ -1350,7 +1361,7 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
         if (refusal) return { content: [{ type: 'text', text: JSON.stringify({ valid: false, code: 'INVALID_REVIEW_RECORD', errors: [refusal], correction: 'Use record_issue with flat description, severity, repairable, evidence_receipt_ids and affected_range_us or layer_ids; do not build nested inspections.', review_session: revisionGuard.status }) }] } as ServerResult
       }
       const evidenceState = reviewState(getTsHost()?.actor.snapshot())
-      const auditBefore = mutation && process.env.SCLIP_REVIEW_EVIDENCE_DIR ? getTsHost()?.actor.snapshot() : undefined
+      const auditBefore = mutation ? getTsHost()?.actor.snapshot() : undefined
       const before = mutation ? reviewState(getTsHost()?.actor.snapshot()) : null
       const result = await handleCallTool(backend, getTsHost, name, args, getPreferredEngine, getVlm, peaksPathFor, opts.getActiveWindow, opts.getReviewerSummary, opts.sourceObservationIndex, opts.externalMediaService, externalEnabled)
       if (mutation && before !== reviewState(getTsHost()?.actor.snapshot())) {
@@ -1358,22 +1369,14 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
         if (auditDir && auditBefore) {
           try { fs.mkdirSync(auditDir, { recursive: true }); fs.writeFileSync(path.join(auditDir, `${Date.now()}-${randomUUID()}.json`), JSON.stringify({ tool: name, args, issue_id: revisionGuard.status.active_issue, before: auditBefore, after: getTsHost()?.actor.snapshot() })) } catch {}
         }
-        revisionGuard.mutationCommitted(reviewState(getTsHost()?.actor.snapshot()))
-        getVisionRuntime().clearCache?.()
-        if (opts.getReviewerSummary) {
-          const summary = opts.getReviewerSummary(true)
-          if (summary && summary.issues.length > 0 && Array.isArray((result as any)?.content)) {
-            const firstContent = (result as any).content[0]
-            if (firstContent && firstContent.type === 'text') {
-              const issuesSummary = summary.issues
-                .slice(0, 3)
-                .map((i) => `⚠️ [${i.category}] ${i.description} -> Suggested action: ${i.suggested_action}`)
-                .join('\n')
-              const extraCount = summary.issues.length > 3 ? ` (+${summary.issues.length - 3} more issue${summary.issues.length - 3 > 1 ? 's' : ''})` : ''
-              firstContent.text += `\n\n[Background Reviewer Advisory]:\n${issuesSummary}${extraCount}`
-            }
-          }
+        const afterSnapshot = getTsHost()?.actor.snapshot()
+        if (auditBefore && afterSnapshot) {
+          const notes = changedAVRelationships(auditBefore, afterSnapshot)
+          if (notes.length) (result as any).content.push({type:'text',text:JSON.stringify({relationship_changes:notes,interpretation:'Observed relative source mappings; offsets can be intentional. Hermes decides whether these support its claim.'})})
         }
+        revisionGuard.mutationCommitted(reviewState(afterSnapshot))
+        getVisionRuntime().clearCache?.()
+
       }
       if (['inspect_timeline_range_visuals', 'vision_inspect', 'inspect_timeline_frame', 'get_timeline_context', 'render_timeline_range', 'get_media_context'].includes(name)) {
         const text = (result as any).content?.find((c: any) => c.type === 'text')
@@ -1383,16 +1386,16 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
       if (name === 'checkpoint' && !('isError' in result && result.isError)) revisionGuard.checkpointCreated()
       if (REVISION_INSPECTION_TOOLS.has(name) && !('isError' in result && result.isError)) {
         if (evidenceState !== reviewState(getTsHost()?.actor.snapshot())) return revisionToolError('Timeline changed while gathering evidence. Reacquire current evidence before diagnosis or repair.')
-        revisionGuard.inspectionCompleted(name, args)
         if (revisionGuard.status.phase !== 'idle') {
           const body = (result as any).content?.find((c: any) => c.type === 'text')
           let data: any = {}; try { data = body ? JSON.parse(body.text) : {} } catch {}
-          const timeline = ['inspect_timeline_range_visuals', 'get_timeline_context', 'inspect_timeline_frame', 'render_timeline_range', 'get_timeline_critique'].includes(name) || data.coordinate_space === 'timeline'
+          const timeline = ['get_editorial_evidence_packet', 'inspect_timeline_range_visuals', 'get_timeline_context', 'inspect_timeline_frame', 'render_timeline_range', 'get_timeline_critique'].includes(name) || data.coordinate_space === 'timeline'
           const space = timeline ? 'timeline' : 'source'
           const comp = getTsHost()?.actor.snapshot().compositions[String(args.composition_id ?? getTsHost()?.actor.snapshot().root_id)]
           const t = data.timeline_t_us ?? args.timeline_t_us ?? args.t_us
           const range: [number, number] = timeline ? typeof t === 'number' ? [t, t] : [Number(args.start_us ?? 0), Number(args.end_us ?? comp?.duration_us ?? 0)] : [Number(args.source_t_us ?? args.start_us ?? 0), Number(args.source_t_us ?? args.end_us ?? 0)]
-          const receipt = revisionGuard.recordEvidence(name, space, range, reviewState(getTsHost()?.actor.snapshot()))
+          const receipt = revisionGuard.recordEvidence(name, space, range, reviewState(getTsHost()?.actor.snapshot()), toolDimensions(name, data), undefined, evidenceCoverage(name,data,range))
+          revisionGuard.inspectionCompleted(name, args)
           ;(result as any).content.push({ type: 'text', text: JSON.stringify({ evidence_receipt: receipt }) })
         }
       }
@@ -1429,8 +1432,8 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
         const snap = getTsHost()?.actor.snapshot()
         if (resourceState !== reviewState(snap)) throw new Error('Timeline changed while reading evidence. Reacquire current evidence.')
         const timeline = req.params.uri === 'project://current' || req.params.uri.startsWith('project://tracks')
-        if (timeline) revisionGuard.inspectionCompleted('get_timeline_context', {})
-        const receipt = revisionGuard.recordEvidence('resources/read', timeline ? 'timeline' : 'source', [0, snap?.compositions[snap.root_id]?.duration_us ?? 0], reviewState(snap))
+        // Resource state alone does not verify speech or rendered visual dimensions.
+        const receipt = revisionGuard.recordEvidence('resources/read', timeline ? 'timeline' : 'source', [0, snap?.compositions[snap.root_id]?.duration_us ?? 0], reviewState(snap), ['timeline','text'])
         result.contents.push({ uri: req.params.uri, mimeType: 'application/json', text: JSON.stringify({ evidence_receipt: receipt, review_session: revisionGuard.status }) })
       }
       return result

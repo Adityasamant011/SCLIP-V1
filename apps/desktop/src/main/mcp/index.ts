@@ -1,3 +1,6 @@
+import {evidenceCoverage} from '../sclip/evidenceModalities.js'
+import { buildEditorialEvidencePacket } from '../sclip/editorialEvidencePacket.js'
+import { reviewState } from '../sclip/evidenceCoordinates.js'
 import express from 'express'
 import { RevisionLoopGuard } from '../sclip/revisionLoopGuard.js'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
@@ -86,6 +89,11 @@ export async function startMcpHost(backend: Backend, opts: McpHostOptions = {}):
   })
 
   // Intent is declared by the product launcher, never inferred from prompt text.
+  appExpress.post('/mcp/evidence', (req,res) => {
+    const snap=opts.getTsHost?.()?.actor.snapshot()
+    if (!snap || snap.project_id!==req.body?.project_id) {res.status(409).json({error:'Evidence requires current project'});return}
+    res.json(buildEditorialEvidencePacket(snap,{transcriptsDir:req.body?.transcripts_dir}))
+  })
   appExpress.post('/mcp/reviews', (req, res) => {
     const projectId = req.body?.project_id
     if (typeof projectId !== 'string' || opts.getTsHost?.()?.actor.snapshot().project_id !== projectId) {
@@ -97,7 +105,10 @@ export async function startMcpHost(backend: Backend, opts: McpHostOptions = {}):
     const guard = new RevisionLoopGuard(true)
     reviews.set(id, { projectId, guard })
     emitLifecycle('info', { kind: 'System' }, 'Autonomous review initialized', { review_id: id, project_id: projectId, review_session: guard.status })
-    res.json({ review_id: id, url: `http://127.0.0.1:${port}/mcp?review_session=${id}`, review_session: guard.status })
+    const snap=opts.getTsHost!()!.actor.snapshot()
+    const packet=buildEditorialEvidencePacket(snap,{transcriptsDir:req.body?.transcripts_dir})
+    const receipt=guard.recordEvidence('get_editorial_evidence_packet','timeline',[0,snap.compositions[snap.root_id].duration_us],reviewState(snap),packet.observed_dimensions,'p0',evidenceCoverage('get_editorial_evidence_packet',packet,[0,snap.compositions[snap.root_id].duration_us]))
+    res.json({ editorial_evidence_packet:{...packet,evidence_receipt:receipt}, review_id: id, url: `http://127.0.0.1:${port}/mcp?review_session=${id}`, review_session: guard.status })
   })
 
   appExpress.all('/mcp', async (req, res) => {

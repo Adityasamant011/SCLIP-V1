@@ -1,12 +1,18 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { Project } from '../state/model.js'
 import { inspectTimelineFrame } from './timelineFrame.js'
-import { validateTimelineRange } from './evidenceCoordinates.js'
+import { reviewState, validateTimelineRange } from './evidenceCoordinates.js'
 import { getVisionRuntime, type AnalyzeResult } from './visionRuntime.js'
 
+const perceptionCache = new Map<string, AnalyzeResult>()
+const rangeIndex = new Map<string, {state:string; frames:unknown[]}>()
+export function currentVisualIndex(project: Project) {
+  const hit=rangeIndex.get(project.project_id)
+  return hit?.state===reviewState(project) ? {status:'available', evidence_class:'MODEL_OBSERVATION', frame_observations:hit.frames.map((f:any)=>({...f,description:String(f.description).slice(0,320),visible_content:f.visible_content?.slice(0,8),approximate_subject_position:f.approximate_subject_position?.slice(0,80)})), temporal_scope:'Previously sampled instants in this exact current state only.'} : undefined
+}
 export const VISUAL_EVIDENCE_SEMANTICS = 'Canvas coverage is geometric only, not a subject/composition verdict. Wall, light or signage can cover the canvas. Describe visible content, approximate subject/face position and boundary intersections as observations, with uncertainty. Do not prescribe a crop or repair. One frame establishes only that instant; sampled frames do not certify unsampled moments.'
 export function subjectObservations(result: AnalyzeResult) {
   return { availability: result.ok ? 'model_observation' : 'unavailable', subject_visible: result.subjectVisible ?? null, approximate_subject_position: result.subjectPosition ?? null,
@@ -44,13 +50,22 @@ export async function inspectTimelineRangeVisuals(project: Project, args: Record
       }
       frames.push(sample)
     }
-    const result = await getVisionRuntime().analyze({ imagePaths,
-      question: typeof args.question === 'string' && args.question.trim() ? args.question : 'Describe each ordered sample: visible content, subject/face position, body or face intersecting image boundaries, obscuring elements and major changes between samples. Report uncertainty.',
-      context: `${VISUAL_EVIDENCE_SEMANTICS} Images are ordered samples: ${frames.map(f => `sample ${f.sample_index} at timeline ${f.timeline_t_us}us`).join(', ')}. Explain changes by sample; do not generalize the first sample across the range.`, resolution: 'high', maxTokens: 384 })
-    if (!result.ok) throw new Error(result.error ?? 'Local visual inference failed; no range observations generated')
-    const evidence = { coordinate_space: 'timeline', evidence_origin: 'CURRENT_TIMELINE', composition_id: compositionId, timeline_range_us: [start, end], representative_samples: frames,
-      visual_observations: { description: result.description, ...subjectObservations(result), model: result.model, input_frames: frames.length, inference_ok: result.ok, error: result.error },
-      temporal_scope: 'Representative samples only; changes between unsampled frames remain unknown.', semantics: VISUAL_EVIDENCE_SEMANTICS }
+    const runtime=getVisionRuntime()
+    const modelIdentity=typeof runtime.status==='function' ? (await runtime.status()).model : 'unknown'
+    const observations = []
+    for (let i=0;i<frames.length;i++) {
+      const key=createHash('sha256').update(fs.readFileSync(imagePaths[i])).update(String(frames[i].timeline_t_us)).update(String(args.question ?? '')).update(modelIdentity).digest('hex')
+      const result = perceptionCache.get(key) ?? await getVisionRuntime().analyze({ imagePaths: [imagePaths[i]],
+        question: `Describe only this frame's visible content, approximate subject/face position and boundary intersections. Report uncertainty; do not assess the whole range. ${typeof args.question === 'string' ? args.question : ''}`,
+        context: `${VISUAL_EVIDENCE_SEMANTICS} This is sample ${i} at timeline ${frames[i].timeline_t_us}us.`, resolution:'high', maxTokens:160 })
+      if(result.ok) { perceptionCache.set(key,result); if(perceptionCache.size>16)perceptionCache.delete(perceptionCache.keys().next().value!) }
+      observations.push({sample_index:i,timeline_t_us:frames[i].timeline_t_us,evidence_class:'MODEL_OBSERVATION',description:result.description,...subjectObservations(result),model:result.model,inference_ok:result.ok})
+    }
+    const evidence = { coordinate_space:'timeline', evidence_origin:'CURRENT_TIMELINE', composition_id:compositionId, timeline_range_us:[start,end], representative_samples:frames,
+      frame_observations:observations,
+      visual_observations:{ description:observations.map(o=>`Sample ${o.sample_index}: ${o.description}`).join('\n'), summary_scope:'Labelled individual observations, not a unanimous/global claim.' },
+      temporal_scope:'Representative samples only; changes between unsampled frames remain unknown.', semantics:VISUAL_EVIDENCE_SEMANTICS }
+    rangeIndex.set(project.project_id,{state:reviewState(project),frames:observations}); if(rangeIndex.size>4)rangeIndex.delete(rangeIndex.keys().next().value!)
     if (process.env.SCLIP_EVIDENCE_AUDIT_DIR) fs.writeFileSync(path.join(process.env.SCLIP_EVIDENCE_AUDIT_DIR, `range-observations-${randomUUID()}.json`), JSON.stringify(evidence))
     return evidence
   } finally { fs.rmSync(temp, { recursive: true, force: true }) }
