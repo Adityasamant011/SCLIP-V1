@@ -192,7 +192,7 @@ export function createActor(opts: ActorOptions): ActorHandle {
    *  the annotation is what fixes `T` — and the recipe's return type is then
    *  checked against it, which is what stops a callback naming an id the recipe
    *  never returned. */
-  function commit<T>(summary: HistorySummary, affected: EntityRef[] | ((value: T) => EntityRef[]), diff: DiffHint, recipe: (draft: Project) => T): T {
+  function commit<T>(summary: HistorySummary, affected: EntityRef[] | ((value: T) => EntityRef[]), diff: DiffHint, recipe: (draft: Project) => T, compareEffectiveState = false): T {
     let value!: T
     let droppedTransitions: DroppedTransition[] = []
     let droppedMarkers: DroppedMarker[] = []
@@ -209,7 +209,7 @@ export function createActor(opts: ActorOptions): ActorHandle {
     // Mirrors the intent of applyTrimLayer's requestedDelta===0 early return.
     // (A no-op recipe can't dirty a transition or an anchored marker, so
     // neither reconcile blocks this.)
-    if (next === current()) return value
+    if (next === current() || (compareEffectiveState && JSON.stringify(next) === JSON.stringify(current()))) return value
     runValidate(next)
     const refs = typeof affected === 'function' ? affected(value) : affected
     const opId = idGen() // AFTER validate — failed validate consumes no op_id
@@ -1222,7 +1222,11 @@ export function createActor(opts: ActorOptions): ActorHandle {
         // the plural batch is legitimately mid-divergence between its scale_x
         // and scale_y entries, and a per-entry check would unlink every linked
         // fan-out write.
-        case 'update_layer_params': commit(HISTORY_SUMMARY.layerUpdateParams, [{ kind: 'Layer', id: a.layer as Uuid }], { kind: 'Layer', id: a.layer as Uuid }, (d) => { applyUpdateLayerParams(d, a.layer as Uuid, a.patch as LayerParamsPatch, motifCatalog); enforceScaleLinkInvariant(d, a.layer as Uuid) }); return { ok: true, value: null }
+        case 'update_layer_params': {
+          const before = current()
+          commit(HISTORY_SUMMARY.layerUpdateParams, [{ kind: 'Layer', id: a.layer as Uuid }], { kind: 'Layer', id: a.layer as Uuid }, (d) => { applyUpdateLayerParams(d, a.layer as Uuid, a.patch as LayerParamsPatch, motifCatalog); enforceScaleLinkInvariant(d, a.layer as Uuid) }, true)
+          return { ok: true, value: current() === before ? { code: 'NO_EFFECTIVE_CHANGE', layer_id: a.layer, state_unchanged: true, current_values: locateLayer(before, a.layer as Uuid)?.layer.params, requested_values: a.patch, correction: 'These effective values are already current. Reconsider the diagnosis or choose your own different justified edit.' } : null }
+        }
         case 'set_position': commit(HISTORY_SUMMARY.layerKeyframeParams, [{kind:'Layer',id:a.layer as Uuid}], {kind:'Layer',id:a.layer as Uuid},d=>applySetPosition(d,a.layer as Uuid,a.position as PositionAnimation,a.geometry_only===true)); return {ok:true,value:null}
         case 'translate_path': commit(HISTORY_SUMMARY.layerKeyframeParams, [{kind:'Layer',id:a.layer as Uuid}], {kind:'Layer',id:a.layer as Uuid},d=>applyTranslatePath(d,a.layer as Uuid,a.dx as number,a.dy as number)); return {ok:true,value:null}
         case 'update_path_transform': commit(HISTORY_SUMMARY.layerKeyframeParams,[{kind:'Layer',id:a.layer as Uuid}],{kind:'Layer',id:a.layer as Uuid},d=>{

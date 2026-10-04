@@ -40,12 +40,15 @@ export function inspectionEvidence(
       interpretation: 'Raw captured RGB only; alpha is reported separately. Does not distinguish uncovered canvas, image content, intended letterboxing, or a consumer background.' },
     layer_bounds: layers.filter(l => l.t_start_us <= tUs && tUs < l.t_end_us && TRANSFORMABLE_KINDS.has(l.params.kind)).map(layer => {
       const size = probe.naturalSizeOf(layer.id)
-      const bounds = size && !transformOverrideFor(layer.id) ? quadAabb(layerQuad(layerFrameAt(layer, tUs, size))) : null
+      const quad = size && !transformOverrideFor(layer.id) ? layerQuad(layerFrameAt(layer, tUs, size)) : null
+      const bounds = quad ? quadAabb(quad) : null
       return {
         layer_id: layer.id, kind: layer.params.kind,
         bounds_basis: layer.params.kind === 'Text' ? 'authored_transform_with_staged_layout_box_or_glyph_size' : 'authored_transform_with_staged_content_size',
         unknown_reason: transformOverrideFor(layer.id) ? 'uncommitted_live_transform_override' : size ? null : 'layer_not_staged',
         aabb: bounds,
+        canvas_coverage: { geometry: quad ? quadCoversCanvas(quad, width, height) ? 'full' : bounds && (bounds.right <= 0 || bounds.bottom <= 0 || bounds.left >= width || bounds.top >= height) ? 'none' : 'partial' : 'unknown',
+          basis: 'transformed_content_quad', interpretation: 'Geometric coverage only, before effects/occlusion/transparency. Full does not imply visible face, good composition or desirable source content. Wall/light/signage can fully cover the canvas.' },
         aabb_canvas_intersection: bounds ? {
           left: Math.max(0, Math.min(width, bounds.left)), top: Math.max(0, Math.min(height, bounds.top)),
           right: Math.max(0, Math.min(width, bounds.right)),
@@ -56,4 +59,14 @@ export function inspectionEvidence(
     }),
     limitations: 'Bounds are geometric envelopes, not visible-pixel occupancy or face bounds. Text boxes are not necessarily glyph bounds. Effects, occlusion, crop, transparency and nested content are not inferred.',
   }
+}
+
+/** Convex transformed rectangle contains all canvas corners; no aesthetic judgment. */
+function quadCoversCanvas(quad: readonly { x: number; y: number }[], width: number, height: number): boolean {
+  const area = Math.abs(quad.reduce((a, p, i) => a + p.x * quad[(i + 1) % 4]!.y - p.y * quad[(i + 1) % 4]!.x, 0))
+  if (area < 1e-6) return false
+  return [{ x: 0, y: 0 }, { x: width, y: 0 }, { x: width, y: height }, { x: 0, y: height }].every(c => {
+    const crosses = quad.map((p, i) => { const q = quad[(i + 1) % 4]!; return (q.x - p.x) * (c.y - p.y) - (q.y - p.y) * (c.x - p.x) })
+    return crosses.every(n => n >= -1e-6) || crosses.every(n => n <= 1e-6)
+  })
 }

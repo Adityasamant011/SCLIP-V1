@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { videoClipParams } from '../state/mutations/media'
 import { createActor } from '../state/actor'
 import { blankProject } from '../state/model'
 import { uuidV7Gen } from '../state/ids'
@@ -12,14 +13,15 @@ vi.mock('electron', () => ({ app: { isPackaged: true } }))
 vi.mock('./auth', () => ({ loadOrInitAuth: () => ({ token: 'synthetic-token', port: 0 }), saveAuth: () => {}, rotateToken: (a: unknown) => a }))
 const analyze = vi.hoisted(() => vi.fn(async () => ({ ok: true, description: 'Synthetic observation', confidence: 0.5 })))
 vi.mock('../sclip/visionRuntime', () => ({ getVisionRuntime: () => ({ analyze, clearCache: () => {} }) }))
-function fixture() {
+function fixture(visual = false) {
   const ids = uuidV7Gen()
-  const actor = createActor({ initial: blankProject(ids, 'synthetic-review'), idGen: ids, clock: () => 'now' })
+  let actor = createActor({ initial: blankProject(ids, 'synthetic-review'), idGen: ids, clock: () => 'now' })
   const mediaId = '00000000-0000-0000-0000-000000000001'
   actor.dispatch('add_media', { id: mediaId, kind: 'Video', duration_us: 600_000_000 })
   const track = actor.snapshot().compositions[actor.snapshot().root_id]!.tracks[0]!.id
   const layer = actor.dispatch('add_layer', { track, kind: 'color', t_start_us: 0, t_end_us: 60_000_000 })
   if (!layer.ok) throw new Error('fixture failed')
+  if (visual) { const copy = structuredClone(actor.snapshot()); copy.compositions[copy.root_id]!.tracks[0]!.layers[0]!.params = videoClipParams(mediaId, 0, 60_000_000); actor = createActor({ initial: copy, idGen: ids, clock: () => 'now' }) }
   const ts = { actor, mcpCall: (name: string, args: string) => actor.mcpCall(name, args) } as any
   const backend = { mcpCatalog: async () => '{"tools":[],"resources":[]}', mcpCallTool: vi.fn(async () => '{"ok":true,"result":{"content":[{"type":"text","text":"{}"}]}}'),
     mcpReadResource: vi.fn(async () => JSON.stringify({ ok: true, result: { contents: [{ uri: 'synthetic', mimeType: 'image/jpeg', blob: Buffer.from('synthetic frame').toString('base64') }] } })) } as any
@@ -62,8 +64,8 @@ describe('Evidence coordinates', () => {
     expect(reviewState(actor.snapshot())).not.toBe(before)
   })
 })
-async function reviewFixture() {
-  const f = fixture(); const host = await startMcpHost(f.backend, { getTsHost: () => f.ts })
+async function reviewFixture(activeWindow?: any, visual = false) {
+  const f = fixture(visual); const host = await startMcpHost(f.backend, { getTsHost: () => f.ts, getActiveWindow: () => activeWindow ?? null })
   const started = await startAutonomousReview(host.getInfo(), f.actor.snapshot().project_id); const clients: Client[] = []
   async function connect() {
     const client = new Client({ name: 'synthetic-reviewer', version: '1' }, {})
@@ -203,6 +205,35 @@ describe('Executable editorial issue interface', () => {
       expect(body(await f.call('record_issue', { ...simpleIssue(f, ['e2']), affected_range_us: [40_000_000, 60_000_000] })).code).toBe('EVIDENCE_RANGE_MISMATCH')
       expect(body(await f.call('record_issue', { ...simpleIssue(f, ['e2']), repairable: false })).accepted).toBe(true)
       expect(body(await f.call('revision_control', { action: 'conclude_no_repair', evidence_id: 'e2', reason: 'Reviewer judges optional polish unjustified' })).workflow_stage).toBe('COMPLETE')
+    } finally { await f.close() }
+  })
+})
+
+describe('Visual repair state correctness', () => {
+  it('reports identical quantized parameter updates without history or subscription mutations', () => {
+    const f = fixture(true); const before = f.actor.snapshot(); const events = vi.fn(); f.actor.subscribe(events)
+    const layer = before.compositions[before.root_id]!.tracks[0]!.layers[0]!
+    const current = (layer.params as any).transform.position.x.value
+    const result: any = f.actor.mcpCall('update_layer_params', JSON.stringify({ layer_id: f.layerId, patch: { kind: 'VideoClip', x: current } }))
+    expect(result.ok).toBe(true)
+    expect(JSON.parse(result.result.content[0].text)).toMatchObject({ code: 'NO_EFFECTIVE_CHANGE', layer_id: f.layerId, state_unchanged: true })
+    expect(f.actor.snapshot()).toBe(before); expect(events).not.toHaveBeenCalled()
+    const changed = f.actor.mcpCall('update_layer_params', JSON.stringify({ layer_id: f.layerId, patch: { kind: 'VideoClip', x: current + 10 } }))
+    expect(changed.ok).toBe(true); expect(f.actor.snapshot()).not.toBe(before); expect(events).toHaveBeenCalledTimes(1)
+  })
+  it('requires fresh rendered evidence after a visual issue mutation, not a context-only read', async () => {
+    const execute = vi.fn(async (code: string) => ({ pngBase64: Buffer.from('synthetic image').toString('base64'), tUs: Number(code.match(/captureFrameAt\((\d+)/)![1]), factualEvidence: { content: 'Synthetic wall', canvas_coverage: 'full' } }))
+    const f = await reviewFixture({ isDestroyed: () => false, webContents: { executeJavaScript: execute } }, true)
+    try {
+      const range = { start_us: 0, end_us: 60_000_000, representative_samples: 3 }
+      expect((await f.call('inspect_timeline_range_visuals', range)).isError).not.toBe(true)
+      await f.call('record_issue', simpleIssue(f)); await f.call('checkpoint', { label: 'Reviewer choice' }); await f.call('revision_control', { action: 'select_issue', issue_id: 'issue-1' })
+      expect((await f.call('update_layer_params', { layer_id: f.layerId, patch: { kind: 'VideoClip', x: 10 } })).isError).not.toBe(true)
+      expect((await f.call('get_timeline_context')).isError).toBe(true)
+      expect((await f.call('revision_control', { action: 'finish_issue', status: 'resolved' })).isError).toBe(true)
+      expect((await f.call('inspect_timeline_range_visuals', range)).isError).not.toBe(true)
+      expect((await f.call('revision_control', { action: 'finish_issue', status: 'resolved' })).isError).not.toBe(true)
+      expect(execute).toHaveBeenCalledTimes(6)
     } finally { await f.close() }
   })
 })

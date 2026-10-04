@@ -105,7 +105,7 @@ test('Phase 3B review-only live acceptance @serial', async ({}) => {
   test.setTimeout(2_000_000)
   const sourceRoot = path.join(repoRoot, 'apps/desktop/e2e/bench-results/phase3b-opening-review/talking-head')
   const iteration = process.env.SCLIP_PHASE3B_REVIEW_ITERATION
-  const resultDir = path.join(sourceRoot, iteration === '3' ? 'review-only-iteration3' : iteration === '2' ? 'review-only-iteration2' : 'review-only')
+  const resultDir = path.join(sourceRoot, iteration === '3b3' ? 'phase3b3-visual-review' : iteration === '3' ? 'review-only-iteration3' : iteration === '2' ? 'review-only-iteration2' : 'review-only')
   expect(fs.existsSync(resultDir), 'Never overwrite or repeat the live review').toBe(false)
   const startingFile = path.join(sourceRoot, 'first-pass/project.json')
   const originalHash = await sha256(startingFile)
@@ -172,7 +172,7 @@ test('Phase 3B review-only live acceptance @serial', async ({}) => {
     const afterHash = await sha256(path.join(resultDir, 'reviewed-project.json'))
     const completed = events.filter(row => row.op_state?.state !== 'Started' && row.source?.kind === 'Agent' && typeof row.details?.tool === 'string')
     const audits = fs.existsSync(path.join(resultDir, 'mutation-evidence')) ? fs.readdirSync(path.join(resultDir, 'mutation-evidence')) : []
-    const inspections = new Set(['get_timeline_context', 'get_media_context', 'calculate_video_fit', 'get_param_track', 'get_source_observations', 'vision_inspect', 'inspect_frames', 'render_timeline_range', 'get_timeline_critique', 'critique_rough_cut'])
+    const inspections = new Set(['inspect_timeline_range_visuals', 'get_timeline_context', 'get_media_context', 'calculate_video_fit', 'get_param_track', 'get_source_observations', 'vision_inspect', 'inspect_frames', 'render_timeline_range', 'get_timeline_critique', 'critique_rough_cut'])
     json(path.join(resultDir, 'metrics.json'), { ...result, starting_sha256: originalHash, loaded_sha256: loadedHash,
       reviewed_sha256: afterHash, timeline_unchanged: JSON.stringify(loaded.compositions) === JSON.stringify(after.compositions),
       original_unchanged: (await sha256(startingFile)) === originalHash,

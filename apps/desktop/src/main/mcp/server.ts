@@ -37,6 +37,7 @@ import { renderComposedTimelineRange } from '../sclip/rangeRender.js'
 import { validateRoughCutReview } from '../sclip/roughCutReview.js'
 import { EvidenceCoordinateError, timelineTime, validateEvidenceTime, validateTimelineRange, reviewState } from '../sclip/evidenceCoordinates.js'
 import { RevisionLoopGuard, ReviewProtocolError } from '../sclip/revisionLoopGuard.js'
+import { inspectTimelineRangeVisuals, subjectObservations, VISUAL_EVIDENCE_SEMANTICS } from '../sclip/timelineVisualEvidence.js'
 import { getVisionRuntime } from '../sclip/visionRuntime.js'
 import { compactMediaContext } from '../sclip/compactTranscript.js'
 import { calculateVideoFit } from '../sclip/framingGeometry.js'
@@ -86,6 +87,12 @@ const MEDIA_CONTEXT_TOOL = {
     end_us: { type: 'integer', minimum: 1, description: 'Exclusive source-media end. Range default: up to 60 seconds after start, limited by source duration.' },
     detail: { type: 'string', enum: ['overview', 'range', 'segments'], description: 'Overview = counts/status; segments = compact exact text/source times (preferred for exploration and narrative context); range = detailed text/word timing and modalities (reserve for precise cut boundaries). Defaults to range when time bounds supplied, otherwise overview.' },
   }, required: ['media_id'], additionalProperties: false },
+} as const
+
+const RANGE_VISUALS_TOOL = {
+  name: 'inspect_timeline_range_visuals',
+  description: 'Inspect representative CURRENT_TIMELINE visuals across a shot/range instead of assuming one frame represents it. Captures 2–5 composed frames (default 5), from start through end-exclusive, and analyzes them in ONE existing local vision request. Returns labelled timeline samples, geometric coverage, current layer state/source mappings, and uncertain subject/content observations. Geometry is not good framing: wall/light can cover the canvas fully. Hermes decides whether an issue exists and what repair to make. Samples cannot certify unsampled motion. Use this before a visual diagnosis and repeat over the affected range after repair.',
+  inputSchema: { type: 'object', properties: { start_us: { type: 'integer', minimum: 0, description: 'TIMELINE start, not source time.' }, end_us: { type: 'integer', minimum: 1, description: 'Exclusive TIMELINE end, within current composition.' }, composition_id: { type: 'string' }, representative_samples: { type: 'integer', minimum: 2, maximum: 5 }, question: { type: 'string', description: 'Optional observable visual question; no editing instruction.' } }, required: ['start_us', 'end_us'], additionalProperties: false },
 } as const
 
 const VISION_INSPECT_TOOL = {
@@ -228,14 +235,14 @@ export const IMPORT_EXTERNAL_MEDIA_TOOL = {
 const REVISION_INSPECTION_TOOLS = new Set([
   'get_timeline_context', 'get_media_context', 'inspect_timeline_frame', 'render_timeline_range',
   'analyze_clip', 'describe_clip', 'compare_frames', 'detect_pauses', 'extract_clip_audio',
-  'vision_inspect', 'get_timeline_critique', 'calculate_video_fit', 'get_param_track', 'get_source_observations', 'evaluate_source_passages',
+  'inspect_timeline_range_visuals', 'vision_inspect', 'get_timeline_critique', 'calculate_video_fit', 'get_param_track', 'get_source_observations', 'evaluate_source_passages',
 ])
 const REVISION_NONMUTATING_TOOLS = new Set([
   'revision_control', 'validate_rough_cut_review', 'validate_rough_cut_plan', 'dry_run',
   'checkpoint', 'list_checkpoints', 'undo', 'redo', 'restore_checkpoint',
   'begin_agent_session', 'end_agent_session', 'lock_history', 'unlock_history',
   'get_timeline_context', 'inspect_timeline_frame', 'render_timeline_range', 'get_param_track',
-  'vision_inspect', 'get_timeline_critique', 'video_search_external_media', 'resolve_visual_intents',
+  'inspect_timeline_range_visuals', 'vision_inspect', 'get_timeline_critique', 'video_search_external_media', 'resolve_visual_intents',
 ])
 const isRevisionMutation = (name: string) => (name === 'import_external_media' || MCP_TOOL_DEFS.some((def) => def.name === name) || HYBRID_TOOLS.has(name)) && !REVISION_NONMUTATING_TOOLS.has(name)
 
@@ -495,7 +502,7 @@ export async function handleCallTool(
           scale_x: quantizeParam('scale_x', geometry.scale_x),
           scale_y: quantizeParam('scale_y', geometry.scale_y),
         }
-        return { content: [{ type: 'text', text: JSON.stringify({ layer_id: args.layer_id, mode: args.mode, patch, visible_source_rect_estimate: geometry.visible_source_rect, note: 'Arithmetic only. Apply with update_layer_params, then inspect the actual composed frame; no subject visibility is inferred.' }) }] } as ServerResult
+        return { content: [{ type: 'text', text: JSON.stringify({ layer_id: args.layer_id, mode: args.mode, patch, current_transform: { x: transform.position.x.value, y: transform.position.y.value, scale_x: transform.scale_x.value, scale_y: transform.scale_y.value }, proposed_differs_from_current: patch.x !== transform.position.x.value || patch.y !== transform.position.y.value || patch.scale_x !== transform.scale_x.value || patch.scale_y !== transform.scale_y.value, visible_source_rect_estimate: geometry.visible_source_rect, note: 'Geometric fit arithmetic only. Compare current_transform with patch before applying. A full canvas does not prove good composition or visible subject; content like a wall/light can fill it. Hermes chooses whether to apply any change and inspects representative rendered evidence.' }) }] } as ServerResult
       } catch (error) {
         return revisionToolError(error instanceof Error ? error.message : String(error))
       }
@@ -589,6 +596,10 @@ export async function handleCallTool(
         return { isError: true, content: [{ type: 'text', text: e instanceof Error ? e.message : String(e) }] } as unknown as ServerResult
       }
     }
+    if (name === 'inspect_timeline_range_visuals') {
+      try { return { content: [{ type: 'text', text: JSON.stringify(await inspectTimelineRangeVisuals(tsHost.actor.snapshot(), args, getActiveWindow)) }] } as ServerResult }
+      catch (e) { return revisionToolError(e instanceof Error ? e.message : String(e)) }
+    }
     if (name === 'vision_inspect') {
       const question = typeof args.question === 'string' ? args.question.trim() : ''
       if (!question) {
@@ -673,7 +684,7 @@ export async function handleCallTool(
           imagePaths: imagePaths.length > 1 ? imagePaths : undefined,
           imagePath: imagePaths.length === 1 ? imagePaths[0] : undefined,
           question,
-          context,
+          context: `${context ?? ''} ${VISUAL_EVIDENCE_SEMANTICS}`,
           resolution,
           maxTokens,
         })
@@ -700,6 +711,8 @@ export async function handleCallTool(
                 input_frames: result.inputFrames,
                 cached: result.cached,
                 composed_frame_facts: factualEvidence,
+                subject_observations: subjectObservations(result),
+                evidence_semantics: VISUAL_EVIDENCE_SEMANTICS,
               }, null, 2),
             },
           ],
@@ -1225,6 +1238,7 @@ export async function registeredMcpTools(backend: Backend, opts: McpServerOption
     WITHDRAW_ISSUE_TOOL,
     mediaContextTool,
     VISION_INSPECT_TOOL,
+    RANGE_VISUALS_TOOL,
     CALCULATE_VIDEO_FIT_TOOL,
     GET_TIMELINE_CRITIQUE_TOOL,
     ...externalTools,
@@ -1361,7 +1375,7 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
           }
         }
       }
-      if (['vision_inspect', 'inspect_timeline_frame', 'get_timeline_context', 'render_timeline_range', 'get_media_context'].includes(name)) {
+      if (['inspect_timeline_range_visuals', 'vision_inspect', 'inspect_timeline_frame', 'get_timeline_context', 'render_timeline_range', 'get_media_context'].includes(name)) {
         const text = (result as any).content?.find((c: any) => c.type === 'text')
         let evidence: any = {}; try { evidence = text ? JSON.parse(text.text) : {} } catch {}
         try { opts.log?.emit({ level: 'debug', category: { kind: 'Mcp' }, source: { kind: 'System' }, message: 'Evidence coordinate validation', details: { inspected_tool: name, coordinate_space: evidence.coordinate_space ?? (name === 'get_media_context' || args.source_t_us !== undefined ? 'source' : 'timeline'), timeline_t_us: args.timeline_t_us ?? args.t_us, source_t_us: args.source_t_us, accepted: !('isError' in result && result.isError), ...(evidence.code ? { rejection: evidence } : {}) } }) } catch {}
@@ -1373,7 +1387,7 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
         if (revisionGuard.status.phase !== 'idle') {
           const body = (result as any).content?.find((c: any) => c.type === 'text')
           let data: any = {}; try { data = body ? JSON.parse(body.text) : {} } catch {}
-          const timeline = ['get_timeline_context', 'inspect_timeline_frame', 'render_timeline_range', 'get_timeline_critique'].includes(name) || data.coordinate_space === 'timeline'
+          const timeline = ['inspect_timeline_range_visuals', 'get_timeline_context', 'inspect_timeline_frame', 'render_timeline_range', 'get_timeline_critique'].includes(name) || data.coordinate_space === 'timeline'
           const space = timeline ? 'timeline' : 'source'
           const comp = getTsHost()?.actor.snapshot().compositions[String(args.composition_id ?? getTsHost()?.actor.snapshot().root_id)]
           const t = data.timeline_t_us ?? args.timeline_t_us ?? args.t_us

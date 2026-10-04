@@ -31,4 +31,12 @@ describe('read-only composed frame facts', () => {
       expect(JSON.stringify(layer)).toBe(original)
     } finally { clearTransformOverride(layer.id) }
   })
+  it('reports full geometric coverage even for a wall/light coloured image without subject judgments', () => {
+    const layer = { id: 'synthetic-wall', t_start_us: 0, t_end_us: 1000, params: { kind: 'VideoClip', x: { mode: 'Static', value: -20 }, y: { mode: 'Static', value: 0 } } } as any
+    const facts = inspectionEvidence([layer], 0, 4, 4, new Uint8Array(64).fill(120), { naturalSizeOf: () => ({ w: 50, h: 20 }), textFitOf: () => null })
+    expect(facts.layer_bounds[0]?.canvas_coverage.geometry).toBe('full')
+    expect(facts.layer_bounds[0]?.canvas_coverage.interpretation).toContain('Wall/light/signage')
+    expect(JSON.stringify(facts)).not.toContain('subject_visible')
+  })
+
 })

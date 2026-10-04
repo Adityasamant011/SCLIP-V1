@@ -20,6 +20,7 @@ export class RevisionLoopGuard {
   private verificationPending = false
   private repairInspections = 0
   private finalInspections = 0
+  private readonly visualIssues = new Set<string>()
   private readonly issueRanges = new Map<string, [number, number]>()
   private readonly recordedIssues = new Map<string, RecordedIssue>()
   private reviewedState: string | undefined
@@ -149,12 +150,13 @@ export class RevisionLoopGuard {
   }
 
   private isRelevantTimelineInspection(name: string, args: Record<string, unknown>): boolean {
+    if (this.visualIssues.has(this.activeIssue ?? '') && !['inspect_timeline_range_visuals', 'vision_inspect', 'inspect_timeline_frame', 'render_timeline_range'].includes(name)) return false
     const range = this.issueRanges.get(this.activeIssue ?? '')
     const t = args.timeline_t_us ?? args.t_us
     const start = typeof t === 'number' ? t : typeof args.start_us === 'number' ? args.start_us : 0
     const end = typeof t === 'number' ? t : typeof args.end_us === 'number' ? args.end_us : Infinity
     // Source evidence or a background critique alone cannot verify the changed timeline.
-    if (!['get_timeline_context', 'vision_inspect', 'inspect_timeline_frame', 'render_timeline_range'].includes(name)) return false
+    if (!['get_timeline_context', 'inspect_timeline_range_visuals', 'vision_inspect', 'inspect_timeline_frame', 'render_timeline_range'].includes(name)) return false
     if (name !== 'get_timeline_context' && typeof t !== 'number' && typeof args.start_us !== 'number') return false
     return !range || (end >= range[0] && start <= range[1])
   }
@@ -207,6 +209,7 @@ export class RevisionLoopGuard {
     const id = `issue-${this.recordedIssues.size + 1}`
     const issue: RecordedIssue = { id, description: args.description as string, severity: String(args.severity), repairable: args.repairable as boolean, evidence_receipt_ids: receipts, affected_range_us: bounded, layer_ids: layerIds as string[], state }
     this.recordedIssues.set(id, issue)
+    if (receipts.some(id => ['inspect_timeline_range_visuals', 'vision_inspect', 'inspect_timeline_frame', 'render_timeline_range'].includes(this.evidence.get(id)!.tool))) this.visualIssues.add(id)
     this.reviewedIssueIds ??= new Set()
     if (issue.repairable) this.reviewedIssueIds.add(id)
     this.issueRanges.set(id, bounded)
@@ -245,7 +248,7 @@ export class RevisionLoopGuard {
       if (!receipt || receipt.state !== state || receipt.coordinate_space !== 'timeline') return 'Each review inspection needs an evidence_id from fresh CURRENT_TIMELINE evidence; reacquire evidence after a state change.'
       const [start, end] = inspection.timeline_range_us ?? []
       if (receipt.range[1] < start || receipt.range[0] > end) return 'Inspection range does not overlap its observed evidence.'
-      if (inspection.method === 'frame' && !['vision_inspect', 'inspect_timeline_frame'].includes(receipt.tool)) return 'A frame claim requires an actual current-timeline frame evidence_id.'
+      if (inspection.method === 'frame' && !['inspect_timeline_range_visuals', 'vision_inspect', 'inspect_timeline_frame'].includes(receipt.tool)) return 'A frame claim requires an actual current-timeline frame evidence_id.'
       if (inspection.method === 'range_render' && receipt.tool !== 'render_timeline_range') return 'A render claim requires a current-timeline range render evidence_id.'
     }
     return null
