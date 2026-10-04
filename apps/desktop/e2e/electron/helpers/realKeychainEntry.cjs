@@ -1,6 +1,8 @@
 // Playwright normally replaces the macOS keychain. Real authenticated tests
 // explicitly opt out before loading the SAME built production main entry.
-require('electron').app.commandLine.removeSwitch('use-mock-keychain')
+const app = require('electron').app
+app.setName(require('../../../package.json').productName)
+app.commandLine.removeSwitch('use-mock-keychain')
 // Opt-in test-only measurement around the SAME production fetch/client. Keep
 // numeric metadata only; do not retain headers, credentials or request text.
 if (process.env.SCLIP_JEV_MEASURE === '1') {

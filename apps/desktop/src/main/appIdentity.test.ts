@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { WINDOWS_APP_USER_MODEL_ID } from './appIdentity'
+import { DESKTOP_PRODUCT_NAME, WINDOWS_APP_USER_MODEL_ID } from './appIdentity'
 
 // The runtime AUMID (what the main process passes to app.setAppUserModelId) and
 // the installer's shortcut stamp (electron-builder.yml `appId`) are two separate
@@ -15,5 +15,15 @@ describe('WINDOWS_APP_USER_MODEL_ID', () => {
     const match = yml.match(/^appId:\s*(\S+)\s*$/m)
     expect(match, 'appId: line not found in electron-builder.yml').not.toBeNull()
     expect(match![1]).toBe(WINDOWS_APP_USER_MODEL_ID)
+  })
+})
+
+describe('DESKTOP_PRODUCT_NAME', () => {
+  it('matches the packaged application name used by macOS safeStorage', () => {
+    const desktopDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
+    const yml = readFileSync(path.join(desktopDir, 'electron-builder.yml'), 'utf8')
+    const packageJson = JSON.parse(readFileSync(path.join(desktopDir, 'package.json'), 'utf8')) as { productName: string }
+    expect(yml.match(/^productName:\s*(\S+)\s*$/m)?.[1]).toBe(DESKTOP_PRODUCT_NAME)
+    expect(packageJson.productName).toBe(DESKTOP_PRODUCT_NAME)
   })
 })

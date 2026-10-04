@@ -544,17 +544,19 @@ describe('SCLIP Phase 2E: Real Hermes Targeted Revision', () => {
     await initEval()
   })
 
-  it('configured provider/model answers a minimal health prompt', async () => {
+  it('configured provider/model answers a new health prompt after connecting MCP', async () => {
     // Uses the same Sclip safeStorage-backed launcher and selected model as the
-    // repair benchmark. No editing-tool claim is inferred from this check.
+    // repair benchmark. No editing-quality claim is inferred from this check.
     const result = await runHermesTest(createCleanCutProject(),
-      'Provider health check only. Do not call tools. Reply briefly with the word ready.',
-      1, 120_000, false)
+      'Health check only. Call the WeftCut MCP ping tool once, then reply with exactly: PHASE3_HEALTH_OK',
+      5, 300_000, false)
     expect(result.timelineMutations).toBe(0)
-    expect(result.toolCalls).toHaveLength(0)
+    expect(result.toolCalls.some(call => call.name === 'ping')).toBe(true)
     expect(result.providerFailed).toBe(false)
+    const finalAnswer = result.output.match(/╭─ ⚕ Hermes[^\n]*\n([\s\S]*?)╰/g)?.at(-1) ?? ''
+    expect(finalAnswer).toContain('PHASE3_HEALTH_OK')
     expect(result.messageCount).toBeGreaterThan(1)
-  }, 130_000)
+  }, 310_000)
 
   const revisionPrompt = `Review this rough cut and fix only verified important problems. The bounded revision session is already active; do not call begin. Call revision_control status, then get_timeline_context once for the initial review. Inspect only suspicious areas and promptly validate an initial RoughCutReview (eight perception calls maximum unless you request the four-call extension). For speech, prefer transcript/source context; a frame-grid mismatch alone is not an audible defect. If clean, finalize and validate a final whole-timeline review with zero edits. For an issue, call checkpoint first, then select_issue using its review ID; do not parallelize these calls. Choose the smallest ordinary-tool edit yourself. If uncertain, try a reversible edit promptly; the tools reject unsafe operations. After EACH successful mutation, reinspect and judge the affected range; get_timeline_context may be used again for this. At most three successful mutations are allowed; rollback never resets that count. If still defective, keep the safest state and finish_issue unresolved. Finalize, get full timeline context, validate the final review, and stop. An honest unresolved result is acceptable. Keep reasoning brief and use tools promptly. Do not claim to hear audio unless directly perceived; make no unrelated edits.`
 

@@ -12,6 +12,11 @@ import { readHermesProfile } from './hermesRuntime.js'
 import { resolveHermesProviderEnvironment, testHermesConnection } from './hermesSettings.js'
 import { createHermesOutputRedactor, hermesBaseEnvironment } from './hermesSecrets.js'
 import { installSkills, refreshHermesWeftcutSkill } from '../mcp/skillsInstall.js'
+import { DESKTOP_PRODUCT_NAME } from '../appIdentity.js'
+
+// Set identity before awaiting stdin or Electron readiness: macOS safeStorage
+// selects its Keychain entry from the application name at initialization.
+app.setName(DESKTOP_PRODUCT_NAME)
 
 interface Request {
   userDataPath: string
