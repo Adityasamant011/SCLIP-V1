@@ -31,6 +31,7 @@ import { MOTIF_TOOL_DEFS, MOTIF_RESOURCE_DEFS } from './motifToolDefs.js'
 import { withLog, NO_MCP_LOG, type McpCommitWindow, type McpLogDeps, type McpRowSummary } from './withLog.js'
 import { validateRoughCutPlan } from '../sclip/roughCutPlan.js'
 import { buildTimelineContext } from '../sclip/timelineContext.js'
+import { openingSourceWindow, openingTranscriptEvidence } from '../sclip/openingContext.js'
 import { inspectTimelineFrame } from '../sclip/timelineFrame.js'
 import { renderComposedTimelineRange } from '../sclip/rangeRender.js'
 import { validateRoughCutReview } from '../sclip/roughCutReview.js'
@@ -51,7 +52,7 @@ type Backend = import('@weftcut/core').Backend
 
 const REVISION_CONTROL_TOOL = {
   name: 'revision_control',
-  description: 'Session-scoped Phase 2E execution guard. Begin before review; select one reviewed issue after a checkpoint; finish it as resolved or unresolved; finalize before the final review. Each committed timeline mutation counts as one attempt (maximum three per issue), including after undo or restore. This tool never chooses an edit.',
+  description: 'Bounded action-oriented review. Begin before diagnosis. Four initial evidence calls plus one reasoned two-call extension; validate at most three prioritized, current-timeline issues. Checkpoint, select one issue, promptly repair using ordinary tools, reinspect the changed timeline, then finish resolved or honestly unresolved. At most three mutations per issue. Diagnosis cannot consume the repair/verification budget. This guard supplies no editorial decision.',
   inputSchema: { type: 'object', properties: {
     action: { type: 'string', enum: ['begin', 'status', 'extend_inspection', 'select_issue', 'finish_issue', 'finalize'] },
     issue_id: { type: 'string' }, status: { type: 'string', enum: ['resolved', 'unresolved'] }, reason: { type: 'string' },
@@ -501,6 +502,23 @@ export async function handleCallTool(
           range: startUs !== undefined && endUs !== undefined ? { start_us: startUs, end_us: endUs } : undefined,
           transcriptsDir,
         })
+        const opening = openingSourceWindow(res)
+        let openingContext: unknown = null
+        if (opening && (!startUs || startUs === 0)) {
+          try {
+            const evidence = await handleCallTool(backend, getTsHost, 'get_media_context', {
+              media_id: opening.media_id, detail: 'range', start_us: opening.evidence_start_us,
+              end_us: Math.min(opening.evidence_end_us, snap.media_pool[opening.media_id]?.metadata.duration_us ?? opening.evidence_end_us),
+            })
+            const item = (evidence as any).content?.find((value: any) => value.type === 'text')
+            openingContext = openingTranscriptEvidence(opening, item && !('isError' in evidence && evidence.isError) ? JSON.parse(item.text).transcript : null)
+          } catch { openingContext = openingTranscriptEvidence(opening, null) }
+        }
+        const counts: Record<string, number> = {}
+        for (const track of snap.compositions[compId].tracks) for (const layer of track.layers) {
+          counts[layer.params.kind] = (counts[layer.params.kind] ?? 0) + 1
+        }
+        const grounded = { ...res, layer_counts_by_kind: counts, opening_context: openingContext }
         const win = getActiveWindow?.()
         let playheadUs: number | null = null
         if (win && !win.isDestroyed()) {
@@ -508,7 +526,7 @@ export async function handleCallTool(
             playheadUs = await win.webContents.executeJavaScript('window.__weftcutPreview?.getPlayheadUs ? window.__weftcutPreview.getPlayheadUs() : null')
           } catch {}
         }
-        const enriched = typeof playheadUs === 'number' ? { ...res, playhead_us: playheadUs } : res
+        const enriched = typeof playheadUs === 'number' ? { ...grounded, playhead_us: playheadUs } : grounded
         return { content: [{ type: 'text', text: JSON.stringify(enriched) }] } as unknown as ServerResult
       } catch (e) {
         return { isError: true, content: [{ type: 'text', text: e instanceof Error ? e.message : String(e) }] } as unknown as ServerResult
@@ -1195,7 +1213,7 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
           case 'begin': status = revisionGuard.begin(); break
           case 'status': status = revisionGuard.status; break
           case 'extend_inspection': status = revisionGuard.extendInspection(args.reason); break
-          case 'select_issue': status = revisionGuard.selectIssue(args.issue_id); break
+          case 'select_issue': status = revisionGuard.selectIssue(args.issue_id, JSON.stringify(getTsHost()?.actor.snapshot())); break
           case 'finish_issue': status = revisionGuard.finishIssue(args.status); break
           case 'finalize': status = revisionGuard.finalize(); break
           default: return revisionToolError('Unknown revision_control action')
@@ -1203,18 +1221,18 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
         return { content: [{ type: 'text', text: JSON.stringify(status) }] } as ServerResult
       }
       if (REVISION_INSPECTION_TOOLS.has(name)) {
-        const refusal = revisionGuard.beforeInspection()
+        const refusal = revisionGuard.beforeInspection(name, args)
         if (refusal) return revisionToolError(refusal)
       }
       const mutation = isRevisionMutation(name)
       if (mutation) {
-        const refusal = revisionGuard.beforeMutation()
+        const refusal = revisionGuard.beforeMutation(JSON.stringify(getTsHost()?.actor.snapshot()))
         if (refusal) return revisionToolError(refusal)
       }
       const before = mutation ? JSON.stringify(getTsHost()?.actor.snapshot()) : null
       const result = await handleCallTool(backend, getTsHost, name, args, getPreferredEngine, getVlm, peaksPathFor, opts.getActiveWindow, opts.getReviewerSummary, opts.sourceObservationIndex, opts.externalMediaService, externalEnabled)
       if (mutation && before !== JSON.stringify(getTsHost()?.actor.snapshot())) {
-        revisionGuard.mutationCommitted()
+        revisionGuard.mutationCommitted(JSON.stringify(getTsHost()?.actor.snapshot()))
         getVisionRuntime().clearCache?.()
         if (opts.getReviewerSummary) {
           const summary = opts.getReviewerSummary(true)
@@ -1232,7 +1250,15 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
         }
       }
       if (name === 'checkpoint' && !('isError' in result && result.isError)) revisionGuard.checkpointCreated()
-      if (name === 'validate_rough_cut_review' && validatedReview(result)) revisionGuard.reviewValidated(reviewIssueIds(args.review))
+      if (REVISION_INSPECTION_TOOLS.has(name) && !('isError' in result && result.isError)) revisionGuard.inspectionCompleted(name, args)
+      if (name === 'validate_rough_cut_review' && validatedReview(result)) {
+        const review = typeof args.review === 'string' ? JSON.parse(args.review) : args.review as any
+        const ranges = Object.fromEntries((review?.identified_issues ?? []).map((issue: any) => [issue.id, issue.affected_range_us]))
+        revisionGuard.reviewValidated(reviewIssueIds(args.review), ranges, JSON.stringify(getTsHost()?.actor.snapshot()))
+      }
+      if (revisionGuard.status.phase !== 'idle' && Array.isArray((result as any).content)) {
+        (result as any).content.push({ type: 'text', text: `Revision execution state: ${JSON.stringify(revisionGuard.status)}` })
+      }
       return result
     } catch (e) {
       return { isError: true, content: [{ type: 'text', text: `Tool '${req.params.name}' error: ${e instanceof Error ? e.message : String(e)}` }] } as unknown as ServerResult

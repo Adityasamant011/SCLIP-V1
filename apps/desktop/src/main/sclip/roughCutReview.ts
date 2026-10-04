@@ -111,6 +111,9 @@ export function validateRoughCutReview(
 
   if (typeof r.clip_count !== 'number' || r.clip_count < 0) {
     errors.push('clip_count must be a non-negative number')
+  } else {
+    const actual = composition.tracks.reduce((count, track) => count + track.layers.filter(layer => layer.params.kind === 'VideoClip').length, 0)
+    if (r.clip_count !== actual) errors.push(`clip_count (${r.clip_count}) differs from actual VideoClip count (${actual}); audio and text layers are not video clips`)
   }
 
   if (typeof r.ready_for_next_stage !== 'boolean') {
@@ -119,9 +122,11 @@ export function validateRoughCutReview(
 
   // Collect all known layer IDs in the composition for existence verification
   const knownLayerIds = new Set<string>()
+  const layerRanges = new Map<string, [number, number]>()
   for (const track of composition.tracks) {
     for (const layer of track.layers) {
       knownLayerIds.add(layer.id)
+      layerRanges.set(layer.id, [layer.t_start_us, layer.t_end_us])
     }
   }
 
@@ -189,6 +194,9 @@ export function validateRoughCutReview(
         for (const cid of insp.clip_ids) {
           if (typeof cid !== 'string' || !knownLayerIds.has(cid)) {
             errors.push(`${prefix}: referenced clip_id '${cid}' does not exist in composition`)
+          } else if (Array.isArray(insp.timeline_range_us)) {
+            const bounds = layerRanges.get(cid)!
+            if (bounds[1] < insp.timeline_range_us[0] || bounds[0] > insp.timeline_range_us[1]) errors.push(`${prefix}: referenced clip_id '${cid}' is outside the inspected current timeline range`)
           }
         }
       }
@@ -205,6 +213,12 @@ export function validateRoughCutReview(
     for (let i = 0; i < r.identified_issues.length; i++) {
       const issue = r.identified_issues[i] as Partial<RoughCutIssue>
       const prefix = `identified_issues[${i}]`
+      if (Array.isArray(issue.affected_range_us) && (!Array.isArray(r.inspections) || !r.inspections.some(inspection =>
+        inspection.assessment !== 'natural' && inspection.clip_ids?.some(id => knownLayerIds.has(id)) &&
+        inspection.timeline_range_us?.[1] >= issue.affected_range_us![0] &&
+        inspection.timeline_range_us?.[0] <= issue.affected_range_us![1]))) {
+        errors.push(`${prefix}: actionable issue requires a located current-layer inspection overlapping its affected range`)
+      }
 
       if (!issue.id || typeof issue.id !== 'string') {
         errors.push(`${prefix}: missing id`)

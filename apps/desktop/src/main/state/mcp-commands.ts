@@ -1474,7 +1474,7 @@ export const MCP_TOOL_DEFS: ReadonlyArray<McpToolDef> = [
       }
     } },
   { name: 'get_timeline_context', exec: 'dedicated',
-    description: "Extract compact structured timeline facts (tracks, clips, gaps, transitions, cut boundaries with speech cues) with zero mutations and zero history entries.",
+    description: "Read current authoritative timeline facts: layer counts by kind, actual caption text, linked clips, gaps and cut boundaries. Reads from time zero include opening_context with selected source words and omitted surrounding transcript, so Hermes can judge standalone context. Missing evidence is explicit. Zero mutations/history entries.",
     inputSchema: { type: 'object', properties: {
       composition_id: COMPOSITION_ID_SCHEMA,
       start_us: { type: ['integer', 'null'], description: 'Optional range start in microseconds. Narrows cut boundaries and speech cues.' },

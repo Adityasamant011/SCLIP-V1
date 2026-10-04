@@ -7,18 +7,32 @@ import { blankProject } from '../state/model'
 import { uuidV7Gen } from '../state/ids'
 
 const mediaId = '00000000-0000-0000-0000-0000000000aa'
-function setup() {
+function setup(sourceStartUs = 0) {
   const ids = uuidV7Gen()
   const actor = createActor({ initial: blankProject(ids, 'source-test'), idGen: ids, clock: () => 'now' })
   actor.dispatch('add_media', { id: mediaId, kind: 'Video', duration_us: 575_000_000 })
   const track = actor.snapshot().compositions[actor.snapshot().root_id]!.tracks[0]!.id
-  const added = actor.dispatch('add_layer', { track, kind: 'video', media: mediaId, src_in_us: 0, src_out_us: 575_000_000, t_start_us: 0, t_end_us: 575_000_000 })
+  const added = actor.dispatch('add_layer', { track, kind: 'video', media: mediaId, src_in_us: sourceStartUs, src_out_us: 575_000_000, t_start_us: 0, t_end_us: 575_000_000 - sourceStartUs })
   if (!added.ok) throw new Error('fixture layer failed')
   return { actor, layerId: added.value as string }
 }
 const envelope = (body: unknown) => JSON.stringify({ ok: true, result: { content: [{ type: 'text', text: JSON.stringify(body) }] } })
 
 describe('MCP transcript access and user-only export', () => {
+  it('timeline opening reads bounded surrounding evidence through the production source-context route', async () => {
+    const { actor, layerId } = setup(30_000_000)
+    const spy = vi.fn(async (_name: string, _args: string) => envelope({ transcript: { status: 'available', segments: [
+      { text: 'Here is the process.', t_start_us: 25_000_000, t_end_us: 29_000_000 },
+      { text: 'The next stage begins.', t_start_us: 30_000_000, t_end_us: 34_000_000 },
+    ] } }))
+    const result: any = await handleCallTool({ mcpCallTool: spy } as any, () => ({ actor }) as any, 'get_timeline_context', {})
+    const body = JSON.parse(result.content[0].text)
+    expect(body.layer_counts_by_kind.VideoClip).toBe(1)
+    expect(body.opening_context).toMatchObject({ layer_id: layerId, source_start_us: 30_000_000, status: 'available' })
+    expect(body.opening_context.omitted_before[0].text).toBe('Here is the process.')
+    expect(body.opening_context.selected_opening[0].text).toBe('The next stage begins.')
+    expect(JSON.parse(spy.mock.calls[0]![1])).toMatchObject({ start_us: 20_000_000, end_us: 60_000_000, detail: 'range' })
+  })
   it('can roll back only compact evidence without changing ordinary tools or source context', async () => {
     const backend = { mcpCatalog: async () => JSON.stringify({ tools: [], resources: [] }), mcpCallTool: vi.fn() } as any
     const server = buildMcpServer(backend, { compactSourceEvidence: false })

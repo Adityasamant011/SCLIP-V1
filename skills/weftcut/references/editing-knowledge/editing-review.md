@@ -57,6 +57,7 @@ Professional review habits, adapted:
 For each area: the questions to answer and the evidence to check. Answer with located observations (timecode + what + why), never with vibes.
 
 ### Opening clarity
+- Read the source immediately before and after the actual selected opening. Does the edit establish enough context without omitted speech? If not, extend backward, choose a self-contained passage, or restructure. This checks semantic context, not a compulsory viral hook.
 - Can a cold viewer state, within 5 seconds (short-form) or 30 seconds (long-form), what this is and why to stay?
 - Does the opening confirm the promise made by the title/thumbnail/first frame? [E: Kallaway lock-in zone]
 - Is any orientation missing (who, where, what is at stake)? Is any orientation repeated that the packaging already delivered?

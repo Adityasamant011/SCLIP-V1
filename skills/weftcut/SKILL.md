@@ -47,6 +47,49 @@ Your finite interaction budget serves the whole request, not endless refinement
 of one cosmetic variable. Before declaring completion, consider whether the
 actual result addresses the request and honestly report remaining uncertainty.
 
+## Opening context before final selection
+
+The beginning must intentionally establish enough context for the user's brief.
+This is not a universal viral-hook rule. An intriguing question or deliberate
+cold open is fine; accidentally depending on omitted preceding speech is not.
+Before committing your opening source range, read `get_media_context` around its
+start (roughly ten seconds before and enough after to understand the thought).
+Use exact transcript text; request word timings only for the final cut boundary.
+Ask: would a viewer who has not seen the omitted source understand the premise,
+referents, and reason this passage begins here? If not, extend backward enough
+to restore setup, select another self-contained passage, or restructure. Preserve
+the duration brief by reconsidering less important material, not dropping setup.
+After assembly, check the ACTUAL first clip with `get_timeline_context` from zero.
+Its opening_context distinguishes omitted preceding source from selected words;
+text_content gives actual caption text and layer_counts_by_kind distinguishes
+video from audio/text. Missing transcript evidence is uncertainty, not a pass.
+
+## Review means bounded action
+
+When reviewing or repairing an existing edit, call `revision_control begin`
+(or status if already active) before inspection. The guard allocates four initial
+evidence calls and, only with a specific reason, one two-call extension. Read the
+current timeline once, then inspect only suspicious ranges. Reuse known schemas
+and unchanged evidence; do not reread the source or discover every tool again.
+
+Validate a `RoughCutReview` with at most three prioritized, concrete issues.
+Ground each claim in current layer IDs, source bounds, actual words/captions and
+located inspections. Count `VideoClip` layers as video clips, not linked audio.
+Do not claim to have heard audio from transcript or frame evidence. A critique is
+not a completed repair. Once an actionable issue is verified, checkpoint, select
+it with `revision_control select_issue`, and perform the smallest ordinary-tool
+mutation promptly. Use at most two focused evidence calls before acting; avoid
+another plan or permission request when repair is already authorized.
+
+Reinspect the changed timeline range after EACH successful mutation. Judge whether
+the targeted issue improved and whether a serious regression appeared. Finish the
+issue as resolved only with that evidence; otherwise restore/revise within the
+three-mutation limit or honestly mark unresolved. Address up to three high-impact
+issues, then finalize and validate a final current-timeline review. Prefer broken
+context, speech continuity or visible usability defects over subjective polish,
+using the brief and actual evidence to prioritize. A clean edit needs no mutation;
+an unresolved defect needs an honest reason, not a claim of publication readiness.
+
 ## Professional Editorial Judgment & Knowledge Base
 
 Before making creative decisions (choosing candidate moments, cutting, framing, adding B-roll, pacing, or scoring), consult the professional editing knowledge base located in `references/editing-knowledge/`:

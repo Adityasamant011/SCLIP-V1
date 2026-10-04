@@ -197,6 +197,38 @@ describe('all six request handlers are decorated', () => {
 })
 
 describe('Phase 2E guard through the real MCP call handler', () => {
+  it('a verified issue leads to a real ProjectActor mutation and inspection of changed state', async () => {
+    const registered = spyRegistrations()
+    const ts = tsHostStub()
+    const track = root(ts.actor.snapshot()).tracks[0].id
+    const added = ts.actor.dispatch('add_layer', { track, kind: 'color', t_start_us: 0, t_end_us: 10_000_000 })
+    if (!added.ok) throw new Error('fixture failed')
+    const layerId = added.value
+    buildMcpServer(fakeBackend(), { getTsHost: () => ts, revisionLoop: true })
+    const handler = registered.get(CallToolRequestSchema)!
+    const call = (name: string, args: Record<string, unknown> = {}) => handler({ params: { name, arguments: args } }, undefined) as Promise<any>
+    await call('get_timeline_context')
+    const review = { version: 1, summary: 'Unwanted tail remains', clip_count: 0, inspections: [{ id: 'tail', type: 'section',
+      timeline_range_us: [8_000_000, 10_000_000], method: 'context_only', evidence: 'Current color layer ends at 10s',
+      assessment: 'bad', reason: 'Requested end is 8s', clip_ids: [layerId] }], identified_issues: [{ id: 'tail', severity: 'moderate',
+      timeline_t_us: 8_000_000, affected_range_us: [8_000_000, 10_000_000], issue_type: 'other',
+      description: 'Verified extra tail', suggestion: 'Trim out point to requested endpoint' }], ready_for_next_stage: false }
+    expect(JSON.parse((await call('validate_rough_cut_review', { review: { ...review, clip_count: 1 } })).content[0].text).valid).toBe(false)
+    expect(JSON.parse((await call('validate_rough_cut_review', { review: { ...review, inspections: [] } })).content[0].text).valid).toBe(false)
+    expect(JSON.parse((await call('validate_rough_cut_review', { review })).content[0].text).valid).toBe(true)
+    await call('checkpoint', { label: 'Before tail repair' })
+    await call('revision_control', { action: 'select_issue', issue_id: 'tail' })
+    const edit = await call('trim_layer', { layer_id: layerId, edge: 'out', new_t_us: 8_000_000 })
+    expect(edit.isError).not.toBe(true)
+    expect((await call('revision_control', { action: 'finish_issue', status: 'resolved' })).isError).toBe(true)
+    const changed = await call('get_timeline_context', { start_us: 7_000_000, end_us: 10_000_000 })
+    const facts = JSON.parse(changed.content[0].text)
+    expect(facts.tracks.flatMap((t: any) => t.layers).find((l: any) => l.layer_id === layerId).t_end_us).toBe(8_000_000)
+    const done = await call('revision_control', { action: 'finish_issue', status: 'resolved' })
+    expect(done.isError).not.toBe(true)
+    expect(JSON.parse(done.content[0].text).attempts.tail).toBe(1)
+    expect(JSON.parse(done.content[0].text).outcomes.tail).toBe('resolved')
+  })
   it('rejects a fourth timeline mutation even after checkpoint restore', async () => {
     const registered = spyRegistrations()
     const ts = tsHostStub()
@@ -210,14 +242,15 @@ describe('Phase 2E guard through the real MCP call handler', () => {
     expect(listed.tools.some((tool) => tool.name === 'revision_control')).toBe(true)
     const handler = registered.get(CallToolRequestSchema)!
     const call = (name: string, args: Record<string, unknown> = {}) => handler({ params: { name, arguments: args } }, undefined) as Promise<any>
-    for (let i = 0; i < 8; i++) expect((await call('get_timeline_context')).isError).not.toBe(true)
+    for (let i = 0; i < 4; i++) expect((await call('get_timeline_context')).isError).not.toBe(true)
     const overBudget = await call('get_timeline_context')
     expect(overBudget.isError).toBe(true)
     expect(overBudget.content[0].text).toContain('inspection budget reached')
     const comp = root(ts.actor.snapshot())
     const review = { version: 1, project_id: ts.actor.snapshot().project_id, composition_id: comp.id,
       summary: 'A reviewed cut with one unresolved issue', total_duration_us: comp.duration_us,
-      clip_count: 1, inspections: [], identified_issues: [{ id: 'issue-1', severity: 'critical',
+      clip_count: 0, inspections: [{ id: 'seen', type: 'section', timeline_range_us: [4_000_000, 6_000_000],
+        method: 'context_only', evidence: 'Current layer bounds inspected', assessment: 'bad', reason: 'Repairable test issue', clip_ids: [layerId] }], identified_issues: [{ id: 'issue-1', severity: 'critical',
         timeline_t_us: 5_000_000, affected_range_us: [4_000_000, 6_000_000],
         issue_type: 'other', description: 'Test issue', suggestion: 'Agent chooses' }], ready_for_next_stage: false }
     const initial = await call('validate_rough_cut_review', { review })
@@ -230,6 +263,8 @@ describe('Phase 2E guard through the real MCP call handler', () => {
     for (const end of [9_000_000, 8_000_000, 7_000_000]) {
       const edit = await call('trim_layer', { layer_id: layerId, edge: 'out', new_t_us: end })
       expect(edit.isError).not.toBe(true)
+      const changed = await call('get_timeline_context', { start_us: 4_000_000, end_us: 6_000_000 })
+      expect(changed.isError).not.toBe(true)
     }
     const restored = await call('restore_checkpoint', { checkpoint_id: checkpointId })
     expect(restored.isError).not.toBe(true)

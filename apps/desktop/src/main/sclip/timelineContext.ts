@@ -7,6 +7,7 @@ export interface TimelineLayerFact {
   layer_id: string
   kind: string
   label: string | null
+  text_content: string | null
   media_id: string | null
   media_label: string | null
   t_start_us: number
@@ -285,6 +286,7 @@ export function buildTimelineContext(
         layer_id: layer.id,
         kind: layer.params.kind,
         label: layer.label ?? mediaLabel,
+        text_content: layer.params.kind === 'Text' ? params.content ?? null : null,
         media_id: mediaId,
         media_label: mediaLabel,
         t_start_us: layer.t_start_us,

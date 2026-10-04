@@ -2,13 +2,52 @@ import { describe, expect, it } from 'vitest'
 import { RevisionLoopGuard } from './revisionLoopGuard.js'
 
 describe('Phase 2E session guard', () => {
+  it('rejects repairs against a changed timeline and preserves a three-cycle limit', () => {
+    const guard = new RevisionLoopGuard(true)
+    guard.reviewValidated(['first'], {}, 'state-a')
+    guard.checkpointCreated()
+    expect(() => guard.selectIssue('first', 'state-b')).toThrow('changed since review')
+    guard.selectIssue('first', 'state-a')
+    expect(guard.beforeMutation('state-b')).toContain('changed outside')
+    guard.finishIssue('unresolved')
+    for (const id of ['second', 'third']) {
+      guard.reviewValidated([id], {}, 'state-a')
+      guard.selectIssue(id, 'state-a')
+      guard.mutationCommitted('state-b')
+      guard.inspectionCompleted('get_timeline_context', {})
+      guard.finishIssue('resolved')
+    }
+    guard.reviewValidated(['fourth'], {}, 'state-b')
+    expect(() => guard.selectIssue('fourth', 'state-b')).toThrow('Three repair cycles')
+  })
+  it('reserves action and verification after a grounded diagnosis', () => {
+    const guard = new RevisionLoopGuard(true)
+    expect(guard.beforeMutation()).toContain('initial review')
+    for (let i = 0; i < 4; i++) guard.beforeInspection()
+    guard.reviewValidated(['context'], { context: [0, 5_000_000] })
+    expect(guard.beforeInspection()).toContain('Diagnosis is complete')
+    guard.checkpointCreated()
+    guard.selectIssue('context')
+    expect(guard.beforeMutation()).toBeNull()
+    guard.mutationCommitted()
+    expect(guard.beforeMutation()).toContain('Reinspect')
+    expect(() => guard.finishIssue('resolved')).toThrow('reinspection')
+    expect(guard.beforeInspection('get_media_context', {})).toContain('Verification requires')
+    expect(guard.beforeInspection('vision_inspect', { t_us: 30_000_000 })).toContain('Verification requires')
+    guard.inspectionCompleted('get_media_context', { start_us: 0, end_us: 5_000_000 })
+    guard.inspectionCompleted('vision_inspect', { t_us: 30_000_000 })
+    expect(guard.status.verification_pending).toBe(true)
+    guard.inspectionCompleted('get_timeline_context', { start_us: 0, end_us: 5_000_000 })
+    guard.finishIssue('resolved')
+    expect(guard.status.outcomes.context).toBe('resolved')
+  })
   it('bounds initial inspection and permits only one reasoned extension', () => {
     const guard = new RevisionLoopGuard(true)
-    for (let i = 0; i < 8; i++) expect(guard.beforeInspection()).toBeNull()
+    for (let i = 0; i < 4; i++) expect(guard.beforeInspection()).toBeNull()
     expect(guard.beforeInspection()).toContain('budget reached')
     expect(() => guard.extendInspection('')).toThrow('reason')
     guard.extendInspection('One ambiguous boundary needs source context')
-    for (let i = 0; i < 4; i++) expect(guard.beforeInspection()).toBeNull()
+    for (let i = 0; i < 2; i++) expect(guard.beforeInspection()).toBeNull()
     expect(guard.beforeInspection()).toContain('budget reached')
     expect(() => guard.extendInspection('again')).toThrow('already been used')
   })
@@ -23,6 +62,7 @@ describe('Phase 2E session guard', () => {
     for (let i = 0; i < 3; i++) {
       expect(guard.beforeMutation()).toBeNull()
       guard.mutationCommitted()
+      guard.inspectionCompleted('get_timeline_context', {})
     }
     expect(guard.beforeMutation()).toContain('limit reached')
     expect(() => guard.begin()).toThrow('cannot reset attempt counts')
@@ -64,6 +104,7 @@ describe('Phase 2E session guard', () => {
       now += 480_000
       expect(guard.beforeMutation()).toBeNull()
       guard.mutationCommitted()
+      guard.inspectionCompleted('get_timeline_context', {})
     }
     expect(guard.beforeMutation()).toContain('Revision attempt limit reached')
     expect(guard.status.attempts).toEqual({ 'issue-1': 3 })
