@@ -20,6 +20,24 @@ describe('Phase 2E session guard', () => {
     guard.reviewValidated(['fourth'], {}, 'state-b')
     expect(() => guard.selectIssue('fourth', 'state-b')).toThrow('Three repair cycles')
   })
+  it('requires new diagnosis after a concurrent edit, then accepts a grounded repair', () => {
+    const guard = new RevisionLoopGuard(true)
+    guard.reviewValidated(['old'], {}, 'before')
+    guard.checkpointCreated()
+    expect(() => guard.selectIssue('old', 'changed')).toThrow('changed since review')
+    guard.inspectionCompleted('get_timeline_context', {})
+    // An inspection alone cannot bless the stale diagnosis.
+    expect(() => guard.selectIssue('old', 'changed')).toThrow('changed since review')
+    guard.reviewValidated(['current'], {}, 'changed')
+    guard.selectIssue('current', 'changed')
+    expect(guard.beforeMutation('changed')).toBeNull()
+    guard.mutationCommitted('repaired')
+    expect(guard.beforeMutation('repaired')).toContain('Reinspect')
+    guard.inspectionCompleted('get_timeline_context', {})
+    guard.finishIssue('resolved')
+    expect(guard.status.outcomes.current).toBe('resolved')
+  })
+
   it('reserves action and verification after a grounded diagnosis', () => {
     const guard = new RevisionLoopGuard(true)
     expect(guard.beforeMutation()).toContain('initial review')

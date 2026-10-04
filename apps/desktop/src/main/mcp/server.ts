@@ -982,6 +982,9 @@ export async function handleReadResource(
  *  `broadcastUnrecorded` — must not borrow the key of whatever sits on top of the
  *  stack. Those legitimately have no key and carry their summary text alone. */
 function openCommitWindow(actor: ActorHandle): McpCommitWindow {
+  // Opt-in benchmark evidence only; no effect on tool execution or decisions.
+  const auditDir = process.env.SCLIP_MCP_AUDIT_DIR
+  const before = auditDir ? JSON.stringify(actor.snapshot()) : undefined
   const collected: ChangeEvent[] = []
   const stopCollecting = actor.subscribe((e) => { collected.push(e) })
   return {
@@ -990,6 +993,15 @@ function openCommitWindow(actor: ActorHandle): McpCommitWindow {
       const last = collected[collected.length - 1]
       if (last === undefined) return null
       const recorded = actor.historyView(1).ops.find((o) => o.op_id === last.op_id)
+      if (auditDir && before) {
+        try {
+          fs.mkdirSync(auditDir, { recursive: true })
+          fs.writeFileSync(path.join(auditDir, `${last.op_id}.json`), JSON.stringify({
+            commits: collected.map(e => ({ op_id: e.op_id, summary: e.summary })),
+            before: JSON.parse(before), after: actor.snapshot(),
+          }), { flag: 'wx' })
+        } catch (error) { console.error('[mcp] benchmark audit failed', error) }
+      }
       const row: McpRowSummary = { message: last.summary, commits: collected.length }
       if (recorded?.label_key !== undefined) row.i18n_key = recorded.label_key
       if (recorded?.label_args !== undefined) row.i18n_args = recorded.label_args
