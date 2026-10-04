@@ -208,7 +208,8 @@ describe('Phase 2E guard through the real MCP call handler', () => {
     const handler = registered.get(CallToolRequestSchema)!
     const call = (name: string, args: Record<string, unknown> = {}) => handler({ params: { name, arguments: args } }, undefined) as Promise<any>
     await call('get_timeline_context')
-    const review = { version: 1, summary: 'Unwanted tail remains', clip_count: 0, inspections: [{ id: 'tail', type: 'section',
+    await call('get_timeline_context')
+    const review = { version: 1, summary: 'Unwanted tail remains', clip_count: 0, inspections: [{ id: 'tail', evidence_id: 'e1', type: 'section',
       timeline_range_us: [8_000_000, 10_000_000], method: 'context_only', evidence: 'Current color layer ends at 10s',
       assessment: 'bad', reason: 'Requested end is 8s', clip_ids: [layerId] }], identified_issues: [{ id: 'tail', severity: 'moderate',
       timeline_t_us: 8_000_000, affected_range_us: [8_000_000, 10_000_000], issue_type: 'other',
@@ -221,7 +222,7 @@ describe('Phase 2E guard through the real MCP call handler', () => {
     const edit = await call('trim_layer', { layer_id: layerId, edge: 'out', new_t_us: 8_000_000 })
     expect(edit.isError).not.toBe(true)
     expect((await call('revision_control', { action: 'finish_issue', status: 'resolved' })).isError).toBe(true)
-    const changed = await call('get_timeline_context', { start_us: 7_000_000, end_us: 10_000_000 })
+    const changed = await call('get_timeline_context', { start_us: 7_000_000, end_us: 8_000_000 })
     const facts = JSON.parse(changed.content[0].text)
     expect(facts.tracks.flatMap((t: any) => t.layers).find((l: any) => l.layer_id === layerId).t_end_us).toBe(8_000_000)
     const done = await call('revision_control', { action: 'finish_issue', status: 'resolved' })
@@ -249,7 +250,7 @@ describe('Phase 2E guard through the real MCP call handler', () => {
     const comp = root(ts.actor.snapshot())
     const review = { version: 1, project_id: ts.actor.snapshot().project_id, composition_id: comp.id,
       summary: 'A reviewed cut with one unresolved issue', total_duration_us: comp.duration_us,
-      clip_count: 0, inspections: [{ id: 'seen', type: 'section', timeline_range_us: [4_000_000, 6_000_000],
+      clip_count: 0, inspections: [{ id: 'seen', evidence_id: 'e4', type: 'section', timeline_range_us: [4_000_000, 6_000_000],
         method: 'context_only', evidence: 'Current layer bounds inspected', assessment: 'bad', reason: 'Repairable test issue', clip_ids: [layerId] }], identified_issues: [{ id: 'issue-1', severity: 'critical',
         timeline_t_us: 5_000_000, affected_range_us: [4_000_000, 6_000_000],
         issue_type: 'other', description: 'Test issue', suggestion: 'Agent chooses' }], ready_for_next_stage: false }

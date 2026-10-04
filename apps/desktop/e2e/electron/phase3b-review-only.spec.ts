@@ -94,7 +94,8 @@ test('Phase 3B review-only live acceptance @serial', async ({}) => {
   test.skip(process.env.SCLIP_PHASE3B_REVIEW_ONLY !== '1', 'One real review is opt-in')
   test.setTimeout(2_000_000)
   const sourceRoot = path.join(repoRoot, 'apps/desktop/e2e/bench-results/phase3b-opening-review/talking-head')
-  const resultDir = path.join(sourceRoot, 'review-only')
+  const iteration2 = process.env.SCLIP_PHASE3B_REVIEW_ITERATION === '2'
+  const resultDir = path.join(sourceRoot, iteration2 ? 'review-only-iteration2' : 'review-only')
   expect(fs.existsSync(resultDir), 'Never overwrite or repeat the live review').toBe(false)
   const startingFile = path.join(sourceRoot, 'first-pass/project.json')
   const originalHash = await sha256(startingFile)
@@ -123,7 +124,7 @@ test('Phase 3B review-only live acceptance @serial', async ({}) => {
   fs.writeFileSync(path.join(resultDir, 'prompt.txt'), prompt + '\n')
   const { app, page } = await launchApp({ userDataDir: userData, realKeychain: true,
     env: { SCLIP_USER_DATA_DIR: userData, SCLIP_ENABLE_EXTERNAL_BROLL: '0', SCLIP_JEV_ENABLED: '0', OPENROUTER_API_KEY: '',
-      SCLIP_MCP_AUDIT_DIR: path.join(resultDir, 'mutation-evidence') } })
+      SCLIP_REVIEW_EVIDENCE_DIR: path.join(resultDir, 'review-decisions'), SCLIP_EVIDENCE_AUDIT_DIR: path.join(resultDir, 'sampled-frames'), SCLIP_MCP_AUDIT_DIR: path.join(resultDir, 'mutation-evidence') } })
   try {
     await invokeCmd(page, 'project_open', { path: projectDir })
     await waitForHook(page, 'motifReopenProject')
@@ -146,7 +147,7 @@ test('Phase 3B review-only live acceptance @serial', async ({}) => {
       source_media: 'existing workspace media copied without import', transcripts: 'existing copied cache', prompt })
     const result = await runHermes(helperPath, { userDataPath: userData, python, cwd: repoRoot,
       mcpUrl: mcp.url, mcpToken: mcp.bearer_token, projectId: current.project_id,
-      transcriptsDir: path.join(projectDir, 'Cache/transcripts'), prompt, maxTurns: 24 }, path.join(resultDir, 'hermes-trace.txt'))
+      transcriptsDir: path.join(projectDir, 'Cache/transcripts'), mode: 'review', prompt, maxTurns: 24 }, path.join(resultDir, 'hermes-trace.txt'))
     await invokeCmd(page, 'project_save')
     fs.copyFileSync(path.join(projectDir, 'project.json'), path.join(resultDir, 'reviewed-project.json'))
     const loaded = JSON.parse(fs.readFileSync(path.join(resultDir, 'loaded-project.json'), 'utf8'))
@@ -154,12 +155,14 @@ test('Phase 3B review-only live acceptance @serial', async ({}) => {
     const seen = new Set(beforeLogs.map(row => row.id))
     const events = (await invokeCmd<any[]>(page, 'log_list')).filter(row => row.category?.kind === 'Mcp' && !seen.has(row.id))
     json(path.join(resultDir, 'mcp-events.json'), events)
+    json(path.join(resultDir, 'review-lifecycle-events.json'), events.filter(row => row.message === 'Review lifecycle' || row.message === 'Autonomous review initialized'))
+    json(path.join(resultDir, 'coordinate-validation-events.json'), events.filter(row => row.message === 'Evidence coordinate validation'))
     json(path.join(resultDir, 'history.json'), await invokeCmd(page, 'project_history_view'))
     const loadedHash = await sha256(path.join(resultDir, 'loaded-project.json'))
     const afterHash = await sha256(path.join(resultDir, 'reviewed-project.json'))
-    const completed = events.filter(row => row.op_state?.state !== 'Started')
+    const completed = events.filter(row => row.op_state?.state !== 'Started' && row.source?.kind === 'Agent' && typeof row.details?.tool === 'string')
     const audits = fs.existsSync(path.join(resultDir, 'mutation-evidence')) ? fs.readdirSync(path.join(resultDir, 'mutation-evidence')) : []
-    const inspections = new Set(['get_timeline_context', 'get_media_context', 'vision_inspect', 'inspect_frames', 'render_timeline_range', 'get_timeline_critique', 'critique_rough_cut'])
+    const inspections = new Set(['get_timeline_context', 'get_media_context', 'calculate_video_fit', 'get_param_track', 'get_source_observations', 'vision_inspect', 'inspect_frames', 'render_timeline_range', 'get_timeline_critique', 'critique_rough_cut'])
     json(path.join(resultDir, 'metrics.json'), { ...result, starting_sha256: originalHash, loaded_sha256: loadedHash,
       reviewed_sha256: afterHash, timeline_unchanged: JSON.stringify(loaded.compositions) === JSON.stringify(after.compositions),
       original_unchanged: (await sha256(startingFile)) === originalHash,
@@ -167,7 +170,7 @@ test('Phase 3B review-only live acceptance @serial', async ({}) => {
       inspection_calls: completed.filter(row => inspections.has(row.details?.tool)).length,
       mutation_operations: audits.length, provider_requests: null, provider_requests_note: 'not exposed by CLI summary',
       timeline: timelineMetrics(after), preliminary_status: result.providerFailed ? 'BLOCKED — PROVIDER' : 'REQUIRES_INDEPENDENT_ASSESSMENT' })
-    if (audits.length) {
+    if (JSON.stringify(loaded.compositions) !== JSON.stringify(after.compositions)) {
       const outputPath = path.join(resultDir, 'edit.mp4')
       await page.evaluate((request) => (window as any).__sclipExportRange(request), {
         projectId: current.project_id, outputPath, startUs: 0, endUs: Number(timelineMetrics(after).duration_us),

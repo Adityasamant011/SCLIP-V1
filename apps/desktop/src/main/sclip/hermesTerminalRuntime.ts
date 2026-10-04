@@ -1,4 +1,5 @@
 import path from 'node:path'
+import { startAutonomousReview } from './autonomousReview.js'
 import fs from 'node:fs'
 import { createHash } from 'node:crypto'
 import * as pty from 'node-pty'
@@ -29,6 +30,7 @@ export interface HermesTerminalOptions {
 }
 
 interface TerminalSession {
+  mode: 'edit' | 'review'
   pty: pty.IPty
   history: string
   sequence: number
@@ -49,15 +51,19 @@ export class HermesTerminalRuntime {
 
   constructor(private readonly options: HermesTerminalOptions) {}
 
-  async ensure(projectId: string, sessionId: string, cols = 100, rows = 30): Promise<TerminalSnapshot> {
+  async ensure(projectId: string, sessionId: string, cols = 100, rows = 30, mode: 'edit' | 'review' = 'edit'): Promise<TerminalSnapshot> {
     await this.options.assertSession(projectId, sessionId)
     const key = this.key(projectId, sessionId)
     const existing = this.sessions.get(key)
-    if (existing) return { history: existing.history, sequence: existing.sequence }
+    if (existing) {
+      if (existing.mode !== mode) throw new Error('Use a new session ID or restart explicitly when changing editing/review intent')
+      return { history: existing.history, sequence: existing.sequence }
+    }
     const launch = this.resolveLaunch()
     const home = path.join(this.options.userDataPath, 'sclip-hermes')
     fs.mkdirSync(home, { recursive: true, mode: 0o700 })
     const mcp = this.options.getMcpInfo()
+    const review = mode === 'review' ? await startAutonomousReview(mcp, projectId) : null
     const configPath = path.join(home, 'config.yaml')
     if (!fs.existsSync(configPath)) writeHermesProfile(home, 0)
     const profile = readHermesProfile(home)
@@ -72,7 +78,7 @@ export class HermesTerminalRuntime {
       ...(profile.provider === 'openrouter' ? { OPENROUTER_MODEL: profile.model } : {}),
       SCLIP_ACTIVE_PROJECT_ID: projectId,
       SCLIP_PROJECT_ID: projectId,
-      SCLIP_MCP_URL: mcp.url,
+      SCLIP_MCP_URL: review?.url ?? mcp.url,
       SCLIP_MCP_TOKEN: mcp.bearer_token,
       TERM: 'xterm-256color',
       // Hermes already supports this hint; avoid a startup OSC query whose
@@ -107,7 +113,7 @@ export class HermesTerminalRuntime {
       cwd: launch.cwd,
       env: env as Record<string, string>,
     })
-    const session: TerminalSession = { pty: terminal, history: '', sequence: 0 }
+    const session: TerminalSession = { pty: terminal, mode, history: '', sequence: 0 }
     this.sessions.set(key, session)
     const redactor = createHermesOutputRedactor([...Object.values(providerEnv), mcp.bearer_token])
     terminal.onData(data => {
@@ -132,14 +138,14 @@ export class HermesTerminalRuntime {
     return { history: session.history, sequence: session.sequence }
   }
 
-  async restartSession(projectId: string, sessionId: string, cols = 100, rows = 30): Promise<TerminalSnapshot> {
+  async restartSession(projectId: string, sessionId: string, cols = 100, rows = 30, mode: 'edit' | 'review' = 'edit'): Promise<TerminalSnapshot> {
     const key = this.key(projectId, sessionId)
     const existing = this.sessions.get(key)
     if (existing) {
       try { existing.pty.kill() } catch { /* already gone */ }
       this.sessions.delete(key)
     }
-    return this.ensure(projectId, sessionId, cols, rows)
+    return this.ensure(projectId, sessionId, cols, rows, mode)
   }
 
   async restartAll(cols = 100, rows = 30): Promise<void> {

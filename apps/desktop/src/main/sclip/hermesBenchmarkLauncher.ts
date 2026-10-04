@@ -12,6 +12,7 @@ import { readHermesProfile } from './hermesRuntime.js'
 import { resolveHermesProviderEnvironment, testHermesConnection } from './hermesSettings.js'
 import { createHermesOutputRedactor, hermesBaseEnvironment } from './hermesSecrets.js'
 import { installSkills, refreshHermesWeftcutSkill } from '../mcp/skillsInstall.js'
+import { startAutonomousReview } from './autonomousReview.js'
 import { DESKTOP_PRODUCT_NAME } from '../appIdentity.js'
 
 // Set identity before awaiting stdin or Electron readiness: macOS safeStorage
@@ -28,6 +29,7 @@ interface Request {
   prompt: string
   maxTurns?: number
   transcriptsDir: string
+  mode?: 'edit' | 'review'
   probeOnly?: boolean
   toolsets?: string
 }
@@ -65,10 +67,12 @@ async function main(): Promise<void> {
     app.exit(result.ok ? 0 : 1)
     return
   }
+  const review = request.mode === 'review' ? await startAutonomousReview({ url: request.mcpUrl, bearer_token: request.mcpToken }, request.projectId) : null
+  if (review) process.stdout.write(`REVIEW_INITIALIZED ${JSON.stringify({ review_id: review.review_id, lifecycle: 'DIAGNOSING' })}\n`)
   const env = {
     ...hermesBaseEnvironment(), ...providerEnv,
     HERMES_HOME: home,
-    SCLIP_MCP_URL: request.mcpUrl,
+    SCLIP_MCP_URL: review?.url ?? request.mcpUrl,
     SCLIP_MCP_TOKEN: request.mcpToken,
     SCLIP_ACTIVE_PROJECT_ID: request.projectId,
     SCLIP_PROJECT_ID: request.projectId,

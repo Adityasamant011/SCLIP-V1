@@ -14,6 +14,8 @@ export type IssueType =
   | 'other'
 
 export interface RoughCutInspection {
+  /** Required by an active review session; identifies actually observed current evidence. */
+  evidence_id?: string
   id: string
   type: InspectionType
   timeline_range_us: [number, number]

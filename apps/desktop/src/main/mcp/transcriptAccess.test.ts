@@ -61,7 +61,7 @@ describe('MCP transcript access and user-only export', () => {
     expect(body.shots).toBeUndefined()
     expect(compact.content[0].text.length).toBeLessThan(JSON.stringify(full).length / 10)
     const detailed: any = await handleCallTool({ mcpCallTool: spy } as any, () => ({ actor }) as any, 'get_media_context', { media_id: mediaId, detail: 'range', end_us: 50_000_000 })
-    expect(JSON.parse(detailed.content[0].text)).toEqual(full)
+    expect(JSON.parse(detailed.content[0].text)).toMatchObject({ ...full, coordinate_space: 'source' })
   })
   it('time-bounded context requests select text/range even without detail', async () => {
     const { actor } = setup()

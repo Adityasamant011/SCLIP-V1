@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
+import { validateEvidenceTime } from './evidenceCoordinates.js'
 import type { Composition, Project } from '../state/model.js'
 
 export interface TimelineFrameOptions {
@@ -17,6 +18,8 @@ export interface TimelineFrameResult {
   pngBase64: string
   dataUrl: string
   t_us: number
+  coordinate_space: 'timeline'
+  timeline_t_us: number
   composition_id: string
   width: number
   height: number
@@ -57,6 +60,13 @@ export async function inspectTimelineFrame(
     throw new Error(`Composition not found: ${compId}`)
   }
 
+  if (t_us === undefined) {
+    const window = options.getActiveWindow?.()
+    if (window && !window.isDestroyed()) t_us = await window.webContents.executeJavaScript('window.__weftcutPreview?.getPlayheadUs?.()')
+    if (t_us === undefined || t_us === null) t_us = 0
+  }
+  validateEvidenceTime('timeline', t_us, comp.duration_us, { composition_id: compId })
+
   // 1. Try live renderer bridge if active BrowserWindow is available
   const win = options.getActiveWindow?.()
   let liveCaptureError: string | undefined
@@ -74,6 +84,7 @@ export async function inspectTimelineFrame(
           width: capture.width || comp.width,
           height: capture.height || comp.height,
           source: 'live_compositor',
+          coordinate_space: 'timeline', timeline_t_us: t_us!,
           factualEvidence: capture.factualEvidence,
         }
       }
@@ -235,5 +246,6 @@ export async function inspectTimelineFrame(
     width: comp.width,
     height: comp.height,
     source: 'headless_compositor',
+    coordinate_space: 'timeline', timeline_t_us: t_us,
   }
 }

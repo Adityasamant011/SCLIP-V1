@@ -1477,8 +1477,8 @@ export const MCP_TOOL_DEFS: ReadonlyArray<McpToolDef> = [
     description: "Read current authoritative timeline facts: layer counts by kind, actual caption text, linked clips, gaps and cut boundaries. Reads from time zero include opening_context with selected source words and omitted surrounding transcript, so Hermes can judge standalone context. Missing evidence is explicit. Zero mutations/history entries.",
     inputSchema: { type: 'object', properties: {
       composition_id: COMPOSITION_ID_SCHEMA,
-      start_us: { type: ['integer', 'null'], description: 'Optional range start in microseconds. Narrows cut boundaries and speech cues.' },
-      end_us: { type: ['integer', 'null'], description: 'Optional range end in microseconds. Narrows cut boundaries and speech cues.' },
+      start_us: { type: ['integer', 'null'], description: 'Optional TIMELINE range start in microseconds. Narrows cut boundaries and speech cues.' },
+      end_us: { type: ['integer', 'null'], description: 'Optional TIMELINE range end in microseconds. Narrows cut boundaries and speech cues.' },
       transcripts_dir: { type: ['string', 'null'], description: 'Optional explicit directory containing cached Whisper transcript JSON files.' },
     } },
     parseDedicated: (a) => ({
@@ -1490,12 +1490,13 @@ export const MCP_TOOL_DEFS: ReadonlyArray<McpToolDef> = [
   { name: 'inspect_timeline_frame', exec: 'dedicated',
     description: "Capture a single frame from the live production preview compositor (at t_us, or at the active user playhead if t_us is omitted) without mutating project state or moving the playhead. The requested composition must be the active preview target; otherwise this refuses rather than showing a reduced FFmpeg approximation. Requires an open desktop preview.",
     inputSchema: { type: 'object', properties: {
-      t_us: { type: 'integer', description: 'Timeline timestamp in microseconds (non-negative). If omitted, captures the frame currently displayed at the user active playhead.' },
+      timeline_t_us: { type: 'integer', description: 'CURRENT_TIMELINE timestamp; 0 <= time < composition duration. Never source-media time.' },
+      t_us: { type: 'integer', description: 'Legacy alias: TIMELINE timestamp in microseconds (non-negative). If omitted, captures the frame currently displayed at the user active playhead.' },
       composition_id: COMPOSITION_ID_SCHEMA,
       format: { type: ['string', 'null'], enum: ['base64', 'data_url', null], description: "Image encoding format ('base64' or 'data_url'). Defaults to 'base64'." },
     } },
     parseDedicated: (a) => ({
-      t_us: a.t_us === undefined || a.t_us === null ? undefined : parseNum(a.t_us, 't_us'),
+      t_us: (a.timeline_t_us ?? a.t_us) === undefined || (a.timeline_t_us ?? a.t_us) === null ? undefined : parseNum(a.timeline_t_us ?? a.t_us, 'timeline_t_us'),
       composition_id: parseCompositionIdOpt(a.composition_id),
       format: a.format === 'data_url' ? 'data_url' : 'base64',
     }) },
@@ -1520,7 +1521,7 @@ export const MCP_TOOL_DEFS: ReadonlyArray<McpToolDef> = [
     inputSchema: { type: 'object', properties: {
       review: {
         type: ['object', 'string'],
-        description: 'The RoughCutReview object or JSON string to validate. Schema: { version: 1, project_id: string, composition_id: string, summary: string, total_duration_us: number, clip_count: number, inspections: [{ id: string, type: "boundary"|"section"|"full_range", timeline_range_us: [number, number], method: "context_only"|"frame"|"range_render", evidence: string, assessment: "natural"|"questionable"|"bad", reason: string, clip_ids: string[] }], identified_issues: [{ id: string, severity: "minor"|"moderate"|"critical", timeline_t_us: number, affected_range_us: [number, number], issue_type: "abrupt_cut"|"audio_clipping"|"incomplete_sentence"|"pacing_drag"|"jarring_jump"|"visual_mismatch"|"other", description: string, suggestion: string }], ready_for_next_stage: boolean }',
+        description: 'The RoughCutReview object or JSON string to validate. Schema: { version: 1, project_id: string, composition_id: string, summary: string, total_duration_us: number, clip_count: number, inspections: [{ id: string, type: "boundary"|"section"|"full_range", timeline_range_us: [number, number], method: "context_only"|"frame"|"range_render", evidence_id: string (receipt from current timeline inspection), evidence: string, assessment: "natural"|"questionable"|"bad", reason: string, clip_ids: string[] }], identified_issues: [{ id: string, severity: "minor"|"moderate"|"critical", timeline_t_us: number, affected_range_us: [number, number], issue_type: "abrupt_cut"|"audio_clipping"|"incomplete_sentence"|"pacing_drag"|"jarring_jump"|"visual_mismatch"|"other", description: string, suggestion: string }], ready_for_next_stage: boolean }',
         properties: {
           version: { type: 'integer', enum: [1] },
           project_id: { type: 'string' },
@@ -1537,6 +1538,7 @@ export const MCP_TOOL_DEFS: ReadonlyArray<McpToolDef> = [
                 type: { type: 'string', enum: ['boundary', 'section', 'full_range'] },
                 timeline_range_us: { type: 'array', items: { type: 'integer' } },
                 method: { type: 'string', enum: ['context_only', 'frame', 'range_render'] },
+                evidence_id: { type: 'string', description: 'Observed CURRENT_TIMELINE receipt id; required in review mode.' },
                 evidence: { type: 'string' },
                 assessment: { type: 'string', enum: ['natural', 'questionable', 'bad'] },
                 reason: { type: 'string' },

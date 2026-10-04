@@ -64,15 +64,24 @@ Its opening_context distinguishes omitted preceding source from selected words;
 text_content gives actual caption text and layer_counts_by_kind distinguishes
 video from audio/text. Missing transcript evidence is uncertainty, not a pass.
 
+## Evidence time coordinates
+
+`vision_inspect({timeline_t_us, question})`, `inspect_timeline_frame` and `render_timeline_range` inspect CURRENT_TIMELINE composition time. Legacy `t_us` means exactly the same timeline time. Valid frame time is 0 <= t < current duration. Out-of-range evidence is rejected, never clamped or interpreted as source time.
+
+For original SOURCE_MEDIA pixels use `vision_inspect({media_id, source_t_us, question})`, backed by the existing `media://<id>/frame/<source_t_us>` resource. Source observations and get_media_context start_us/end_us, cached source transcript word/segment times and analyze/describe output times refer to original media. `transcribe_clip` returns timeline-absolute transcript times; its t_start_us/t_end_us, extract_clip_audio windows, and describe_clip input windows are owning-composition time. `detect_pauses` returns owning-composition time; `compare_frames` accepts source-absolute time on each side. Use the tool contract and provenance, not a shared assumption for every t_us. They cannot prove what the current crop/captions display. Arbitrary image_path evidence has no timeline provenance.
+
+Current timeline facts explicitly show both layer timeline bounds and source bounds. Map source t within a selected speed-1 clip to timeline t_start_us + (source_t - source_start_us); a source passage omitted from the edit has no timeline position. Do not pass source t directly to a timeline inspection. Returned coordinate_space, IDs and evidence receipts are authoritative about provenance, while local-model visual descriptions remain observations, not certainty.
+
 ## Review means bounded action
 
-When reviewing or repairing an existing edit, call `revision_control begin`
-(or status if already active) before inspection. The guard allocates four initial
+A deliberately launched autonomous review is already initialized by Sclip, including across reconnects. Check `revision_control status` if needed; do not restart the lifecycle. For an ad-hoc review in an ordinary editing session, use `revision_control begin`. The guard allocates four initial
 evidence calls and, only with a specific reason, one two-call extension. Read the
 current timeline once, then inspect only suspicious ranges. Reuse known schemas
 and unchanged evidence; do not reread the source or discover every tool again.
 
-Validate a `RoughCutReview` with at most three prioritized, concrete issues.
+Every successful current inspection returns an evidence_receipt (e1, e2, …) and review execution state. At READY_TO_DECIDE, choose: validate a RoughCutReview and repair, or `revision_control conclude_no_repair` with a fresh CURRENT_TIMELINE evidence_id and honest reason. No mutation is required without a justified issue. A single bounded extension needs a specific unresolved question. Geometry and source investigation also consume diagnosis budget.
+
+Validate a `RoughCutReview` with at most three prioritized, concrete issues. Each inspection must include `evidence_id` from the actual fresh timeline receipt, in addition to its normal evidence/assessment/clip_ids.
 Ground each claim in current layer IDs, source bounds, actual words/captions and
 located inspections. Count `VideoClip` layers as video clips, not linked audio.
 Do not claim to have heard audio from transcript or frame evidence. A critique is

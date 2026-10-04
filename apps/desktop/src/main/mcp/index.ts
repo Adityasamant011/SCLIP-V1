@@ -1,4 +1,5 @@
 import express from 'express'
+import { RevisionLoopGuard } from '../sclip/revisionLoopGuard.js'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
@@ -33,6 +34,7 @@ export async function startMcpHost(backend: Backend, opts: McpHostOptions = {}):
   let auth: McpAuth = loadOrInitAuth()
   const transports = new Map<string, StreamableHTTPServerTransport>()
   const servers = new Set<Server>()
+  const reviews = new Map<string, { projectId: string; guard: RevisionLoopGuard }>()
   const connections = new Map<string, AgentConnection>()
   let available = true
   const log = opts.log ?? NO_MCP_LOG
@@ -81,6 +83,21 @@ export async function startMcpHost(backend: Backend, opts: McpHostOptions = {}):
       return
     }
     next()
+  })
+
+  // Intent is declared by the product launcher, never inferred from prompt text.
+  appExpress.post('/mcp/reviews', (req, res) => {
+    const projectId = req.body?.project_id
+    if (typeof projectId !== 'string' || opts.getTsHost?.()?.actor.snapshot().project_id !== projectId) {
+      res.status(409).json({ error: 'Review requires the current authoritative project_id' }); return
+    }
+    for (const [id, review] of reviews) if (review.guard.status.phase === 'done') reviews.delete(id)
+    if (reviews.size >= 32) { res.status(429).json({ error: 'Review session capacity reached' }); return }
+    const id = randomUUID()
+    const guard = new RevisionLoopGuard(true)
+    reviews.set(id, { projectId, guard })
+    emitLifecycle('info', { kind: 'System' }, 'Autonomous review initialized', { review_id: id, project_id: projectId, review_session: guard.status })
+    res.json({ review_id: id, url: `http://127.0.0.1:${port}/mcp?review_session=${id}`, review_session: guard.status })
   })
 
   appExpress.all('/mcp', async (req, res) => {
@@ -145,7 +162,10 @@ export async function startMcpHost(backend: Backend, opts: McpHostOptions = {}):
         // of those. `Warn`, not `Error`: the request failed, the app did not.
         emitLifecycle('warn', { kind: 'System' }, 'MCP transport error', { error: detail })
       }
-      newServer = buildMcpServer(backend, { ...opts, connectionId })
+      const reviewId = typeof req.query.review_session === 'string' ? req.query.review_session : undefined
+      const review = reviewId ? reviews.get(reviewId) : undefined
+      if (reviewId && !review) { res.status(404).json({ error: 'Unknown review session' }); return }
+      newServer = buildMcpServer(backend, { ...opts, connectionId, ...(review ? { revisionGuard: review.guard, reviewProjectId: review.projectId } : {}) })
       servers.add(newServer)
       // `getClientVersion()` is populated while the `initialize` REQUEST is
       // handled, which precedes the `notifications/initialized` that fires this
@@ -216,6 +236,7 @@ export async function startMcpHost(backend: Backend, opts: McpHostOptions = {}):
     },
     async close(): Promise<void> {
       available = false
+      reviews.clear()
       for (const t of transports.values()) await t.close().catch(() => {})
       http.close()
     },

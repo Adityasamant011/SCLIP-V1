@@ -35,6 +35,7 @@ import { openingSourceWindow, openingTranscriptEvidence } from '../sclip/opening
 import { inspectTimelineFrame } from '../sclip/timelineFrame.js'
 import { renderComposedTimelineRange } from '../sclip/rangeRender.js'
 import { validateRoughCutReview } from '../sclip/roughCutReview.js'
+import { EvidenceCoordinateError, timelineTime, validateEvidenceTime, validateTimelineRange, reviewState } from '../sclip/evidenceCoordinates.js'
 import { RevisionLoopGuard } from '../sclip/revisionLoopGuard.js'
 import { getVisionRuntime } from '../sclip/visionRuntime.js'
 import { compactMediaContext } from '../sclip/compactTranscript.js'
@@ -52,10 +53,10 @@ type Backend = import('@weftcut/core').Backend
 
 const REVISION_CONTROL_TOOL = {
   name: 'revision_control',
-  description: 'Bounded action-oriented review. Begin before diagnosis. Four initial evidence calls plus one reasoned two-call extension; validate at most three prioritized, current-timeline issues. Checkpoint, select one issue, promptly repair using ordinary tools, reinspect the changed timeline, then finish resolved or honestly unresolved. At most three mutations per issue. Diagnosis cannot consume the repair/verification budget. This guard supplies no editorial decision.',
+  description: 'Bounded action-oriented review. Deliberate review launches are already active across reconnects; status shows the stage. Use begin only for an ad-hoc review in an ordinary editing session. Four initial evidence calls plus one reasoned two-call extension; validate at most three prioritized, current-timeline issues. Checkpoint, select one issue, promptly repair using ordinary tools, reinspect the changed timeline, then finish resolved or honestly unresolved. At most three mutations per issue. Diagnosis cannot consume the repair/verification budget. This guard supplies no editorial decision.',
   inputSchema: { type: 'object', properties: {
-    action: { type: 'string', enum: ['begin', 'status', 'extend_inspection', 'select_issue', 'finish_issue', 'finalize'] },
-    issue_id: { type: 'string' }, status: { type: 'string', enum: ['resolved', 'unresolved'] }, reason: { type: 'string' },
+    action: { type: 'string', enum: ['begin', 'status', 'extend_inspection', 'select_issue', 'finish_issue', 'finalize', 'conclude_no_repair', 'reground'] },
+    evidence_id: { type: 'string', description: 'Receipt id from fresh current timeline evidence.' }, issue_id: { type: 'string' }, status: { type: 'string', enum: ['resolved', 'unresolved'] }, reason: { type: 'string' },
   }, required: ['action'] },
 } as const
 
@@ -78,13 +79,16 @@ Do NOT use inspect_timeline_frame to answer questions about what is on screen �
 EVIDENCE ONLY — this tool never moves clips or makes edits. Hermes uses the evidence to decide what (if any) edit to request.
 GOOD use: "What is currently visible on the preview?" or "Is the speaker's face visible in the current 9:16 crop?" → evidence of what is in frame.
 BAD use: "Move the clip so the face is visible" — use update_layer_params with a VideoClip patch for that.
-Provide either t_us (renders a fresh composed frame from the live compositor), image_path (reads a pre-rendered PNG/JPEG), or image_paths (multi-frame).
+Provide timeline_t_us (TIMELINE time, never source time; legacy t_us is an alias), or media_id + source_t_us (original SOURCE_MEDIA frame), or image_path (reads a pre-rendered PNG/JPEG), or image_paths (multi-frame).
 If t_us, image_path, and image_paths are all omitted, the tool automatically captures and inspects whatever frame is CURRENTLY displayed at the user's active playhead in the live Sclip desktop preview!`,
   inputSchema: {
     type: 'object',
     properties: {
       question: { type: 'string', description: 'The specific visual question to answer about the frame. Be precise.' },
-      t_us: { type: 'integer', description: 'Optional timeline timestamp in microseconds. If omitted, captures the CURRENT playhead frame from the live desktop preview.' },
+      timeline_t_us: { type: 'integer', description: 'CURRENT_TIMELINE position, 0 <= time < composition duration. Never a source timestamp.' },
+      t_us: { type: 'integer', description: 'Legacy alias for timeline_t_us; TIMELINE coordinates only.' },
+      media_id: { type: 'string', description: 'For original SOURCE_MEDIA inspection; requires source_t_us and no timeline/image arguments.' },
+      source_t_us: { type: 'integer', description: 'Original source-media position; requires media_id. Never used to inspect the edit.' },
       composition_id: { type: 'string', description: 'Composition to render. Defaults to the root composition.' },
       image_path: { type: 'string', description: 'Absolute path to a pre-rendered PNG or JPEG file.' },
       image_paths: { type: 'array', items: { type: 'string' }, description: 'Array of pre-rendered image paths for multi-frame analysis in a single request.' },
@@ -207,7 +211,7 @@ export const IMPORT_EXTERNAL_MEDIA_TOOL = {
 const REVISION_INSPECTION_TOOLS = new Set([
   'get_timeline_context', 'get_media_context', 'inspect_timeline_frame', 'render_timeline_range',
   'analyze_clip', 'describe_clip', 'compare_frames', 'detect_pauses', 'extract_clip_audio',
-  'vision_inspect', 'get_timeline_critique',
+  'vision_inspect', 'get_timeline_critique', 'calculate_video_fit', 'get_param_track', 'get_source_observations', 'evaluate_source_passages',
 ])
 const REVISION_NONMUTATING_TOOLS = new Set([
   'revision_control', 'validate_rough_cut_review', 'validate_rough_cut_plan', 'dry_run',
@@ -391,7 +395,7 @@ export async function handleCallTool(
       suggestion_count: 0,
       issues: [],
     }
-    return { content: [{ type: 'text', text: JSON.stringify(summary, null, 2) }] } as ServerResult
+    return { content: [{ type: 'text', text: JSON.stringify({ ...summary, coordinate_space: 'timeline', evidence_origin: 'CURRENT_TIMELINE', availability: getReviewerSummary ? 'available' : 'not_generated' }, null, 2) }] } as ServerResult
   }
   if (name === 'get_source_observations') {
     try {
@@ -406,7 +410,7 @@ export async function handleCallTool(
         typeof args.end_us === 'number' ? args.end_us : undefined,
         typeof args.limit === 'number' ? args.limit : 8,
       )
-      return { content: [{ type: 'text', text: JSON.stringify(result) }] } as ServerResult
+      return { content: [{ type: 'text', text: JSON.stringify({ ...result, coordinate_space: 'source', evidence_origin: 'SOURCE_MEDIA', media_id: mediaId }) }] } as ServerResult
     } catch (error) {
       return revisionToolError(error instanceof Error ? error.message : String(error))
     }
@@ -497,9 +501,11 @@ export async function handleCallTool(
       const endUs = typeof args.end_us === 'number' ? args.end_us : undefined
       const transcriptsDir = args.transcripts_dir as string | undefined
       try {
+        const duration = snap.compositions[compId]?.duration_us ?? 0
+        if (startUs !== undefined || endUs !== undefined) validateTimelineRange(startUs ?? 0, endUs ?? duration, duration, compId)
         const res = buildTimelineContext(snap, {
           compositionId: compId,
-          range: startUs !== undefined && endUs !== undefined ? { start_us: startUs, end_us: endUs } : undefined,
+          range: startUs !== undefined || endUs !== undefined ? { start_us: startUs ?? 0, end_us: endUs ?? duration } : undefined,
           transcriptsDir,
         })
         const opening = openingSourceWindow(res)
@@ -518,7 +524,7 @@ export async function handleCallTool(
         for (const track of snap.compositions[compId].tracks) for (const layer of track.layers) {
           counts[layer.params.kind] = (counts[layer.params.kind] ?? 0) + 1
         }
-        const grounded = { ...res, layer_counts_by_kind: counts, opening_context: openingContext }
+        const grounded = { ...res, coordinate_space: 'timeline', evidence_origin: 'CURRENT_TIMELINE', time_mapping: 'Layer t_start_us/t_end_us are timeline; source_start_us/source_end_us are original media. Convert explicitly, never interchange.', layer_counts_by_kind: counts, opening_context: openingContext }
         const win = getActiveWindow?.()
         let playheadUs: number | null = null
         if (win && !win.isDestroyed()) {
@@ -534,10 +540,7 @@ export async function handleCallTool(
     }
     if (name === 'inspect_timeline_frame') {
       const snap = tsHost.actor.snapshot()
-      const tUs = args.t_us !== undefined && args.t_us !== null ? Number(args.t_us) : undefined
-      if (tUs !== undefined && (isNaN(tUs) || tUs < 0)) {
-        return { isError: true, content: [{ type: 'text', text: `Invalid t_us: ${args.t_us}` }] } as unknown as ServerResult
-      }
+      const tUs = timelineTime(args)
       const compId = (args.composition_id as string | undefined) ?? snap.root_id
       const format = (args.format as 'base64' | 'data_url') ?? 'base64'
       try {
@@ -554,6 +557,7 @@ export async function handleCallTool(
             {
               type: 'text',
               text: JSON.stringify({
+                coordinate_space: 'timeline', evidence_origin: 'CURRENT_TIMELINE', timeline_t_us: res.t_us,
                 t_us: res.t_us,
                 composition_id: res.composition_id,
                 width: res.width,
@@ -586,13 +590,29 @@ export async function handleCallTool(
 
       let tempImagePath: string | null = null
       let factualEvidence: unknown = undefined
+      let provenance: Record<string, unknown> = { coordinate_space: 'image', evidence_origin: 'EXTERNAL_IMAGE' }
 
+      if (args.source_t_us !== undefined || args.media_id !== undefined) {
+        if (imagePaths.length || args.t_us !== undefined || args.timeline_t_us !== undefined || args.composition_id !== undefined) throw new EvidenceCoordinateError({ code: 'MIXED_COORDINATE_SPACES', correction: 'Use either media_id + source_t_us OR timeline_t_us; never both.' })
+        const snap = tsHost.actor.snapshot()
+        const mediaId = String(args.media_id ?? '')
+        const media = snap.media_pool[mediaId]
+        if (!media) throw new Error('Source inspection requires an existing media_id')
+        const sourceTime = validateEvidenceTime('source', args.source_t_us, media.metadata.duration_us ?? 0, { media_id: mediaId })
+        const uri = `media://${mediaId}/frame/${sourceTime}`
+        const raw: any = await handleReadResource(backend, getTsHost, uri, getVlm)
+        const frame = raw.contents?.find((c: any) => typeof c.blob === 'string' && c.mimeType?.startsWith('image/'))
+        if (!frame) throw new Error('Source frame resource returned no image; no visual evidence generated')
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sclip-source-frame-'))
+        tempImagePath = path.join(tmpDir, frame.mimeType === 'image/png' ? 'frame.png' : 'frame.jpg')
+        fs.writeFileSync(tempImagePath, Buffer.from(frame.blob, 'base64'))
+        imagePaths = [tempImagePath]
+        provenance = { coordinate_space: 'source', evidence_origin: 'SOURCE_MEDIA', media_id: mediaId, source_t_us: sourceTime, resource_uri: uri }
+      }
+      if (imagePaths.length && (args.timeline_t_us !== undefined || args.t_us !== undefined)) throw new EvidenceCoordinateError({ code: 'MIXED_COORDINATE_SPACES', correction: 'Image paths do not establish timeline provenance. Use timeline_t_us to inspect the current composition.' })
       if (imagePaths.length === 0) {
         const snap = tsHost.actor.snapshot()
-        const tUs = args.t_us !== undefined && args.t_us !== null ? Number(args.t_us) : undefined
-        if (tUs !== undefined && (isNaN(tUs) || tUs < 0)) {
-          return { isError: true, content: [{ type: 'text', text: `Invalid t_us: ${args.t_us}` }] } as unknown as ServerResult
-        }
+        const tUs = timelineTime(args)
         const compId = (args.composition_id as string | undefined) ?? snap.root_id
         try {
           const res = await inspectTimelineFrame(snap, {
@@ -604,6 +624,7 @@ export async function handleCallTool(
           })
           const tmpDir = path.join(process.env.TMPDIR || '/tmp', 'sclip-vision-frames')
           factualEvidence = res.factualEvidence
+          provenance = { coordinate_space: 'timeline', evidence_origin: 'CURRENT_TIMELINE', composition_id: compId, timeline_t_us: res.t_us }
           fs.mkdirSync(tmpDir, { recursive: true })
           tempImagePath = path.join(tmpDir, `frame_${res.t_us}_${Date.now()}_${randomUUID().slice(0, 8)}.png`)
           const png = Buffer.from(res.pngBase64, 'base64')
@@ -617,11 +638,19 @@ export async function handleCallTool(
           }
           imagePaths = [tempImagePath]
         } catch (e) {
-          return { isError: true, content: [{ type: 'text', text: `Failed to inspect frame at t_us=${tUs ?? 'current_playhead'}: ${e instanceof Error ? e.message : String(e)}` }] } as unknown as ServerResult
+          return { isError: true, content: [{ type: 'text', text: e instanceof EvidenceCoordinateError ? e.message : `Failed to inspect frame at timeline_t_us=${tUs ?? 'current_playhead'}: ${e instanceof Error ? e.message : String(e)}` }] } as unknown as ServerResult
         }
       }
 
       try {
+        const auditDir = process.env.SCLIP_EVIDENCE_AUDIT_DIR
+        if (auditDir && tempImagePath) {
+          fs.mkdirSync(auditDir, { recursive: true })
+          const evidencePath = path.join(auditDir, `${provenance.coordinate_space}-${provenance.timeline_t_us ?? provenance.source_t_us}-${randomUUID()}.${provenance.coordinate_space === 'source' ? 'jpg' : 'png'}`)
+          fs.copyFileSync(tempImagePath, evidencePath)
+          fs.writeFileSync(`${evidencePath}.json`, JSON.stringify({ ...provenance, composed_frame_facts: factualEvidence }))
+          provenance.evidence_file = evidencePath
+        }
         const runtime = getVisionRuntime()
         const result = await runtime.analyze({
           imagePaths: imagePaths.length > 1 ? imagePaths : undefined,
@@ -639,6 +668,7 @@ export async function handleCallTool(
             {
               type: 'text',
               text: JSON.stringify({
+                ...provenance,
                 question,
                 description: result.description,
                 confidence: result.confidence,
@@ -674,13 +704,14 @@ export async function handleCallTool(
       }
       const compId = (args.composition_id as string | undefined) ?? snap.root_id
       try {
+        validateTimelineRange(startUs, endUs, snap.compositions[compId]?.duration_us ?? 0, compId)
         const res = await renderComposedTimelineRange(snap, {
           start_us: startUs,
           end_us: endUs,
           composition_id: compId,
           getActiveWindow,
         })
-        return { content: [{ type: 'text', text: JSON.stringify(res) }] } as unknown as ServerResult
+        return { content: [{ type: 'text', text: JSON.stringify({ ...res, coordinate_space: 'timeline', evidence_origin: 'CURRENT_TIMELINE', composition_id: compId, timeline_range_us: [startUs, endUs] }) }] } as unknown as ServerResult
       } catch (e) {
         return { isError: true, content: [{ type: 'text', text: e instanceof Error ? e.message : String(e) }] } as unknown as ServerResult
       }
@@ -868,6 +899,9 @@ export async function handleCallTool(
           }) }] } as ServerResult
         }
       }
+      if ('content' in result && Array.isArray(result.content) && !('isError' in result && result.isError)) {
+        result.content.push({ type: 'text', text: JSON.stringify({ coordinate_space: ['transcribe_clip', 'detect_pauses', 'extract_clip_audio'].includes(name) ? 'timeline' : 'source', evidence_origin: 'SOURCE_MEDIA', layer_id: args.layer_id, note: 'analyze/describe output source-absolute times; transcribe/pause output owning-composition times. Source-derived evidence does not show current visual composition.' }) })
+      }
       return result
     }
     if (name === 'get_media_context') {
@@ -888,7 +922,10 @@ export async function handleCallTool(
         throw new Error('Use a valid source-time range of at most 60 seconds (start_us/end_us in microseconds).')
       }
       const result = unwrap(await backend.mcpCallTool(name, JSON.stringify({ ...args, detail: detail === 'segments' ? 'range' : detail, start_us: startUs, end_us: endUs, media }))) as ServerResult
-      return detail === 'segments' ? compactMediaContext(result) : result
+      const final: any = detail === 'segments' ? compactMediaContext(result) : result
+      const body = final.content?.find((c: any) => c.type === 'text')
+      if (body) body.text = JSON.stringify({ ...JSON.parse(body.text), coordinate_space: 'source', evidence_origin: 'SOURCE_MEDIA', media_id: mediaId })
+      return final
     }
     // route === 'rust' → fall through (other reads are served by the backend).
   }
@@ -914,6 +951,12 @@ export async function handleReadResource(
   uri: string,
   getVlm: VlmProvider = NO_VLM,
 ): Promise<ServerResult> {
+  const sourceFrame = /^media:\/\/([^/]+)\/frame\/([^/]+)$/.exec(uri)
+  if (sourceFrame) {
+    const media = getTsHost()?.actor.snapshot().media_pool[sourceFrame[1]!]
+    if (!media) throw new Error('Source frame media_id does not exist')
+    validateEvidenceTime('source', Number(sourceFrame[2]), media.metadata.duration_us ?? 0, { media_id: sourceFrame[1] })
+  }
   const tsHost = getTsHost()
   if (tsHost) {
     if (uri === 'motifs://current') {
@@ -961,7 +1004,9 @@ export async function handleReadResource(
       // order would answer out of a view no gesture ever writes.
       preferred: vlm.preferred,
     })
-    return unwrap(await backend.mcpReadResource(uri, injection)) as ServerResult
+    const resource: any = unwrap(await backend.mcpReadResource(uri, injection))
+    if (uri.startsWith('media://') && Array.isArray(resource.contents)) resource.contents.push({ uri, mimeType: 'application/json', text: JSON.stringify({ coordinate_space: 'source', evidence_origin: 'SOURCE_MEDIA', media_id: uri.slice(8).split('/')[0], ...(sourceFrame ? { source_t_us: Number(sourceFrame[2]) } : {}) }) })
+    return resource as ServerResult
   }
   return unwrap(await backend.mcpReadResource(uri)) as ServerResult
 }
@@ -983,7 +1028,7 @@ export async function handleReadResource(
  *  stack. Those legitimately have no key and carry their summary text alone. */
 function openCommitWindow(actor: ActorHandle): McpCommitWindow {
   // Opt-in benchmark evidence only; no effect on tool execution or decisions.
-  const auditDir = process.env.SCLIP_MCP_AUDIT_DIR
+  const auditDir = process.env.SCLIP_REVIEW_EVIDENCE_DIR ? undefined : process.env.SCLIP_MCP_AUDIT_DIR
   const before = auditDir ? JSON.stringify(actor.snapshot()) : undefined
   const collected: ChangeEvent[] = []
   const stopCollecting = actor.subscribe((e) => { collected.push(e) })
@@ -1129,6 +1174,9 @@ export interface McpServerOptions {
   evaluateSourcePassages?: (args: Record<string, unknown>, signal?: AbortSignal) => Promise<unknown>
   /** Auto-enter the bounded Phase 2E protocol for a dedicated revision run. */
   revisionLoop?: boolean
+  /** Shared across connections of one deliberately started autonomous review. */
+  revisionGuard?: RevisionLoopGuard
+  reviewProjectId?: string
   /** Real-time summary from background audio/visual reviewer. */
   getReviewerSummary?: (immediate?: boolean) => import('../sclip/reviewer/reviewerTypes.js').TimelineReviewSummary
   sourceObservationIndex?: SourceObservationIndex
@@ -1168,7 +1216,7 @@ export async function registeredMcpTools(backend: Backend, opts: McpServerOption
 }
 
 export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): Server {
-  const revisionGuard = new RevisionLoopGuard(opts.revisionLoop === true)
+  const revisionGuard = opts.revisionGuard ?? new RevisionLoopGuard(opts.revisionLoop === true)
   const getTsHost = opts.getTsHost ?? (() => null)
   const getPreferredEngine = opts.getPreferredEngine ?? (() => null)
   const getVlm = opts.getVlm ?? NO_VLM
@@ -1186,6 +1234,10 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
   // client that opened *this* session — `undefined` until it has initialized.
   const clientInfo = (): { name: string; version?: string } | undefined => server.getClientVersion()
 
+  const emitReviewState = (tool: string) => {
+    if (revisionGuard.status.phase === 'idle') return
+    try { opts.log?.emit({ level: 'debug', category: { kind: 'Mcp' }, source: { kind: 'System' }, message: 'Review lifecycle', details: { review_tool: tool, review_session: revisionGuard.status } }) } catch {}
+  }
   const connectionId = opts.connectionId ?? randomUUID()
   const track: typeof withLog = (method, handler, deps, client) => withLog(method, (req, extra) => {
     const service = getTsHost()?.agent
@@ -1207,6 +1259,7 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
     try {
       const name = req.params.name
       const args = (req.params.arguments ?? {}) as Record<string, unknown>
+      if (opts.reviewProjectId && getTsHost()?.actor.snapshot().project_id !== opts.reviewProjectId) return revisionToolError('Review project changed; start a new deliberate review for the current project.')
       const externalEnabled = opts.enableExternalMedia ?? (process.env.SCLIP_ENABLE_EXTERNAL_BROLL === '1')
       if ((name === 'video_search_external_media' || name === 'resolve_visual_intents' || name === 'import_external_media') && !externalEnabled) {
         return revisionToolError('External B-roll discovery is disabled in Sclip V1. Enable with SCLIP_ENABLE_EXTERNAL_BROLL=1.')
@@ -1222,29 +1275,45 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
       if (name === 'revision_control') {
         let status: ReturnType<RevisionLoopGuard['begin']>
         switch (args.action) {
-          case 'begin': status = revisionGuard.begin(); break
+          case 'begin': status = revisionGuard.status.phase === 'idle' ? revisionGuard.begin() : revisionGuard.status; break
           case 'status': status = revisionGuard.status; break
           case 'extend_inspection': status = revisionGuard.extendInspection(args.reason); break
-          case 'select_issue': status = revisionGuard.selectIssue(args.issue_id, JSON.stringify(getTsHost()?.actor.snapshot())); break
+          case 'select_issue': status = revisionGuard.selectIssue(args.issue_id, reviewState(getTsHost()?.actor.snapshot())); break
           case 'finish_issue': status = revisionGuard.finishIssue(args.status); break
           case 'finalize': status = revisionGuard.finalize(); break
+          case 'reground': status = revisionGuard.reground(args.reason, reviewState(getTsHost()?.actor.snapshot())); break
+          case 'conclude_no_repair': status = revisionGuard.concludeNoRepair(args.reason, args.evidence_id, reviewState(getTsHost()?.actor.snapshot())); break
           default: return revisionToolError('Unknown revision_control action')
         }
+        const auditDir = process.env.SCLIP_REVIEW_EVIDENCE_DIR
+        if (auditDir) { try { fs.mkdirSync(auditDir, { recursive: true }); fs.writeFileSync(path.join(auditDir, `${Date.now()}-${randomUUID()}.json`), JSON.stringify({ tool: name, args, review_session: status })) } catch {} }
+        emitReviewState(name)
         return { content: [{ type: 'text', text: JSON.stringify(status) }] } as ServerResult
       }
       if (REVISION_INSPECTION_TOOLS.has(name)) {
         const refusal = revisionGuard.beforeInspection(name, args)
-        if (refusal) return revisionToolError(refusal)
+        if (refusal) return { isError: true, content: [{ type: 'text', text: JSON.stringify({ error: refusal, review_session: revisionGuard.status }) }] } as ServerResult
       }
       const mutation = isRevisionMutation(name)
       if (mutation) {
-        const refusal = revisionGuard.beforeMutation(JSON.stringify(getTsHost()?.actor.snapshot()))
-        if (refusal) return revisionToolError(refusal)
+        const refusal = revisionGuard.beforeMutation(reviewState(getTsHost()?.actor.snapshot()))
+        if (refusal) return { isError: true, content: [{ type: 'text', text: JSON.stringify({ error: refusal, review_session: revisionGuard.status }) }] } as ServerResult
       }
-      const before = mutation ? JSON.stringify(getTsHost()?.actor.snapshot()) : null
+      if (name === 'validate_rough_cut_review' && revisionGuard.status.phase !== 'idle') {
+        const review = typeof args.review === 'string' ? JSON.parse(args.review) : args.review
+        const refusal = revisionGuard.validateEvidence(review, reviewState(getTsHost()?.actor.snapshot()))
+        if (refusal) return { content: [{ type: 'text', text: JSON.stringify({ valid: false, errors: [refusal] }) }] } as ServerResult
+      }
+      const evidenceState = reviewState(getTsHost()?.actor.snapshot())
+      const auditBefore = mutation && process.env.SCLIP_REVIEW_EVIDENCE_DIR ? getTsHost()?.actor.snapshot() : undefined
+      const before = mutation ? reviewState(getTsHost()?.actor.snapshot()) : null
       const result = await handleCallTool(backend, getTsHost, name, args, getPreferredEngine, getVlm, peaksPathFor, opts.getActiveWindow, opts.getReviewerSummary, opts.sourceObservationIndex, opts.externalMediaService, externalEnabled)
-      if (mutation && before !== JSON.stringify(getTsHost()?.actor.snapshot())) {
-        revisionGuard.mutationCommitted(JSON.stringify(getTsHost()?.actor.snapshot()))
+      if (mutation && before !== reviewState(getTsHost()?.actor.snapshot())) {
+        const auditDir = process.env.SCLIP_MCP_AUDIT_DIR
+        if (auditDir && auditBefore) {
+          try { fs.mkdirSync(auditDir, { recursive: true }); fs.writeFileSync(path.join(auditDir, `${Date.now()}-${randomUUID()}.json`), JSON.stringify({ tool: name, args, issue_id: revisionGuard.status.active_issue, before: auditBefore, after: getTsHost()?.actor.snapshot() })) } catch {}
+        }
+        revisionGuard.mutationCommitted(reviewState(getTsHost()?.actor.snapshot()))
         getVisionRuntime().clearCache?.()
         if (opts.getReviewerSummary) {
           const summary = opts.getReviewerSummary(true)
@@ -1261,19 +1330,41 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
           }
         }
       }
+      if (['vision_inspect', 'inspect_timeline_frame', 'get_timeline_context', 'render_timeline_range', 'get_media_context'].includes(name)) {
+        const text = (result as any).content?.find((c: any) => c.type === 'text')
+        let evidence: any = {}; try { evidence = text ? JSON.parse(text.text) : {} } catch {}
+        try { opts.log?.emit({ level: 'debug', category: { kind: 'Mcp' }, source: { kind: 'System' }, message: 'Evidence coordinate validation', details: { inspected_tool: name, coordinate_space: evidence.coordinate_space ?? (name === 'get_media_context' || args.source_t_us !== undefined ? 'source' : 'timeline'), timeline_t_us: args.timeline_t_us ?? args.t_us, source_t_us: args.source_t_us, accepted: !('isError' in result && result.isError), ...(evidence.code ? { rejection: evidence } : {}) } }) } catch {}
+      }
       if (name === 'checkpoint' && !('isError' in result && result.isError)) revisionGuard.checkpointCreated()
-      if (REVISION_INSPECTION_TOOLS.has(name) && !('isError' in result && result.isError)) revisionGuard.inspectionCompleted(name, args)
+      if (REVISION_INSPECTION_TOOLS.has(name) && !('isError' in result && result.isError)) {
+        if (evidenceState !== reviewState(getTsHost()?.actor.snapshot())) return revisionToolError('Timeline changed while gathering evidence. Reacquire current evidence before diagnosis or repair.')
+        revisionGuard.inspectionCompleted(name, args)
+        if (revisionGuard.status.phase !== 'idle') {
+          const body = (result as any).content?.find((c: any) => c.type === 'text')
+          let data: any = {}; try { data = body ? JSON.parse(body.text) : {} } catch {}
+          const timeline = ['get_timeline_context', 'inspect_timeline_frame', 'render_timeline_range', 'get_timeline_critique'].includes(name) || data.coordinate_space === 'timeline'
+          const space = timeline ? 'timeline' : 'source'
+          const comp = getTsHost()?.actor.snapshot().compositions[String(args.composition_id ?? getTsHost()?.actor.snapshot().root_id)]
+          const t = data.timeline_t_us ?? args.timeline_t_us ?? args.t_us
+          const range: [number, number] = timeline ? typeof t === 'number' ? [t, t] : [Number(args.start_us ?? 0), Number(args.end_us ?? comp?.duration_us ?? 0)] : [Number(args.source_t_us ?? args.start_us ?? 0), Number(args.source_t_us ?? args.end_us ?? 0)]
+          const receipt = revisionGuard.recordEvidence(name, space, range, reviewState(getTsHost()?.actor.snapshot()))
+          ;(result as any).content.push({ type: 'text', text: JSON.stringify({ evidence_receipt: receipt }) })
+        }
+      }
       if (name === 'validate_rough_cut_review' && validatedReview(result)) {
         const review = typeof args.review === 'string' ? JSON.parse(args.review) : args.review as any
         const ranges = Object.fromEntries((review?.identified_issues ?? []).map((issue: any) => [issue.id, issue.affected_range_us]))
-        revisionGuard.reviewValidated(reviewIssueIds(args.review), ranges, JSON.stringify(getTsHost()?.actor.snapshot()))
+        revisionGuard.reviewValidated(reviewIssueIds(args.review), ranges, reviewState(getTsHost()?.actor.snapshot()))
+        const auditDir = process.env.SCLIP_REVIEW_EVIDENCE_DIR
+        if (auditDir) { try { fs.mkdirSync(auditDir, { recursive: true }); fs.writeFileSync(path.join(auditDir, `${Date.now()}-${randomUUID()}.json`), JSON.stringify({ tool: name, review, review_session: revisionGuard.status })) } catch {} }
       }
       if (revisionGuard.status.phase !== 'idle' && Array.isArray((result as any).content)) {
-        (result as any).content.push({ type: 'text', text: `Revision execution state: ${JSON.stringify(revisionGuard.status)}` })
+        emitReviewState(name)
+        ;(result as any).content.push({ type: 'text', text: `Revision execution state: ${JSON.stringify(revisionGuard.status)}` })
       }
       return result
     } catch (e) {
-      return { isError: true, content: [{ type: 'text', text: `Tool '${req.params.name}' error: ${e instanceof Error ? e.message : String(e)}` }] } as unknown as ServerResult
+      return { isError: true, content: [{ type: 'text', text: e instanceof EvidenceCoordinateError ? e.message : `Tool '${req.params.name}' error: ${e instanceof Error ? e.message : String(e)}` }] } as unknown as ServerResult
     }
   }, log, clientInfo))
   server.setRequestHandler(ListResourcesRequestSchema, track('resources/list', async () => {
@@ -1282,7 +1373,22 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
   }, log, clientInfo))
   server.setRequestHandler(ReadResourceRequestSchema, track('resources/read', async (req: ReadResourceRequest) => {
     try {
-      return await handleReadResource(backend, getTsHost, req.params.uri, getVlm)
+      if (opts.reviewProjectId && getTsHost()?.actor.snapshot().project_id !== opts.reviewProjectId) throw new Error('Review project changed')
+      if (revisionGuard.status.phase !== 'idle') {
+        const refusal = revisionGuard.beforeInspection(req.params.uri.startsWith('media://') ? 'get_media_context' : 'get_timeline_context', {})
+        if (refusal) throw new Error(JSON.stringify({ error: refusal, review_session: revisionGuard.status }))
+      }
+      const resourceState = reviewState(getTsHost()?.actor.snapshot())
+      const result: any = await handleReadResource(backend, getTsHost, req.params.uri, getVlm)
+      if (revisionGuard.status.phase !== 'idle') {
+        const snap = getTsHost()?.actor.snapshot()
+        if (resourceState !== reviewState(snap)) throw new Error('Timeline changed while reading evidence. Reacquire current evidence.')
+        const timeline = req.params.uri === 'project://current' || req.params.uri.startsWith('project://tracks')
+        if (timeline) revisionGuard.inspectionCompleted('get_timeline_context', {})
+        const receipt = revisionGuard.recordEvidence('resources/read', timeline ? 'timeline' : 'source', [0, snap?.compositions[snap.root_id]?.duration_us ?? 0], reviewState(snap))
+        result.contents.push({ uri: req.params.uri, mimeType: 'application/json', text: JSON.stringify({ evidence_receipt: receipt, review_session: revisionGuard.status }) })
+      }
+      return result
     } catch (e) {
       return { contents: [{ uri: req.params.uri, mimeType: 'text/plain', text: `Error reading resource: ${e instanceof Error ? e.message : String(e)}` }] } as unknown as ServerResult
     }

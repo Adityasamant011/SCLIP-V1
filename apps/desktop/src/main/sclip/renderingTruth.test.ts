@@ -10,7 +10,9 @@ describe('Sclip composed inspection adapters', () => {
   beforeAll(initEval)
 
   it('uses the live frame bridge and refuses a reduced fallback when unavailable', async () => {
-    const project = freshActor().snapshot()
+    const actor = freshActor()
+    actor.mcpCall('add_color_layer', JSON.stringify({ track_id: aRollId(actor), color: { r: 20, g: 30, b: 40, a: 255 }, t_start_us: 0, t_end_us: 60_000_000 }))
+    const project = actor.snapshot()
     const capture = { pngBase64: Buffer.from('png').toString('base64'), width: 1920, height: 1080 }
     const win = { isDestroyed: () => false, webContents: { executeJavaScript: async (code: string) => {
       expect(code).toContain('__weftcutPreview.captureFrameAt')
@@ -22,15 +24,17 @@ describe('Sclip composed inspection adapters', () => {
   })
 
   it('inspects current live playhead frame when t_us is omitted', async () => {
-    const project = freshActor().snapshot()
+    const actor = freshActor()
+    actor.mcpCall('add_color_layer', JSON.stringify({ track_id: aRollId(actor), color: { r: 20, g: 30, b: 40, a: 255 }, t_start_us: 0, t_end_us: 60_000_000 }))
+    const project = actor.snapshot()
     const capture = { pngBase64: Buffer.from('png').toString('base64'), tUs: 15_000_000, width: 1920, height: 1080 }
     let executedCode = ''
     const win = { isDestroyed: () => false, webContents: { executeJavaScript: async (code: string) => {
       executedCode = code
-      return capture
+      return code.includes('getPlayheadUs') ? 15_000_000 : capture
     } } }
     const result = await inspectTimelineFrame(project, { getActiveWindow: () => win, requireLiveCompositor: true })
-    expect(executedCode).toContain('__weftcutPreview.captureFrameAt(undefined')
+    expect(executedCode).toContain('__weftcutPreview.captureFrameAt(15000000')
     expect(result.t_us).toBe(15_000_000)
     expect(result.source).toBe('live_compositor')
   })
