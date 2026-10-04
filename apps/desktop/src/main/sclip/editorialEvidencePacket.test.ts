@@ -57,4 +57,13 @@ describe('Compact editorial evidence and agency',()=>{
     const packet=buildEditorialEvidencePacket(p);expect(packet.clips.length).toBeLessThanOrEqual(16);expect(Buffer.byteLength(JSON.stringify(packet))).toBeLessThanOrEqual(PACKET_LIMITS.bytes)
     expect(packet.truncation.source_layers_total).toBe(502);expect(packet.visuals).toMatchObject({status:'not_observed'})
   })
+  it('explicitly omits oversized visual observations without asserting visual coverage or a consensus',()=>{
+    const {p,loader}=fixture(),visuals={status:'available',frame_observations:[{timeline_t_us:0,subject_visible:false,description:'No person. '.repeat(4000)},{timeline_t_us:1000000,subject_visible:true,description:'Person visible. '.repeat(4000)}]}
+    const packet=buildEditorialEvidencePacket(p,{transcriptLoader:loader},visuals)
+    expect(Buffer.byteLength(JSON.stringify(packet))).toBeLessThanOrEqual(PACKET_LIMITS.bytes)
+    expect(packet.visuals).toMatchObject({status:'omitted_size_limit'})
+    expect(packet.truncation.omitted_sections).toContain('visuals');expect(packet.observed_dimensions).not.toContain('visual')
+    expect(visuals.frame_observations.map(f=>f.subject_visible)).toEqual([false,true])
+    expect(packet.speech.length).toBeGreaterThan(0)
+  })
 })

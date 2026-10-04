@@ -7,7 +7,7 @@ import { validateTimelineRange, reviewState } from './evidenceCoordinates.js'
 import { avRelationships } from './mediaRelationships.js'
 import type { EvidenceDimension } from './evidenceModalities.js'
 
-export const PACKET_LIMITS = { clips: 16, text: 12, relationships: 16, boundaries: 16, transitions: 8, bytes: 28000 } as const
+export const PACKET_LIMITS = { clips: 16, text: 12, relationships: 16, boundaries: 16, transitions: 8, visual_bytes: 7000, bytes: 28000 } as const
 export const PACKET_FIELD_CLASSES = { identity: 'PROVENANCE', project: 'STATE', tracks: 'STATE', clips: 'EVIDENCE', relationships: 'EVIDENCE', speech: 'EVIDENCE', text: 'EVIDENCE', technical: 'TECHNICAL INVARIANT', visuals: 'EVIDENCE', deeper_evidence: 'WORKFLOW', observed_dimensions: 'PROVENANCE', truncation: 'PROVENANCE' } as const
 function compactTransform(t: any) {
   const value=(a:any)=>a?.mode==='Static' ? a.value : {mode:a?.mode,key_count:a?.keys?.length ?? null}
@@ -50,7 +50,15 @@ export function buildEditorialEvidencePacket(project: Project, options: Timeline
     visuals: visualIndex ?? { status:'not_observed', evidence_class:'MODEL_OBSERVATION', reason:'Initial index contains no rendered perception. Use bounded range inspection for targeted current visuals.' },
     deeper_evidence: { state_text_speech:'get_editorial_evidence_packet with start_us/end_us for targeted omitted sections', timeline:'get_timeline_context', visual:'inspect_timeline_range_visuals', source:'get_media_context / get_source_observations', audio:'render_timeline_range (inspect/listen to returned media)', parameters:'get_param_track', instruction:'This is a bounded observation index, not an editorial verdict. Choose any justified issue, repair, or no repair. Reacquire after a state change; expand omitted sections using existing tools.' },
     observed_dimensions: observed,
-    truncation: { source_layers_total:source.length, text_layers_total:text.length, relationships_total:rel.length, limits:PACKET_LIMITS, size_limited:false },
+    truncation: { source_layers_total:source.length, text_layers_total:text.length, relationships_total:rel.length, limits:PACKET_LIMITS, size_limited:false, omitted_sections:[] as string[] },
+  }
+  // Keep the original per-frame observations in the visual tool/cache. An oversized
+  // section is explicitly unavailable here, never replaced by a consensus summary.
+  if (Buffer.byteLength(JSON.stringify(packet.visuals)) > PACKET_LIMITS.visual_bytes) {
+    packet.visuals = { status:'omitted_size_limit', evidence_class:'MODEL_OBSERVATION', reason:'Per-frame observations exceed the compact index allowance; request targeted inspect_timeline_range_visuals. No visual coverage is asserted by this packet.' }
+    packet.observed_dimensions=packet.observed_dimensions.filter(d=>d!=='visual')
+    packet.truncation.size_limited=true
+    packet.truncation.omitted_sections.push('visuals')
   }
   // Bound pathological source labels/text/track counts as well as ordinary summaries.
   while (Buffer.byteLength(JSON.stringify(packet)) > PACKET_LIMITS.bytes && (packet.speech.length || packet.clips.length || packet.text.length || packet.relationships.length)) {
@@ -58,5 +66,12 @@ export function buildEditorialEvidencePacket(project: Project, options: Timeline
     if(packet.speech.length) packet.speech.pop(); else if(packet.clips.length)packet.clips.pop(); else if(packet.text.length)packet.text.pop(); else packet.relationships.pop()
   }
   if (!packet.speech.some(s=>s.kind==='Audio' && s.word_timing_available)) packet.observed_dimensions=packet.observed_dimensions.filter(d=>d!=='speech')
+  if (Buffer.byteLength(JSON.stringify(packet)) > PACKET_LIMITS.bytes) {
+    packet.truncation.size_limited=true
+    packet.truncation.omitted_sections.push('technical', 'tracks')
+    packet.technical.interval_spacing=[]; packet.technical.gaps=[]; packet.technical.boundaries=[]; packet.technical.transitions=[]
+    packet.tracks=[]
+  }
+  if (Buffer.byteLength(JSON.stringify(packet)) > PACKET_LIMITS.bytes) throw new Error('EDITORIAL_PACKET_SIZE_LIMIT: essential state exceeds the compact packet allowance; request a narrower range.')
   return packet
 }
