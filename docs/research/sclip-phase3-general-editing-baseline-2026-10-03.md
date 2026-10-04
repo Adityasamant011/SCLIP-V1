@@ -1,5 +1,77 @@
 # SCLIP Phase 3 — General Editing Quality Baseline
 
+**Current status (2026-10-04): preliminary, stopped at the user's request to conserve usage.** One locked case completed a first and reviewed pass. The vlog reached source inspection and planning before interruption; the screen recording and product demo were not run. The historical blocked diagnostic remains below as an explicitly superseded record.
+
+## Credential mismatch: corrected diagnosis
+
+The user's live Sclip app answered a new `KEY_OK` prompt. The packaged app identifies as `Sclip` (app ID `dev.weftcut.desktop`) and decrypts `cloud_keys.json` through Electron `safeStorage` in its Sclip `userData` directory. The development Electron executable used by the benchmark read the same encrypted credential with a different application identity. In that Keychain context, decryption returned unusable text without throwing; the earlier apparent 75-character non-ASCII/whitespace “key” was an artifact of this mismatch. Setting the name to `Sclip` before Electron initialization yielded a 73-character ASCII value without whitespace. Read-only authenticated OpenRouter `/key` and `/models` checks returned HTTP 200. The credential itself was never printed or saved, and the user did not need to replace it.
+
+The benchmark launcher now sets the packaged product name before awaiting input or Electron readiness. The real-keychain Playwright entry does likewise before loading production main. Both use the existing production credential loader and encrypted file. A test keeps the shared identity aligned with package metadata. The real Hermes health test requires an MCP `ping` and a new answer containing `PHASE3_HEALTH_OK`. **Health check: PASS** with OpenRouter / `nvidia/nemotron-3-ultra-550b-a55b:free`, real MCP connection, no timeline mutation, and no credential/header/decryption error. Focused tests passed 18/18; typecheck and end-to-end build passed.
+
+## Locked run and results
+
+The [locked manifest](../../apps/desktop/e2e/bench-results/phase3-general/cases.json) fixed four source hashes, exact prompts, and canvases before these outputs. The opt-in harness checks the hash and prompt, imports raw media into the real app, invokes real Hermes/MCP, preserves the first pass before a separate review, and requests a native render. It copies only encrypted credentials into isolated app data. External B-roll remained disabled. No editorial prompt, skill, perception, or timeline behavior was changed. The first-pass limit was 50 turns; review was a fresh session limited to 18 turns. These limits affected the result.
+
+| Case | First pass | Reviewed pass | Publishability | Biggest failure / limitation |
+| --- | --- | --- | --- | --- |
+| Talking head | 60.47 s editable cut and H.264/AAC render | Identical timeline project; rerendered, no repair | **NEEDS MAJOR HUMAN EDITING** | Mid-thought opening, late clipped framing, ineffective review |
+| Vlog | Interrupted during planning; no first-pass edit | Not run | Unassessed | User stopped to conserve usage |
+| Screen recording | Not run | Not run | Unassessed | User stopped to conserve usage |
+| Product demo | Not run | Not run | Unassessed | User stopped to conserve usage |
+
+### Talking-head assessment
+
+Hermes inspected and transcribed the 575.7 s source, chose its own ranges, made 10 paired video/audio clips and 63 caption layers, applied a vertical crop, sampled composed frames, and called timeline critique. The main video track has no internal gaps or overlaps. The native render is 1080×1920 H.264/AAC, 60.466667 s, about 60.3 MB. The first pass took 623 s and reported 100 tool calls. A rejected batch parameter update was recovered through individual calls. These are genuine app and tool results.
+
+The opening starts at source 129.48 s with “They start building a bridge to like their success journey…”, which lacks a self-contained premise. The sequence later jumps backward from source 494.68–503.75 s to 394.24–400.01 s; speech/visual continuity across the full render still needs human listening. Captions are visible but split into many short fragments, including “also they get distracted And”. A sampled frame at 59 s shows the speaker's face partly outside the left edge. Duration exceeds the stated 45–60 s target by 0.47 s. Hermes's first-pass “ready to publish” claim is too strong.
+
+| Dimension | Observation |
+| --- | --- |
+| Technical correctness | Editable project and valid render; paired media ranges; no main-video gaps/overlaps |
+| Content, story, pacing | Relevant mentor/process theme, but weak opening context and a sequence needing editorial listening |
+| Captions | Readable in sampled frames, yet 63 fragmented phrases |
+| Framing, variety | Mostly consistent vertical talking head; subject partly clipped at 59 s; no alternate source shots |
+| Audio, continuity | AAC present and paired to video; cut boundaries were not independently listened through end to end |
+| Restraint, genre fit | No external media or gratuitous effects; recognizable short-form treatment, but not publication-ready |
+
+The separate reviewer identified a weak hook and fragmented captions, but its 18 turns expired before any mutation. It also called 10 video clips plus 10 audio clips “20 video clips” and described an opening line that does not match the saved opening caption. First and reviewed `project.json` files have identical SHA-256 (`4aaaa52db240ba9c4c6cae73dda558e0c02e760dcc5d364029510237077d3029`); the rerenders have the same size but different file hashes. **Measured timeline improvement: none.** The review's fresh context and limited turn budget are benchmark limitations as well as evidence of this review workflow's failure in the case.
+
+### Partial vlog evidence
+
+Before interruption, Hermes inspected/transcribed the 1,314 s source and proposed a ~75 s structure spanning family morning, tracksuits, garden/chili jam, and an ending. It had requested the rough-cut tool schema, but no autonomous vlog timeline or render existed. The partial trace and an explicitly labeled interrupted project snapshot were preserved. They are not counted as a completed case.
+
+## Current failure matrix and verdicts
+
+| Issue | Frequency in completed edits | Severity | Classification | Evidence path |
+| --- | ---: | --- | --- | --- |
+| Mid-thought opening | 1/1 | High | `STORY_REASONING_FAILURE`, `CONTENT_REASONING_FAILURE` | Source choice → timeline → captions/render |
+| Face clipped in vertical frame | 1/1 | Medium | `FRAMING_FAILURE`, `REVIEW_FAILURE` | Static crop → composed frame at 59 s → no repair |
+| Fragmented captions | 1/1 | Medium | `CAPTION_FAILURE`, `REVIEW_FAILURE` | Transcript phrases → 63 text layers → sampled frames |
+| Review detects issues but makes no edit | 1/1 | High | `REVIEW_FAILURE`, `REPAIR_FAILURE`, benchmark turn-budget limit | Review trace → identical project hashes |
+| Wrong secure-storage app identity | One prerequisite, fixed | Blocking before edit | `RUNTIME_FAILURE` | Dev Electron name → wrong Keychain context → unusable decrypted value |
+
+**Strengths:** Real source perception, autonomous source selection and editable timeline creation, valid render, and recovery from a rejected tool call. The partial vlog trace also shows a plausible content inventory, but no edit.
+
+**Weaknesses supported by this sample:** Inadequate opening context, failure to keep a moving face in the vertical crop, fragmented captions, overconfident publishability claim, and a review session that spent its budget inspecting and planning rather than repairing.
+
+**Review-loop verdict: INSUFFICIENT EVIDENCE** for general effectiveness; the one completed review produced **no improvement**. **Generalization verdict: TALKING-HEAD BIASED** as a statement about evidence coverage, not a claim that Hermes performs worse in other genres. **Autonomous-editor verdict: EARLY AUTONOMOUS EDITOR**, provisionally: this case shows actual source selection, timeline editing, and rendering from a high-level prompt, while the output still needs substantial human editing.
+
+## Proposed Phase 3B priorities — not implemented
+
+| Priority | Problem → evidence → likely cause → smallest proposed fix → proof |
+| --- | --- |
+| P0 | Opening lacks context → first caption begins mid-thought → source choice optimizes topic/duration without checking the first line in context → require an opening-context check before finalizing ranges → blinded rerun begins with a complete premise and human raters prefer its structure |
+| P0 | Review makes no repair → identified issues, exhausted 18 turns, identical project hashes → inspection and mutation budgets are misaligned → reserve explicit mutation/reinspection budget for verified issues → first/reviewed diffs and blind ratings show improvement without regressions |
+| P1 | Face leaves frame → 59 s composed frame → one static crop does not follow movement → check representative frames in each selected range and adjust only failing ranges → no subject clipping or new crop artifacts |
+| P1 | Captions fragment speech → 63 text layers, awkward opening phrases → segmentation lacks phrase-level readability check → validate phrase boundaries against speech → fewer awkward breaks without timing loss |
+| P2 | Generalization unknown → one completed genre → no output evidence elsewhere → resume the other locked cases only if the user wants further evaluation → independent first/reviewed renders and ratings |
+
+No Phase 3B editorial fix, style learning, packaging, external B-roll, or generation work was started. The local [talking-head artifacts](../../apps/desktop/e2e/bench-results/phase3-general/talking-head/) contain first/reviewed traces, project snapshots, metrics, renders, and sampled frames. The [vlog artifacts](../../apps/desktop/e2e/bench-results/phase3-general/vlog/) contain the partial trace and stop status. These folders are Git-ignored. The section below records what was believed at the original blocked attempt and is **not** the current diagnosis.
+
+---
+
+## Historical 2026-10-03 blocked diagnostic — superseded
+
 **Status: blocked before the first autonomous edit.** This is a readiness and coverage diagnostic, not an editorial-quality benchmark result. On 2026-10-03 the user chose diagnostics only after the saved provider credential failed. No case was run, no first-pass or reviewed-pass timeline was produced, and no publishability rating can be assigned. Historical Phase 2F and talking-head artifacts are not counted as Phase 3 runs.
 
 ## 1. Environment
