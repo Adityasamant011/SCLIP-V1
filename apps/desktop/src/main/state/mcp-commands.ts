@@ -1368,6 +1368,17 @@ export const MCP_TOOL_DEFS: ReadonlyArray<McpToolDef> = [
         throw new McpArgError(`set_extrapolation needs at least one of before, after (each ${EXTRAPOLATE_OPTIONS}) — nothing to write`)
       return p
     } },
+  { name: 'apply_repair_transaction', exec: 'dedicated',
+    description: 'Atomically apply 1–8 YOUR explicitly chosen layer edits as one repair and one undo boundary. Supply current Editorial Evidence Packet state_version, reason, and every operation/parameter. Supports update_layer (timeline envelope) and update_layer_params (source, visual, audio, text params), with their existing patch formats. Only named layers change; no A/V synchronization is inferred. Temporary intermediate overlap is allowed, but final state must satisfy technical invariants. All commit or none commit. Creates a checkpoint. During review select a grounded issue and create a checkpoint first; verification is required once AFTER the whole transaction, using fresh relevant evidence. Single edit tools and justified no-repair remain available.',
+    inputSchema: { type: 'object', properties: {
+      expected_state_version: { type: 'string', description: 'Exact current packet state_version.' },
+      reason: { type: 'string', minLength: 1, maxLength: 1000 },
+      operations: { type: 'array', minItems: 1, maxItems: 8, items: { type: 'object', properties: {
+        kind: { type: 'string', enum: ['update_layer', 'update_layer_params'] },
+        layer_id: { type: 'string' }, patch: { type: 'object', description: 'Same explicit patch as the named tool; params patches require kind.' },
+      }, required: ['kind', 'layer_id', 'patch'], additionalProperties: false } },
+    }, required: ['expected_state_version', 'reason', 'operations'], additionalProperties: false },
+    parseDedicated: a => ({ expected_state_version: parseStr(a.expected_state_version, 'expected_state_version'), reason: parseStr(a.reason, 'reason'), operations: asArray(a.operations, 'operations') }) },
   { name: 'dry_run', exec: 'dedicated',
     description: 'Try-run a sequence of edit operations against a clone of the current project WITHOUT committing. Useful for previewing complex multi-step edits — agents can detect overlap / invariant violations before mutating real state. Validates after each op (matching real `commit()` behaviour) and HALTS at the first error so subsequent ops don\'t dry-run against a state real execution wouldn\'t reach. Returns `{ results: [{ index, status, output? | error? }, ...] }`. Supports add_color_layer, add_video_layer, update_layer, update_layer_params, move_layer, split_layer, delete_layer, add_transition (same args as the add_transition tool, except the transition kind rides as `transition_kind` — the spec\'s `kind` names the operation — plus optional `placement`: \'overlap\' default | \'extend\'; its output predicts the moved incoming layer\'s sibling lane bounces and lane spawns, and its refusals, identically to the real command). Other tools (motifs, caption import, media import, undo/redo) are not dry-runnable in v1.',
     inputSchema: { type: 'object', properties: { operations: {

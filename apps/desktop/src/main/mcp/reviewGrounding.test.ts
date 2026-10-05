@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
@@ -236,6 +237,45 @@ describe('Visual repair state correctness', () => {
       expect((await f.call('inspect_timeline_range_visuals', range)).isError).not.toBe(true)
       expect((await f.call('revision_control', { action: 'finish_issue', status: 'resolved' })).isError).not.toBe(true)
       expect(execute.mock.calls.filter(c=>c[0].includes('captureFrameAt('))).toHaveLength(6)
+    } finally { await f.close() }
+  })
+})
+
+describe('Atomic repair transaction review boundary', () => {
+  it('publishes all members before requiring one fresh verification, then permits Hermes to resolve', async () => {
+    const f = await reviewFixture()
+    try {
+      await f.call('get_timeline_context')
+      await f.call('record_issue', simpleIssue(f))
+      await f.call('checkpoint', { label: 'Hermes repair' })
+      await f.call('revision_control', { action: 'select_issue', issue_id: 'issue-1' })
+      const version = () => createHash('sha256').update(reviewState(f.actor.snapshot())).digest('hex')
+      const events: any[]=[];f.actor.subscribe(e=>events.push(e))
+      const operations = [
+        {kind:'update_layer',layer_id:f.layerId,patch:{t_end_us:50_000_000}},
+        {kind:'update_layer_params',layer_id:f.layerId,patch:{kind:'Color',color:{r:30,g:40,b:50,a:255}}},
+      ]
+      const result = await f.call('apply_repair_transaction', { expected_state_version:version(),reason:'Hermes chose a coordinated repair',operations })
+      expect(result.isError).not.toBe(true);expect(body(result).operations).toHaveLength(2);expect(events).toHaveLength(1)
+      expect(body(await f.call('revision_control',{action:'status'})).verification_pending).toBe(true)
+      expect((await f.call('revision_control',{action:'finish_issue',status:'resolved'})).isError).toBe(true)
+      expect((await f.call('apply_repair_transaction',{expected_state_version:version(),reason:'Another repair',operations})).isError).toBe(true)
+      await f.call('get_timeline_context')
+      expect(body(await f.call('revision_control',{action:'status'})).verification_pending).toBe(false)
+      expect((await f.call('revision_control',{action:'finish_issue',status:'resolved'})).isError).not.toBe(true)
+    } finally { await f.close() }
+  })
+  it('a rejected batch neither mutates nor starts verification; Hermes may submit a legal alternative', async () => {
+    const f = await reviewFixture()
+    try {
+      await f.call('get_timeline_context');await f.call('record_issue',simpleIssue(f))
+      await f.call('checkpoint',{label:'Hermes repair'});await f.call('revision_control',{action:'select_issue',issue_id:'issue-1'})
+      const version=createHash('sha256').update(reviewState(f.actor.snapshot())).digest('hex'), before=f.actor.snapshot()
+      const first={kind:'update_layer',layer_id:f.layerId,patch:{t_end_us:50_000_000}}
+      expect((await f.call('apply_repair_transaction',{expected_state_version:version,reason:'Hermes repair',operations:[first,{...first,patch:{t_end_us:-1}}]})).isError).toBe(true)
+      expect(f.actor.snapshot()).toBe(before)
+      expect(body(await f.call('revision_control',{action:'status'})).verification_pending).toBe(false)
+      expect((await f.call('apply_repair_transaction',{expected_state_version:version,reason:'Hermes legal alternative',operations:[first]})).isError).not.toBe(true)
     } finally { await f.close() }
   })
 })

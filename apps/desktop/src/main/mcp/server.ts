@@ -894,6 +894,10 @@ export async function handleCallTool(
         return revisionToolError(`Failed to import external media candidate "${candidateId}": ${e instanceof Error ? e.message : String(e)}`)
       }
     }
+    if (name === 'apply_repair_transaction') {
+      const out = tsHost.mcpCall(name, JSON.stringify(args))
+      return out.ok ? out.result as ServerResult : { isError: true, content: [{ type: 'text', text: JSON.stringify({ error: out.error }) }] } as ServerResult
+    }
     const route = routeMcpTool(name)
     if (route === 'ts') {
       const out = unwrapEnvelope(tsHost.mcpCall(name, JSON.stringify(args)))

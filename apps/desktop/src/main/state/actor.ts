@@ -1,4 +1,8 @@
 // apps/desktop/src/main/state/actor.ts
+import { createHash } from 'node:crypto'
+import { reviewState } from '../sclip/evidenceCoordinates'
+import { changedAVRelationships } from '../sclip/mediaRelationships'
+import { validateRepairRequest, transactionGeometry } from './repairTransaction'
 import { produce, setAutoFreeze } from 'immer'
 import type { Animated, AudioRole, Composition, Continuity, Extrapolate, Interpolation, LayerParams, MarkerAnchor, MotifRebindEntry, Project, Rational, Rgba, TransitionKind, Uuid } from './model'
 import { blankProject, eachLayer, rootComposition } from './model'
@@ -2029,6 +2033,64 @@ export function createActor(opts: ActorOptions): ActorHandle {
           const r = dispatch('update_layer_param_track', { layer, param_key: paramKey, track: next })
           if (!r.ok) return { ok: false, error: mapCommandError(r.error) }
           return { ok: true, result: toolEmpty() }
+        }
+        case 'apply_repair_transaction': {
+          const before = current()
+          const stateVersion = (p: Project) => createHash('sha256').update(reviewState(p)).digest('hex')
+          const startingState = stateVersion(before)
+          const transactionId = idGen()
+          let checkpointId: string | undefined
+          let prepared = false
+          const requested = Array.isArray(a.operations) ? a.operations : []
+          try {
+            validateRepairRequest(a, mcpDef)
+            if (a.expected_state_version !== startingState) throw new McpArgError('STALE_TRANSACTION_STATE: reacquire current evidence and decide again')
+            mcpDef('apply_repair_transaction').parseDedicated!(a)
+            const specs = a.operations as Array<Record<string, unknown>>
+            const ops = specs.map(specToDryRunOp)
+            // The existing apply primitives execute only the named layer. No
+            // linked sibling expansion or inferred creative operation is used.
+            const operationResults: Array<Record<string, unknown>> = []
+            const next = produce(before, draft => {
+              for (const [index, op] of ops.entries()) {
+                if (!('id' in op)) throw new McpArgError('Unsupported transaction operation')
+                const memberBefore = JSON.parse(JSON.stringify(requireLayer(draft, op.id).layer))
+                if (op.kind === 'UpdateLayer') applyUpdateLayer(draft, op.id, op.patch)
+                else if (op.kind === 'UpdateLayerParams') {
+                  applyUpdateLayerParams(draft, op.id, op.patch, motifCatalog)
+                  enforceScaleLinkInvariant(draft, op.id)
+                }
+                operationResults.push({ requested_operation: specs[index], committed: true, affected_layer_ids: [op.id],
+                  before: memberBefore, after: JSON.parse(JSON.stringify(requireLayer(draft, op.id).layer)) })
+              }
+              reconcileTransitions(draft)
+              reconcileMarkers(draft)
+            })
+            runValidate(next) // Entire final batch, before checkpoint/publication.
+            prepared = true
+            const ids = [...new Set(specs.map(op => String(op.layer_id)))]
+            const observations = { operations: operationResults, relationship_changes: changedAVRelationships(before, next), geometry: transactionGeometry(next, ids) }
+            checkpointId = checkpoint(String(a.reason), MCP_ACTOR)
+            // Serialize the receipt before publishing; no fallible observer or
+            // per-operation work runs after the single authoritative commit.
+            const result = toolJson({ transaction_id: transactionId, status: 'success', checkpoint_id: checkpointId,
+              starting_state_version: startingState, resulting_state_version: stateVersion(next), changed: JSON.stringify(next) !== JSON.stringify(before),
+              ...observations,
+              evidence_origin: 'AUTHORITATIVE_PROJECT_ACTOR', verification: 'Reacquire fresh evidence for the selected issue modalities; Hermes judges the result.' })
+            commit(HISTORY_SUMMARY.repairTransaction, layerRefs(ids), { kind: 'Coarse' }, draft => {
+              Object.assign(draft, next)
+            }, true)
+            return { ok: true, result }
+          } catch (e) {
+            // No member ever publishes independently: a discarded draft or a
+            // failure before history.record leaves the original snapshot intact.
+            if (checkpointId) history.deleteCheckpoint(checkpointId)
+            const internalFailure = prepared || !(e instanceof McpArgError || e instanceof CommandFailure)
+            return { ok: false, error: { code: internalFailure ? 'internal' : 'invalid_params', message: e instanceof Error ? e.message : String(e), data: {
+              transaction_id: transactionId, status: internalFailure ? 'rolled_back' : 'rejected', starting_state_version: startingState,
+              resulting_state_version: stateVersion(current()), operations: requested.map(op => ({ requested_operation: op, committed: false, affected_layer_ids: op && typeof op === 'object' && typeof op.layer_id === 'string' ? [op.layer_id] : [] })),
+            } } }
+          }
         }
         case 'dry_run': {
           const p = mcpDef('dry_run').parseDedicated!(a)
