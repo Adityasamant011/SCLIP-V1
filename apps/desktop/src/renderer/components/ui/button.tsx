@@ -12,9 +12,9 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        // Primary CTA (导出 / 创建 / 添加): blue base, darken on hover.
+        // Primary CTA: always pair the theme's fill with its contrasting ink.
         default:
-          "border-primary bg-primary text-white hover:border-blue-700 hover:bg-blue-700",
+          "border-primary bg-primary text-primary-foreground hover:bg-primary/90",
         // The workhorse neutral action button.
         secondary:
           "border-border bg-secondary text-foreground hover:bg-accent",

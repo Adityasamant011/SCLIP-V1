@@ -164,7 +164,7 @@
 
 .app-switch-thumb[data-checked] {
   left: 16px;
-  background: #fff;
+  background: var(--primary-foreground);
 }
 
 /* Square form checkbox (AppCheckbox / Base UI Checkbox). Mirrors the switch's
