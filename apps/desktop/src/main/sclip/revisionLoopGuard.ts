@@ -21,6 +21,9 @@ export class RevisionLoopGuard {
   private readonly outcomes = new Map<string, 'resolved' | 'unresolved'>()
   private verificationPending = false
   private repairInspections = 0
+  private retainedRepair = false
+  private rollbackRegrounding = false
+  private lastRollback: { checkpoint_id: string; abandoned_state_version: string; restored_state_version: string; invalidated_evidence_ids: string[] } | undefined
   private finalInspections = 0
   private readonly verifiedDimensions = new Set<EvidenceDimension>()
   private readonly issueRanges = new Map<string, [number, number]>()
@@ -36,6 +39,8 @@ export class RevisionLoopGuard {
     return {
       workflow_stage: this.phase === 'initial' ? 'DIAGNOSING' : this.phase === 'decision' ? 'READY_TO_DECIDE' : this.phase === 'repair' ? this.verificationPending ? 'VERIFYING' : 'REPAIRING' : this.phase === 'done' ? 'COMPLETE' : this.phase.toUpperCase(),
       evidence_ids: [...this.evidence.keys()],
+      last_rollback: this.lastRollback,
+      rollback_regrounding_required: this.rollbackRegrounding,
       verification_dimensions_observed: [...this.verifiedDimensions],
       issues: [...this.recordedIssues.values()].map(({ state: _state, ...issue }) => issue),
       autonomous_authorization: 'Perform justified repairs with ordinary editing tools and verify them; do not ask the user for permission during this autonomous review.',
@@ -47,6 +52,7 @@ export class RevisionLoopGuard {
       verification_pending: this.verificationPending, repair_cycles_limit: 3,
       next_action: this.phase === 'decision' ? 'Decide now: record_issue with receipt IDs, then select it and repair, or conclude_no_repair with a current evidence_id and reason. Further inspection requires one specific unresolved question.' : this.phase === 'initial' ? 'Inspect current timeline briefly, then record_issue for up to three prioritized issues.'
         : this.phase === 'repair' ? this.verificationPending ? 'Reinspect the changed timeline range before another edit or resolving the issue.'
+          : this.rollbackRegrounding ? 'Checkpoint restored; the attempted repair was abandoned, not resolved. Gather fresh relevant evidence before another repair, withdraw with current evidence, or finish unresolved and stop.'
           : this.activeIssue ? 'Perform the smallest justified repair; stop planning once evidence is sufficient.'
             : 'Select a registered issue, checkpoint before mutation, or complete after closing all issues.'
           : 'Validate final current-timeline review and report remaining uncertainty.',
@@ -121,7 +127,7 @@ export class RevisionLoopGuard {
     if (this.activeIssue && this.activeIssue !== issueId) throw new Error('Finish the active issue before selecting another')
     if (this.outcomes.has(issueId)) throw new Error(`Issue ${issueId} is already closed`)
     if (!this.activeIssue && this.outcomes.size >= 3) throw new Error('Three repair cycles completed; finalize with remaining issues reported honestly')
-    if (!this.activeIssue) this.repairInspections = 0
+    if (!this.activeIssue) { this.repairInspections = 0; this.retainedRepair = false }
     this.activeIssue = issueId
     return this.status
   }
@@ -135,6 +141,7 @@ export class RevisionLoopGuard {
     if ((this.attempts.get(this.activeIssue) ?? 0) >= 3) return `Revision attempt limit reached for issue ${this.activeIssue}. No further mutations permitted for this issue. Mark it unresolved and finalize.`
     if (this.reviewedState !== undefined && this.reviewedState !== currentState) return 'Timeline changed outside this repair. Mark the issue unresolved, then validate a fresh current-timeline review before another edit.'
     if (this.verificationPending) return 'Reinspect the changed timeline range before another mutation'
+    if (this.rollbackRegrounding) return 'Checkpoint restored. Acquire fresh relevant evidence before choosing another repair.'
     return null
   }
 
@@ -145,14 +152,46 @@ export class RevisionLoopGuard {
     const issue = this.recordedIssues.get(this.activeIssue)
     if (issue && currentState !== undefined) issue.state = currentState
     this.verificationPending = true
+    this.retainedRepair = true
+    this.rollbackRegrounding = false
     this.verifiedDimensions.clear()
     this.repairInspections = 0
   }
 
+  /** Called only after ProjectActor successfully restores a checkpoint. No editorial outcome is inferred. */
+  checkpointRestored(checkpointId: string, abandonedState: string, restoredState: string) {
+    if (this.phase === 'idle' || this.phase === 'done') return
+    this.lastRollback = {
+      checkpoint_id: checkpointId,
+      abandoned_state_version: createHash('sha256').update(abandonedState).digest('hex'),
+      restored_state_version: createHash('sha256').update(restoredState).digest('hex'),
+      invalidated_evidence_ids: [...this.evidence.keys()],
+    }
+    // Invalidate even old A receipts: returning to equal content must not resurrect observations.
+    this.evidence.clear()
+    this.reviewedState = restoredState
+    this.verificationPending = false
+    this.retainedRepair = false
+    this.verifiedDimensions.clear()
+    this.repairInspections = 0
+    this.checkpointSeen = false
+    this.rollbackRegrounding = Boolean(this.activeIssue)
+    if (this.activeIssue) {
+      const issue = this.recordedIssues.get(this.activeIssue)
+      if (issue) issue.state = restoredState
+    } else {
+      // No selected issue: allow a bounded new diagnosis of the restored state.
+      this.phase = 'initial'
+      this.phaseStartedAt = this.now()
+      this.inspectionLimit = this.inspectionCalls + 2
+    }
+    return this.status
+  }
+
   inspectionCompleted(name: string, args: Record<string, unknown>) {
-    if (!this.verificationPending || !this.activeIssue) return
+    if ((!this.verificationPending && !this.rollbackRegrounding) || !this.activeIssue) return
     // Legacy RoughCutReview compatibility; flat declared issues verify only through typed receipts.
-    if (!this.recordedIssues.has(this.activeIssue) && this.isRelevantTimelineInspection(name, args)) this.verificationPending = false
+    if (!this.recordedIssues.has(this.activeIssue) && this.isRelevantTimelineInspection(name, args)) { this.verificationPending = false; this.rollbackRegrounding = false }
   }
 
   private isRelevantTimelineInspection(name: string, args: Record<string, unknown>): boolean {
@@ -183,9 +222,9 @@ export class RevisionLoopGuard {
     const receipt = { id: receiptId ?? `e${++this.receiptCounter}`, tool, coordinate_space, range, state, modalities, coverage }
     this.evidence.set(receipt.id, receipt)
     const issue = this.activeIssue ? this.recordedIssues.get(this.activeIssue) : undefined
-    if (this.verificationPending && issue && coordinate_space === 'timeline' && state === this.reviewedState && range[1] >= issue.affected_range_us[0] && range[0] <= issue.affected_range_us[1]) {
+    if ((this.verificationPending || this.rollbackRegrounding) && issue && coordinate_space === 'timeline' && state === this.reviewedState && range[1] >= issue.affected_range_us[0] && range[0] <= issue.affected_range_us[1]) {
       for (const dimension of modalities) if(coverage[dimension]?.some(r=>r[1]>=issue.affected_range_us[0]&&r[0]<=issue.affected_range_us[1])) this.verifiedDimensions.add(dimension)
-      if (issue.evidence_dimensions.every(d => this.verifiedDimensions.has(d))) this.verificationPending = false
+      if (issue.evidence_dimensions.every(d => this.verifiedDimensions.has(d))) { this.verificationPending = false; this.rollbackRegrounding = false }
     }
     const { state: _state, ...observable } = receipt
     return { ...observable, state_version: createHash('sha256').update(state).digest('hex'), freshness: 'current_at_acquisition' }
@@ -242,7 +281,7 @@ export class RevisionLoopGuard {
     issue.state = state
     issue.withdrawal = { reason: args.reason as string, evidence_receipt_ids: receipts }
     this.reviewedIssueIds?.delete(issue.id)
-    if (this.activeIssue === issue.id) this.activeIssue = null
+    if (this.activeIssue === issue.id) { this.activeIssue = null; this.rollbackRegrounding = false; this.retainedRepair = false }
     return { accepted: true, review_session: this.status }
   }
 
@@ -282,10 +321,12 @@ export class RevisionLoopGuard {
     if (this.phase !== 'repair' || !this.activeIssue) throw new Error('No active revision issue')
     if (status !== 'resolved' && status !== 'unresolved') throw new Error('status must be resolved or unresolved')
     if (this.verificationPending) throw new Error('A committed mutation requires relevant timeline reinspection before closing the issue')
-    if (status === 'resolved' && (!(this.attempts.get(this.activeIssue) ?? 0) || this.verificationPending)) throw new Error('Resolving a repair issue requires a committed mutation followed by relevant timeline reinspection')
+    if (status === 'resolved' && (!this.retainedRepair || this.verificationPending)) throw new Error('Resolving a repair issue requires a committed mutation followed by relevant timeline reinspection')
     this.outcomes.set(this.activeIssue, status)
     this.activeIssue = null
     this.verificationPending = false
+    this.rollbackRegrounding = false
+    this.retainedRepair = false
     return this.status
   }
 

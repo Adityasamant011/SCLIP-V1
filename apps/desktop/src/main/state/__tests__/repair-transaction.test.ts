@@ -4,6 +4,7 @@ import { createActor } from '../actor'
 import { seededGen } from '../ids'
 import { blankProject } from '../model'
 import { reviewState } from '../../sclip/evidenceCoordinates'
+import { RevisionLoopGuard } from '../../sclip/revisionLoopGuard'
 import { avRelationships } from '../../sclip/mediaRelationships'
 import * as params from '../mutations/params'
 
@@ -25,6 +26,26 @@ function fixture(clock = () => '<TS>') {
   return { actor, v, a, op, run, version }
 }
 const body = (r: ReturnType<ReturnType<typeof fixture>['run']>) => { if (!r.ok) throw Error(JSON.stringify(r)); return JSON.parse(r.result.content[0].text) }
+
+describe('Restoring explicit A/V edits preserves agency and review coherence', () => {
+  for (const atomic of [false,true]) it(`restores an intentional unequal A/V ${atomic ? 'transaction' : 'single edit'}`, () => {
+    const {actor,v,a,op,run}=fixture(), g=new RevisionLoopGuard(true), before=actor.snapshot(), state=reviewState(before)
+    const r=g.recordEvidence('synthetic','timeline',[0,10_000_000],state,['audio','timeline'])
+    const issue=g.recordIssue({description:'Hermes chooses to reconsider source relationships',severity:'minor',repairable:true,
+      evidence_dimensions:['audio','timeline'],evidence_receipt_ids:[r.id],layer_ids:[v,a]},state,10_000_000,new Map([[v,[0,10_000_000]],[a,[0,10_000_000]]]))
+    g.selectIssue(issue.issue.id,state)
+    const checkpoint=actor.checkpoint('Hermes rollback point');g.checkpointCreated()
+    expect(g.beforeMutation(state)).toBeNull()
+    const result=atomic ? run([op(v,'VideoClip',6_700_000),op(a,'Audio',8_600_000)]) : actor.mcpCall('update_layer_params',JSON.stringify({layer_id:a,patch:{kind:'Audio',src_in_us:8_600_000}}))
+    expect(result.ok).toBe(true)
+    const abandoned=reviewState(actor.snapshot());g.mutationCommitted(abandoned)
+    expect(avRelationships(actor.snapshot())[0].video_minus_audio_source_offset_us).not.toBe(0)
+    actor.restoreCheckpoint(checkpoint);g.checkpointRestored(checkpoint,abandoned,reviewState(actor.snapshot()))
+    expect(actor.snapshot()).toEqual(before);expect(avRelationships(actor.snapshot())[0].video_minus_audio_source_offset_us).toBe(0)
+    expect(g.status.verification_pending).toBe(false);expect(g.status.outcomes).toEqual({})
+    expect(g.finishIssue('unresolved',state).outcomes[issue.issue.id]).toBe('unresolved')
+  })
+})
 
 describe('atomic Hermes repair transactions', () => {
   it('commits explicit paired operations in one history/event boundary and restores the checkpoint', () => {

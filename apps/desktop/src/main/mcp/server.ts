@@ -1382,6 +1382,10 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
         getVisionRuntime().clearCache?.()
 
       }
+      if (name === 'restore_checkpoint' && !('isError' in result && result.isError)) {
+        revisionGuard.checkpointRestored(String(args.checkpoint_id), evidenceState, reviewState(getTsHost()?.actor.snapshot()))
+        getVisionRuntime().clearCache?.()
+      }
       if (['inspect_timeline_range_visuals', 'vision_inspect', 'inspect_timeline_frame', 'get_timeline_context', 'render_timeline_range', 'get_media_context'].includes(name)) {
         const text = (result as any).content?.find((c: any) => c.type === 'text')
         let evidence: any = {}; try { evidence = text ? JSON.parse(text.text) : {} } catch {}

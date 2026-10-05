@@ -279,3 +279,54 @@ describe('Atomic repair transaction review boundary', () => {
     } finally { await f.close() }
   })
 })
+
+describe('ProjectActor restore and review lifecycle stay coherent', () => {
+  for (const atomic of [false, true]) it(`${atomic ? 'transaction' : 'single edit'} restore invalidates receipts and permits a different repair`, async () => {
+    const f = await reviewFixture()
+    try {
+      await f.call('get_timeline_context'); await f.call('record_issue', simpleIssue(f))
+      const checkpoint = (await f.call('checkpoint', {label:'Reviewer rollback point'})).content[0].text
+      const original = f.actor.snapshot()
+      await f.call('revision_control', {action:'select_issue',issue_id:'issue-1'})
+      const operations = [{kind:'update_layer',layer_id:f.layerId,patch:{t_end_us:43_000_000}},
+        {kind:'update_layer_params',layer_id:f.layerId,patch:{kind:'Color',color:{r:27,g:91,b:62,a:255}}}]
+      const edit = atomic ? await f.call('apply_repair_transaction', {
+        expected_state_version:createHash('sha256').update(reviewState(original)).digest('hex'),reason:'Reviewer selected coordinated changes',operations,
+      }) : await f.call('trim_layer',{layer_id:f.layerId,edge:'out',new_t_us:43_000_000})
+      expect(edit.isError).not.toBe(true)
+      await f.call('get_timeline_context')
+      expect((await f.call('restore_checkpoint',{checkpoint_id:checkpoint})).isError).not.toBe(true)
+      expect(f.actor.snapshot()).toEqual(original)
+      const status = body(await f.call('revision_control',{action:'status'}))
+      expect(status.active_issue).toBe('issue-1');expect(status.outcomes).toEqual({})
+      expect(status.verification_pending).toBe(false);expect(status.evidence_ids).toEqual([])
+      expect(status.last_rollback.invalidated_evidence_ids).toContain('e2')
+      expect((await f.call('withdraw_issue',{issue_id:'issue-1',reason:'Reconsidered',evidence_receipt_ids:['e2']})).isError).toBe(true)
+      expect((await f.call('revision_control',{action:'finish_issue',status:'resolved'})).isError).toBe(true)
+      await f.call('checkpoint',{label:'Alternative repair'})
+      expect((await f.call('trim_layer',{layer_id:f.layerId,edge:'out',new_t_us:57_000_000})).isError).toBe(true)
+      expect((await f.call('get_timeline_context')).isError).not.toBe(true)
+      expect((await f.call('trim_layer',{layer_id:f.layerId,edge:'out',new_t_us:57_000_000})).isError).not.toBe(true)
+      await f.call('get_timeline_context')
+      expect((await f.call('revision_control',{action:'finish_issue',status:'resolved'})).isError).not.toBe(true)
+    } finally { await f.close() }
+  })
+  it('only a successful restore clears pending verification; unresolved finish then works', async () => {
+    const f = await reviewFixture()
+    try {
+      await f.call('get_timeline_context');await f.call('record_issue',simpleIssue(f))
+      const checkpoint=(await f.call('checkpoint',{label:'Restore point'})).content[0].text
+      const original=f.actor.snapshot()
+      await f.call('revision_control',{action:'select_issue',issue_id:'issue-1'})
+      await f.call('trim_layer',{layer_id:f.layerId,edge:'out',new_t_us:41_000_000})
+      const changed=f.actor.snapshot()
+      expect((await f.call('restore_checkpoint',{checkpoint_id:'00000000-0000-0000-0000-000000000077'})).isError).toBe(true)
+      expect(f.actor.snapshot()).toBe(changed)
+      expect(body(await f.call('revision_control',{action:'status'})).verification_pending).toBe(true)
+      expect((await f.call('restore_checkpoint',{checkpoint_id:checkpoint})).isError).not.toBe(true)
+      expect(f.actor.snapshot()).toEqual(original)
+      expect((await f.call('revision_control',{action:'finish_issue',status:'unresolved'})).isError).not.toBe(true)
+      expect(body(await f.call('revision_control',{action:'complete'})).workflow_stage).toBe('COMPLETE')
+    } finally { await f.close() }
+  })
+})
