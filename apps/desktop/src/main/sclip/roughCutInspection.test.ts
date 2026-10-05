@@ -8,7 +8,7 @@ import { createActor } from '../state/actor.js'
 import { seededGen } from '../state/ids.js'
 import { buildTimelineContext } from './timelineContext.js'
 import { inspectTimelineFrame } from './timelineFrame.js'
-import { renderTimelineRange, computeRangeCacheKey } from './rangeRender.js'
+import { renderTimelineRange, computeRangeCacheKey, MAX_RANGE_RENDER_DURATION_US } from './rangeRender.js'
 import { validateRoughCutReview, type RoughCutReview, type RoughCutInspection } from './roughCutReview.js'
 import { compileRoughCutTimeline } from '../state/mutations/roughCut.js'
 import { videoClipParams } from '../state/mutations/media.js'
@@ -352,14 +352,14 @@ describe('SCLIP Phase 2D: Timeline Inspection & Editorial Self-Review', () => {
   })
 
   describe('4. render_timeline_range (Deliverable B)', () => {
-    it('enforces 30s mechanical duration limit', async () => {
+    it('enforces configured mechanical duration limit', async () => {
       const project = makeProjectWithMedia(BENCHMARK_A_MEDIA, BENCHMARK_A_DURATION_US, REAL_MEDIA_A_PATH)
       await expect(
         renderTimelineRange(project, {
           start_us: 0,
-          end_us: 31_000_000, // 31 seconds > 30s cap
+          end_us: MAX_RANGE_RENDER_DURATION_US + 1,
         }),
-      ).rejects.toThrow(/exceeds maximum allowed preview range of 30s/i)
+      ).rejects.toThrow(/exceeds maximum allowed preview range/i)
     })
 
     it('rejects invalid timestamp bounds', async () => {

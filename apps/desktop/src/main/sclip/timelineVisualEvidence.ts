@@ -23,18 +23,21 @@ export function representativeTimes(start: number, end: number, count: number): 
   if (!Number.isInteger(count) || count < 2 || count > 5) throw new Error('representative_samples must be an integer from 2 to 5')
   return [...new Set(Array.from({ length: count }, (_, i) => Math.round(start + (end - 1 - start) * i / (count - 1))))]
 }
-export async function inspectTimelineRangeVisuals(project: Project, args: Record<string, unknown>, getActiveWindow?: () => any | null) {
+export async function inspectTimelineRangeVisuals(project: Project, args: Record<string, unknown>, getActiveWindow?: () => any | null, sampleTimes?: number[], signal?: AbortSignal) {
   const compositionId = String(args.composition_id ?? project.root_id)
   const comp = project.compositions[compositionId]
   if (!comp) throw new Error('Composition not found')
   validateTimelineRange(args.start_us, args.end_us, comp.duration_us, compositionId)
   const start = Number(args.start_us), end = Number(args.end_us)
-  const times = representativeTimes(start, end, Number(args.representative_samples ?? 5))
+  const times = sampleTimes ?? representativeTimes(start, end, Number(args.representative_samples ?? 5))
+  if(times.length<2 || times.length>5 || times.some((t,i)=>!Number.isSafeInteger(t)||t<start||t>=end||i>0&&t<=times[i-1]))throw new Error('Invalid bounded chronological samples')
+  signal?.throwIfAborted()
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'sclip-range-visuals-'))
   try {
     const frames = []
     const imagePaths: string[] = []
     for (const t of times) {
+      signal?.throwIfAborted()
       const frame = await inspectTimelineFrame(project, { t_us: t, composition_id: compositionId, getActiveWindow, requireLiveCompositor: true })
       const file = path.join(temp, `${imagePaths.length}.png`)
       fs.writeFileSync(file, Buffer.from(frame.pngBase64, 'base64')); imagePaths.push(file)
@@ -54,6 +57,7 @@ export async function inspectTimelineRangeVisuals(project: Project, args: Record
     const modelIdentity=typeof runtime.status==='function' ? (await runtime.status()).model : 'unknown'
     const observations = []
     for (let i=0;i<frames.length;i++) {
+      signal?.throwIfAborted()
       const key=createHash('sha256').update(fs.readFileSync(imagePaths[i])).update(String(frames[i].timeline_t_us)).update(String(args.question ?? '')).update(modelIdentity).digest('hex')
       const result = perceptionCache.get(key) ?? await getVisionRuntime().analyze({ imagePaths: [imagePaths[i]],
         question: `Describe only this frame's visible content, approximate subject/face position and boundary intersections. Report uncertainty; do not assess the whole range. ${typeof args.question === 'string' ? args.question : ''}`,
@@ -61,6 +65,7 @@ export async function inspectTimelineRangeVisuals(project: Project, args: Record
       if(result.ok) { perceptionCache.set(key,result); if(perceptionCache.size>16)perceptionCache.delete(perceptionCache.keys().next().value!) }
       observations.push({sample_index:i,timeline_t_us:frames[i].timeline_t_us,evidence_class:'MODEL_OBSERVATION',description:result.description,...subjectObservations(result),model:result.model,inference_ok:result.ok})
     }
+    signal?.throwIfAborted()
     const evidence = { coordinate_space:'timeline', evidence_origin:'CURRENT_TIMELINE', composition_id:compositionId, timeline_range_us:[start,end], representative_samples:frames,
       frame_observations:observations,
       visual_observations:{ description:observations.map(o=>`Sample ${o.sample_index}: ${o.description}`).join('\n'), summary_scope:'Labelled individual observations, not a unanimous/global claim.' },

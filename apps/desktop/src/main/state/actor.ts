@@ -1,3 +1,4 @@
+import { applyRippleCutRange, rangeCutLayerChanges } from './mutations/rangeCut'
 // apps/desktop/src/main/state/actor.ts
 import { createHash } from 'node:crypto'
 import { reviewState } from '../sclip/evidenceCoordinates'
@@ -2033,6 +2034,16 @@ export function createActor(opts: ActorOptions): ActorHandle {
           const r = dispatch('update_layer_param_track', { layer, param_key: paramKey, track: next })
           if (!r.ok) return { ok: false, error: mapCommandError(r.error) }
           return { ok: true, result: toolEmpty() }
+        }
+        case 'ripple_cut_range': {
+          const p = mcpDef(name).parseDedicated!(a)
+          const before = current()
+          const version = (state: Project) => createHash('sha256').update(reviewState(state)).digest('hex')
+          if (p.expected_state_version !== version(before)) throw new McpArgError('STALE_TRANSACTION_STATE: reacquire current evidence')
+          const receipt = commit(HISTORY_SUMMARY.layerRippleDelete, (r: ReturnType<typeof applyRippleCutRange>) => layerRefs([...r.affected_layer_ids,...r.resulting_layer_ids,...r.moved]), {kind:'Coarse'},
+            draft => applyRippleCutRange(draft,idGen,p.layer_ids as string[],p.start_us as number,p.end_us as number))
+          return {ok:true,result:toolJson({...receipt,starting_state_version:version(before),resulting_state_version:version(current()),
+            ...rangeCutLayerChanges(before,current()),relationship_changes:changedAVRelationships(before,current()),geometry:transactionGeometry(current(),[...receipt.resulting_layer_ids,...receipt.moved]),evidence_origin:'AUTHORITATIVE_PROJECT_ACTOR'})}
         }
         case 'apply_repair_transaction': {
           const before = current()

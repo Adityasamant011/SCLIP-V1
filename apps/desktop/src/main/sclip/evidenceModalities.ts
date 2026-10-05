@@ -6,7 +6,8 @@ export function evidenceDimensions(value: unknown): EvidenceDimension[] {
   return [...new Set(value)] as EvidenceDimension[]
 }
 export function toolDimensions(tool: string, data: any = {}): EvidenceDimension[] {
-  if (tool === 'inspect_timeline_range_visuals') return ['visual', 'geometry']
+  if (tool === 'inspect_rendered_audio') return data.observed_dimensions ?? []
+  if (tool === 'inspect_timeline_range_visuals' || tool === 'inspect_timeline_temporal_window') return ['visual', 'geometry']
   if (['vision_inspect','inspect_timeline_frame'].includes(tool)) return data.composed_frame_facts ? ['visual','geometry'] : ['visual']
   if (tool === 'render_timeline_range') return ['visual', 'audio']
   if (tool === 'get_editorial_evidence_packet') return data.observed_dimensions ?? ['timeline', 'text']
@@ -20,11 +21,15 @@ export function toolDimensions(tool: string, data: any = {}): EvidenceDimension[
 
 /** Actual sampled/represented intervals, not a range-level claim inferred from sparse samples. */
 export function evidenceCoverage(tool:string,data:any,range:[number,number]): Partial<Record<EvidenceDimension,[number,number][]>> {
+  if(tool==='inspect_rendered_audio'){
+    const observedEnd=Math.min(range[1],range[0]+Number(data.signal?.duration_us??0))
+    return Object.fromEntries(toolDimensions(tool,data).map(d=>[d,observedEnd>range[0]?[[range[0],observedEnd]]:[]]))
+  }
   if(tool==='get_editorial_evidence_packet')return {
     timeline:[range],text:(data.text??[]).map((t:any)=>t.timeline_range_us),
     speech:(data.speech??[]).filter((s:any)=>s.kind==='Audio'&&s.word_timing_available).map((s:any)=>s.selected_timeline_range_us),
     visual:(data.visuals?.frame_observations??[]).filter((f:any)=>f.inference_ok).map((f:any)=>[f.timeline_t_us,f.timeline_t_us]),
   }
-  if(tool==='inspect_timeline_range_visuals')return {visual:(data.representative_samples??[]).map((f:any)=>[f.timeline_t_us,f.timeline_t_us]),geometry:(data.representative_samples??[]).map((f:any)=>[f.timeline_t_us,f.timeline_t_us])}
+  if(tool==='inspect_timeline_range_visuals'||tool==='inspect_timeline_temporal_window')return {visual:(data.representative_samples??[]).map((f:any)=>[f.timeline_t_us,f.timeline_t_us]),geometry:(data.representative_samples??[]).map((f:any)=>[f.timeline_t_us,f.timeline_t_us])}
   return Object.fromEntries(toolDimensions(tool,data).map(d=>[d,[range]]))
 }

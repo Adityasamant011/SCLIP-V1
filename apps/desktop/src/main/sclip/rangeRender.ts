@@ -5,7 +5,12 @@ import { createHash, randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import type { Composition, Layer, Project } from '../state/model.js'
 
-export const MAX_RANGE_RENDER_DURATION_US = 30_000_000 // 30 seconds
+/** Resource bound, never a requested output duration or genre assumption. */
+export function reviewRangeLimitUs(value = process.env.SCLIP_REVIEW_MAX_SECONDS): number {
+  const seconds = value === undefined ? 120 : Number(value)
+  return (Number.isFinite(seconds) && seconds >= 1 ? Math.min(300, seconds) : 120) * 1_000_000
+}
+export const MAX_RANGE_RENDER_DURATION_US = reviewRangeLimitUs()
 
 export interface RangeRenderOptions {
   start_us: number
@@ -13,6 +18,7 @@ export interface RangeRenderOptions {
   composition_id?: string
   projectDir?: string
   resourcesPath?: string
+  signal?: AbortSignal
 }
 
 export interface RangeRenderResult {
@@ -56,12 +62,14 @@ export async function renderComposedTimelineRange(
   if (!comp) throw new Error(`Composition not found: ${compId}`)
   if (compId !== project.root_id) throw new Error('Composed range export currently renders the root composition only')
   if (!Number.isInteger(start_us) || !Number.isInteger(end_us) || start_us < 0 || end_us <= start_us || end_us > comp.duration_us || end_us - start_us > MAX_RANGE_RENDER_DURATION_US) {
-    throw new Error('Composed range must be a valid interval of at most 30 seconds')
+    throw new Error(`Composed range must be within the timeline and at most ${MAX_RANGE_RENDER_DURATION_US / 1_000_000} seconds`)
   }
+  options.signal?.throwIfAborted()
   const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sclip-composed-qa-'))
   const outputPath = path.join(outputDir, `${randomUUID()}.mp4`)
   try {
     await exportThroughLiveCompositor(project, options.getActiveWindow(), { outputPath, startUs: start_us, endUs: end_us })
+    options.signal?.throwIfAborted()
   } catch (error) {
     fs.rmSync(outputDir, { recursive: true, force: true })
     throw error
@@ -71,7 +79,7 @@ export async function renderComposedTimelineRange(
     cached: false }
 }
 
-function resolveFfmpegPath(resourcesPath?: string): string {
+export function resolveFfmpegPath(resourcesPath?: string): string {
   const platform = process.platform === 'win32' ? 'win' : process.platform === 'darwin' ? 'mac' : 'linux'
   const binary = process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg'
   if (resourcesPath) {
@@ -110,7 +118,7 @@ export function computeRangeCacheKey(
 
 /**
  * Renders a short QA preview range of the timeline with video and mixed audio.
- * Mechanical constraint: <= 30 seconds.
+ * Mechanical resource constraint: configured review ceiling (default 120s, hard maximum 300s).
  * Strictly read-only: 0 ProjectActor mutations, 0 history entries.
  * Stores temporary artifacts under <cache>/qa_renders/ without polluting project media.
  */
@@ -140,7 +148,7 @@ export async function renderTimelineRange(
   const durationUs = end_us - start_us
   if (durationUs > MAX_RANGE_RENDER_DURATION_US) {
     throw new Error(
-      `Range duration ${Math.round(durationUs / 1_000_000)}s exceeds maximum allowed preview range of 30s. Use progressive inspection with shorter ranges (e.g. 5s-15s).`,
+      `Range duration ${Math.round(durationUs / 1_000_000)}s exceeds maximum allowed preview range of ${MAX_RANGE_RENDER_DURATION_US / 1_000_000}s. Use progressive inspection with shorter ranges (e.g. 5s-15s).`,
     )
   }
 

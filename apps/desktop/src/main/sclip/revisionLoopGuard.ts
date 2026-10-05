@@ -200,7 +200,7 @@ export class RevisionLoopGuard {
     const start = typeof t === 'number' ? t : typeof args.start_us === 'number' ? args.start_us : 0
     const end = typeof t === 'number' ? t : typeof args.end_us === 'number' ? args.end_us : Infinity
     // Source evidence or a background critique alone cannot verify the changed timeline.
-    if (!['get_editorial_evidence_packet', 'get_timeline_context', 'inspect_timeline_range_visuals', 'vision_inspect', 'inspect_timeline_frame', 'render_timeline_range'].includes(name)) return false
+    if (!['get_editorial_evidence_packet', 'get_timeline_context', 'inspect_timeline_range_visuals', 'vision_inspect', 'inspect_timeline_frame', 'render_timeline_range', 'inspect_rendered_audio', 'inspect_timeline_temporal_window'].includes(name)) return false
     if (!['get_timeline_context', 'get_editorial_evidence_packet'].includes(name) && typeof t !== 'number' && typeof args.start_us !== 'number') return false
     return !range || (end >= range[0] && start <= range[1])
   }

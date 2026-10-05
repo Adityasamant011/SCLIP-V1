@@ -1,3 +1,4 @@
+import { layerOverlapClass } from '../../renderer/grid'
 import type { McpToolDef } from './mcp-commands'
 import { McpArgError } from './mcp-commands'
 import type { Project } from './model'
@@ -32,8 +33,8 @@ export function validateRepairRequest(a: Record<string, unknown>, definition: (n
 }
 /** Measured adjacent intervals in affected tracks; no editorial verdict. */
 export function transactionGeometry(project: Project, layerIds: string[]) {
-  return Object.values(project.compositions).flatMap(comp => comp.tracks.filter(track => track.layers.some(l => layerIds.includes(l.id))).map(track => {
-    const layers = [...track.layers].filter(l => l.enabled).sort((a,b) => a.t_start_us-b.t_start_us)
-    return { composition_id: comp.id, track_id: track.id, adjacent_intervals: layers.slice(1).map((l,i) => ({ left_layer_id: layers[i].id, right_layer_id:l.id, gap_us:Math.max(0,l.t_start_us-layers[i].t_end_us), overlap_us:Math.max(0,layers[i].t_end_us-l.t_start_us) })) }
-  }))
+  return Object.values(project.compositions).flatMap(comp => comp.tracks.filter(track => track.layers.some(l => layerIds.includes(l.id))).flatMap(track => (['visual','audio'] as const).map(overlapClass => {
+    const layers = [...track.layers].filter(l => l.enabled && layerOverlapClass(l.params)===overlapClass).sort((a,b) => a.t_start_us-b.t_start_us)
+    return { composition_id: comp.id, track_id: track.id, overlap_class: overlapClass, adjacent_intervals: layers.slice(1).map((l,i) => ({ left_layer_id: layers[i].id, right_layer_id:l.id, gap_us:Math.max(0,l.t_start_us-layers[i].t_end_us), overlap_us:Math.max(0,layers[i].t_end_us-l.t_start_us) })) }
+  })))
 }

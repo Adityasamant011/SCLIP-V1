@@ -28,7 +28,7 @@ const EXPECTED_TOOL_NAMES = new Set<string>([
   'set_keyframe', 'get_param_track', 'remove_keyframe', 'retime_keyframe',
   'set_keyframe_easing', 'smooth_keyframes', 'clear_keyframes', 'set_param_track',
   'set_keyframe_tangents', 'set_extrapolation',
-  'dry_run', 'checkpoint', 'list_checkpoints', 'restore_checkpoint', 'begin_agent_session', 'end_agent_session',
+  'ripple_cut_range', 'apply_repair_transaction', 'dry_run', 'checkpoint', 'list_checkpoints', 'restore_checkpoint', 'begin_agent_session', 'end_agent_session',
   'auto_split_by_shot', 'remove_pauses', 'apply_transcripts', 'validate_rough_cut_plan', 'apply_rough_cut_plan',
   'get_timeline_context', 'inspect_timeline_frame', 'render_timeline_range', 'validate_rough_cut_review',
 ])
@@ -67,7 +67,7 @@ describe('MCP tool table projections', () => {
 
   it('dedicated-exec defs have no parseArgs', () => {
     const dedicated = MCP_TOOL_DEFS.filter((d) => d.exec === 'dedicated')
-    expect(dedicated.length).toBe(35)
+    expect(dedicated.length).toBe(37)
     for (const d of dedicated) {
       expect(d.parseArgs, `${d.name} should not have parseArgs`).toBeUndefined()
     }
@@ -101,9 +101,9 @@ describe('MCP tool table projections', () => {
     expect(def.description).toContain(REVERT_PATHS)
   })
 
-  it('shapeResult tools are the expected 8', () => {
+  it('shapeResult tools are the expected 9', () => {
     const shapers = MCP_TOOL_DEFS.filter((d) => d.shapeResult).map((d) => d.name).sort()
-    expect(shapers).toEqual(['add_effect', 'add_group_layer', 'add_track', 'add_transition', 'duplicate_layer', 'groups_create', 'links_create', 'paste_layers'])
+    expect(shapers).toEqual(['add_effect', 'add_group_layer', 'add_track', 'add_transition', 'duplicate_layer', 'groups_create', 'links_create', 'paste_layers', 'update_layer_params'])
   })
 
   it('paste_layers / set_layers_enabled round-trip valid args and reject malformed ones', () => {

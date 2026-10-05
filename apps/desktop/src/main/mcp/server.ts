@@ -1,3 +1,5 @@
+import { inspectRenderedAudio, decodeRenderedPcm } from '../sclip/renderedAudioEvidence'
+import { inspectTimelineTemporalWindow } from '../sclip/timelineTemporalEvidence'
 import { beginModelUse } from "../model-usage";
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
@@ -101,6 +103,9 @@ const RANGE_VISUALS_TOOL = {
   inputSchema: { type: 'object', properties: { start_us: { type: 'integer', minimum: 0, description: 'TIMELINE start, not source time.' }, end_us: { type: 'integer', minimum: 1, description: 'Exclusive TIMELINE end, within current composition.' }, composition_id: { type: 'string' }, representative_samples: { type: 'integer', minimum: 2, maximum: 5 }, question: { type: 'string', description: 'Optional observable visual question; no editing instruction.' } }, required: ['start_us', 'end_us'], additionalProperties: false },
 } as const
 
+export const RENDERED_AUDIO_TOOL = {name:'inspect_rendered_audio',description:'Inspect the actual production timeline audio mix over YOUR bounded timeline range (configured ceiling default 120s, maximum 300s). Returns local Whisper transcript/word timings when available, measured RMS/peak/near-full-scale sample counts and threshold-defined quiet spans. Never transcribes raw source in place of rendered audio, never edits, never evaluates pacing/dialogue. Local whisper_cpp only; missing local engine is explicit, never falls back to paid transcription. No-audio and recognition failures do not count as speech evidence.',inputSchema:{type:'object',properties:{start_us:{type:'integer',minimum:0},end_us:{type:'integer',minimum:1},composition_id:{type:'string'}},required:['start_us','end_us'],additionalProperties:false}} as const
+export const TEMPORAL_WINDOW_TOOL = {name:'inspect_timeline_temporal_window',description:'Observe bounded visual progression in CURRENT_TIMELINE time through 2–5 chronological composed frames and independent local Qwen observations, plus authored layer/caption/transition changes and source mappings. Configured review duration ceiling; unsampled motion remains unknown. Per-frame differences are preserved. No creative recommendation or consistency verdict; Hermes interprets the sequence.',inputSchema:RANGE_VISUALS_TOOL.inputSchema} as const
+
 const VISION_INSPECT_TOOL = {
   name: 'vision_inspect',
   description: `Analyze what is visually visible on the composed timeline preview or an image, and answer a specific visual question about it using the Apple Silicon Metal GPU vision engine.
@@ -132,10 +137,10 @@ If t_us, image_path, and image_paths are all omitted, the tool automatically cap
 
 const CALCULATE_VIDEO_FIT_TOOL = {
   name: 'calculate_video_fit',
-  description: 'Read-only canvas-fit arithmetic for an existing VideoClip. By default, ALWAYS use mode="cover" so the video completely fills the entire screen canvas (zero black bars, zero letterboxing/pillarboxing, and never a small floating video in a corner), unless the user explicitly requests an inset or picture-in-picture layout. Optional focus_x/focus_y (0..1) pans the crop to keep the subject or action centered. Returns an update_layer_params VideoClip patch. Apply with update_layer_params, then verify with vision_inspect.',
+  description: 'Read-only canvas-fit arithmetic for an existing VideoClip. Hermes chooses cover (fill with crop), contain (retain full source with margins), and optional focus_x/focus_y (0..1). Returns the calculated update_layer_params patch, not an editorial recommendation. Hermes may use different transforms or leave the framing unchanged. Verify chosen visual changes with current rendered evidence.',
   inputSchema: { type: 'object', properties: {
     layer_id: { type: 'string', description: 'ID of the VideoClip layer to fit to canvas.' },
-    mode: { type: 'string', enum: ['cover', 'contain'], default: 'cover', description: 'Fit mode. ALWAYS use "cover" to fill the entire screen, unless user explicitly asked for contain or inset.' },
+    mode: { type: 'string', enum: ['cover', 'contain'], default: 'cover', description: 'Hermes-selected fit mode: cover fills the canvas with cropping; contain retains the full source with margins.' },
     focus_x: { type: 'number', minimum: 0, maximum: 1, description: 'Optional horizontal focal point in original source coordinates; 0=left, 1=right, default center.' },
     focus_y: { type: 'number', minimum: 0, maximum: 1, description: 'Optional vertical focal point in original source coordinates; 0=top, 1=bottom, default center.' },
   }, required: ['layer_id', 'mode'], additionalProperties: false },
@@ -143,7 +148,7 @@ const CALCULATE_VIDEO_FIT_TOOL = {
 
 const GET_TIMELINE_CRITIQUE_TOOL = {
   name: 'get_timeline_critique',
-  description: 'Read-only autonomous feedback from Sclip background audio/visual reviewer. Returns timestamped issues regarding off-screen captions, motif collisions, audio chops, or awkward silence. Call this after rough cutting or before declaring work complete.',
+  description: 'Background structural/layout and available signal/perception diagnostics only. clean means no reported technical issue, not compelling story, natural audio, pacing quality or editorial readiness. May be stale/incomplete; verify claims against fresh relevant rendered evidence. Hermes alone judges quality.',
   inputSchema: { type: 'object', properties: {}, additionalProperties: false },
 } as const
 
@@ -243,7 +248,7 @@ export const IMPORT_EXTERNAL_MEDIA_TOOL = {
 } as const
 
 const REVISION_INSPECTION_TOOLS = new Set([
-  'get_editorial_evidence_packet', 'get_timeline_context', 'get_media_context', 'inspect_timeline_frame', 'render_timeline_range',
+  'get_editorial_evidence_packet', 'get_timeline_context', 'get_media_context', 'inspect_timeline_frame', 'render_timeline_range', 'inspect_rendered_audio', 'inspect_timeline_temporal_window',
   'analyze_clip', 'describe_clip', 'compare_frames', 'detect_pauses', 'extract_clip_audio',
   'inspect_timeline_range_visuals', 'vision_inspect', 'get_timeline_critique', 'calculate_video_fit', 'get_param_track', 'get_source_observations', 'get_source_understanding', 'get_source_speech_context', 'evaluate_source_passages',
 ])
@@ -251,7 +256,7 @@ const REVISION_NONMUTATING_TOOLS = new Set([
   'revision_control', 'validate_rough_cut_review', 'validate_rough_cut_plan', 'dry_run',
   'checkpoint', 'list_checkpoints', 'undo', 'redo', 'restore_checkpoint',
   'begin_agent_session', 'end_agent_session', 'lock_history', 'unlock_history',
-  'get_editorial_evidence_packet', 'get_timeline_context', 'inspect_timeline_frame', 'render_timeline_range', 'get_param_track',
+  'get_editorial_evidence_packet', 'get_timeline_context', 'inspect_timeline_frame', 'render_timeline_range', 'inspect_rendered_audio', 'inspect_timeline_temporal_window', 'get_param_track',
   'inspect_timeline_range_visuals', 'vision_inspect', 'get_timeline_critique', 'video_search_external_media', 'resolve_visual_intents',
 ])
 const isRevisionMutation = (name: string) => (name === 'import_external_media' || MCP_TOOL_DEFS.some((def) => def.name === name) || HYBRID_TOOLS.has(name)) && !REVISION_NONMUTATING_TOOLS.has(name)
@@ -414,6 +419,7 @@ export async function handleCallTool(
   sourceObservationIndex?: SourceObservationIndex,
   externalMediaService?: ExternalMediaService,
   enableExternalMedia?: boolean,
+  signal?: AbortSignal,
 ): Promise<ServerResult> {
   // Final delivery belongs to the user, including for clients with an old
   // cached catalog. Short temporary QA rendering remains available below.
@@ -429,7 +435,7 @@ export async function handleCallTool(
       suggestion_count: 0,
       issues: [],
     }
-    return { content: [{ type: 'text', text: JSON.stringify({ ...summary, coordinate_space: 'timeline', evidence_origin: 'CURRENT_TIMELINE', availability: getReviewerSummary ? 'available' : 'not_generated' }, null, 2) }] } as ServerResult
+    return { content: [{ type: 'text', text: JSON.stringify({ ...summary, coordinate_space: 'timeline', evidence_origin: 'CURRENT_TIMELINE', availability: getReviewerSummary ? 'available' : 'not_generated', scope: 'Technical/structural diagnostics and available fallible observations only; no editorial readiness verdict. clean does not establish story, pacing, natural speech or visual progression.' }, null, 2) }] } as ServerResult
   }
   if (name === 'get_source_understanding' || name === 'get_source_speech_context') {
     try {
@@ -751,6 +757,16 @@ export async function handleCallTool(
         }
       }
     }
+    if (name === 'inspect_rendered_audio' || name === 'inspect_timeline_temporal_window') {
+      try {
+        const snap=tsHost.actor.snapshot()
+        const evidence=name==='inspect_timeline_temporal_window' ? await inspectTimelineTemporalWindow(snap,args,getActiveWindow,undefined,signal) :
+          await inspectRenderedAudio(snap,args,getActiveWindow,{render:renderComposedTimelineRange,decode:decodeRenderedPcm,
+            transcribe:async computeArgs => { const release=beginModelUse();try{return unwrap(await backend.mcpCallTool('transcribe_clip',JSON.stringify(computeArgs)))}finally{release()} }},signal)
+        if(reviewState(snap)!==reviewState(tsHost.actor.snapshot()))throw new Error('Timeline changed during inspection; reacquire evidence')
+        return {content:[{type:'text',text:JSON.stringify(evidence)}]} as ServerResult
+      }catch(error){return revisionToolError(String(error))}
+    }
     if (name === 'render_timeline_range') {
       const snap = tsHost.actor.snapshot()
       const startUs = Number(args.start_us)
@@ -766,6 +782,7 @@ export async function handleCallTool(
           end_us: endUs,
           composition_id: compId,
           getActiveWindow,
+          signal,
         })
         return { content: [{ type: 'text', text: JSON.stringify({ ...res, coordinate_space: 'timeline', evidence_origin: 'CURRENT_TIMELINE', composition_id: compId, timeline_range_us: [startUs, endUs] }) }] } as unknown as ServerResult
       } catch (e) {
@@ -1270,6 +1287,8 @@ export async function registeredMcpTools(backend: Backend, opts: McpServerOption
     mediaContextTool,
     VISION_INSPECT_TOOL,
     RANGE_VISUALS_TOOL,
+    RENDERED_AUDIO_TOOL,
+    TEMPORAL_WINDOW_TOOL,
     CALCULATE_VIDEO_FIT_TOOL,
     GET_TIMELINE_CRITIQUE_TOOL,
     ...externalTools,
@@ -1308,7 +1327,7 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
     if (!service) return handler(req, extra)
     const params = (req.params ?? {}) as Record<string, unknown>
     const tool = method === 'tools/call' ? String(params.name ?? '') : method
-    const read = method !== 'tools/call' || tool === 'evaluate_source_passages' || tool === 'video_search_external_media' || tool === 'resolve_visual_intents' || /^(get_|list_|read_|ping$|view_|analyze_|describe_|transcribe_|compare_|detect_)/.test(tool)
+    const read = method !== 'tools/call' || tool === 'evaluate_source_passages' || tool === 'video_search_external_media' || tool === 'resolve_visual_intents' || /^(get_|list_|read_|ping$|view_|inspect_|analyze_|describe_|transcribe_|compare_|detect_)/.test(tool)
     return service.run(connectionId, clientInfo()?.name ?? 'MCP', tool,
       method === 'tools/call' ? params.arguments ?? {} : params, read, () => handler(req, extra))
   }, deps, client)
@@ -1383,7 +1402,7 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
       const evidenceState = reviewState(getTsHost()?.actor.snapshot())
       const auditBefore = mutation ? getTsHost()?.actor.snapshot() : undefined
       const before = mutation ? reviewState(getTsHost()?.actor.snapshot()) : null
-      const result = await handleCallTool(backend, getTsHost, name, args, getPreferredEngine, getVlm, peaksPathFor, opts.getActiveWindow, opts.getReviewerSummary, opts.sourceObservationIndex, opts.externalMediaService, externalEnabled)
+      const result = await handleCallTool(backend, getTsHost, name, args, getPreferredEngine, getVlm, peaksPathFor, opts.getActiveWindow, opts.getReviewerSummary, opts.sourceObservationIndex, opts.externalMediaService, externalEnabled, (extra as {signal?:AbortSignal}).signal)
       if (mutation && before !== reviewState(getTsHost()?.actor.snapshot())) {
         const auditDir = process.env.SCLIP_MCP_AUDIT_DIR
         if (auditDir && auditBefore) {
@@ -1402,7 +1421,7 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
         revisionGuard.checkpointRestored(String(args.checkpoint_id), evidenceState, reviewState(getTsHost()?.actor.snapshot()))
         getVisionRuntime().clearCache?.()
       }
-      if (['inspect_timeline_range_visuals', 'vision_inspect', 'inspect_timeline_frame', 'get_timeline_context', 'render_timeline_range', 'get_media_context'].includes(name)) {
+      if (['inspect_timeline_range_visuals', 'vision_inspect', 'inspect_timeline_frame', 'get_timeline_context', 'render_timeline_range', 'inspect_rendered_audio', 'inspect_timeline_temporal_window', 'get_media_context'].includes(name)) {
         const text = (result as any).content?.find((c: any) => c.type === 'text')
         let evidence: any = {}; try { evidence = text ? JSON.parse(text.text) : {} } catch {}
         try { opts.log?.emit({ level: 'debug', category: { kind: 'Mcp' }, source: { kind: 'System' }, message: 'Evidence coordinate validation', details: { inspected_tool: name, coordinate_space: evidence.coordinate_space ?? (name === 'get_media_context' || args.source_t_us !== undefined ? 'source' : 'timeline'), timeline_t_us: args.timeline_t_us ?? args.t_us, source_t_us: args.source_t_us, accepted: !('isError' in result && result.isError), ...(evidence.code ? { rejection: evidence } : {}) } }) } catch {}
@@ -1413,7 +1432,7 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
         if (revisionGuard.status.phase !== 'idle') {
           const body = (result as any).content?.find((c: any) => c.type === 'text')
           let data: any = {}; try { data = body ? JSON.parse(body.text) : {} } catch {}
-          const timeline = ['get_editorial_evidence_packet', 'inspect_timeline_range_visuals', 'get_timeline_context', 'inspect_timeline_frame', 'render_timeline_range', 'get_timeline_critique'].includes(name) || data.coordinate_space === 'timeline'
+          const timeline = ['get_editorial_evidence_packet', 'inspect_timeline_range_visuals', 'get_timeline_context', 'inspect_timeline_frame', 'render_timeline_range', 'inspect_rendered_audio', 'inspect_timeline_temporal_window', 'get_timeline_critique'].includes(name) || data.coordinate_space === 'timeline'
           const space = timeline ? 'timeline' : 'source'
           const comp = getTsHost()?.actor.snapshot().compositions[String(args.composition_id ?? getTsHost()?.actor.snapshot().root_id)]
           const t = data.timeline_t_us ?? args.timeline_t_us ?? args.t_us

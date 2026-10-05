@@ -1368,6 +1368,10 @@ export const MCP_TOOL_DEFS: ReadonlyArray<McpToolDef> = [
         throw new McpArgError(`set_extrapolation needs at least one of before, after (each ${EXTRAPOLATE_OPTIONS}) — nothing to write`)
       return p
     } },
+  { name: 'ripple_cut_range', exec: 'dedicated',
+    description: 'Excise YOUR timeline interval from the named layers and their authored link members, then close that exact interval across the composition using existing ripple rules. Endpoints must be on the composition frame grid. Unselected intersecting overlays, locks or illegal landings reject the entire edit; choose their scope explicitly if needed. Downstream layers on all tracks shift; other compositions stay untouched. No silence/filler/pacing decision. One undoable actor commit; receipt names splits, deletions, shifts and relationship changes. Does not synchronize source offsets. Requires current evidence state_version.',
+    inputSchema: {type:'object',properties:{layer_ids:{type:'array',items:{type:'string'},minItems:1,maxItems:128},start_us:{type:'integer',minimum:0},end_us:{type:'integer',minimum:1},expected_state_version:{type:'string'}},required:['layer_ids','start_us','end_us','expected_state_version'],additionalProperties:false},
+    parseDedicated: a => ({layer_ids:asArray(a.layer_ids,'layer_ids').map(id => parseUuid(id,'layer_ids')),start_us:parseNum(a.start_us,'start_us'),end_us:parseNum(a.end_us,'end_us'),expected_state_version:parseStr(a.expected_state_version,'expected_state_version')}) },
   { name: 'apply_repair_transaction', exec: 'dedicated',
     description: 'Atomically apply 1–8 YOUR explicitly chosen layer edits as one repair and one undo boundary. Supply current Editorial Evidence Packet state_version, reason, and every operation/parameter. Supports update_layer (timeline envelope) and update_layer_params (source, visual, audio, text params), with their existing patch formats. Only named layers change; no A/V synchronization is inferred. Temporary intermediate overlap is allowed, but final state must satisfy technical invariants. All commit or none commit. Creates a checkpoint. During review select a grounded issue and create a checkpoint first; verification is required once AFTER the whole transaction, using fresh relevant evidence. Single edit tools and justified no-repair remain available.',
     inputSchema: { type: 'object', properties: {
@@ -1513,10 +1517,10 @@ export const MCP_TOOL_DEFS: ReadonlyArray<McpToolDef> = [
       format: a.format === 'data_url' ? 'data_url' : 'base64',
     }) },
   { name: 'render_timeline_range', exec: 'dedicated',
-    description: "Export a short root-composition range (up to 30s) through Sclip's production video compositor and normal audio mix to an isolated MP4 for multi-modal editorial QA. Requires an open desktop project. Never serves the old raw-source FFmpeg approximation and never reuses a stale layer-only cache. Does not modify project state or media pool.",
+    description: "Export a short root-composition range (up to the configured review ceiling (default 120s, hard maximum 300s)) through Sclip's production video compositor and normal audio mix to an isolated MP4 for multi-modal editorial QA. Requires an open desktop project. Never serves the old raw-source FFmpeg approximation and never reuses a stale layer-only cache. Does not modify project state or media pool.",
     inputSchema: { type: 'object', properties: {
       start_us: { type: 'integer', description: 'Range start timestamp in timeline microseconds.' },
-      end_us: { type: 'integer', description: 'Range end timestamp in timeline microseconds (must be > start_us and <= start_us + 30s).' },
+      end_us: { type: 'integer', description: 'Range end timestamp in timeline microseconds (must be > start_us, within the timeline and configured review ceiling).' },
       composition_id: COMPOSITION_ID_SCHEMA,
     }, required: ['start_us', 'end_us'] },
     parseDedicated: (a) => {
