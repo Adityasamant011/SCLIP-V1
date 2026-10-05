@@ -330,3 +330,31 @@ describe('ProjectActor restore and review lifecycle stay coherent', () => {
     } finally { await f.close() }
   })
 })
+
+describe('Automatic source evidence contains coverage, not an edit',()=>{
+ it('supplies coarse source map before Hermes and cached map during review',async()=>{
+  const f=fixture(),before=f.actor.snapshot()
+  const map={identity:{media_id:f.mediaId,coordinate_space:'source'},structure:{cells:[{visual:{status:'unobserved'},speech:{status:'not_observed'}}]}}
+  const coarse=vi.fn(async()=>map),cached=vi.fn(async()=>map)
+  const host=await startMcpHost(f.backend,{getTsHost:()=>f.ts,sourceObservationIndex:{coarseUnderstanding:coarse,cachedUnderstanding:cached} as never})
+  try{
+   const info=host.getInfo(),url=new URL(info.url);url.pathname='/mcp/evidence'
+   const response=await fetch(url,{method:'POST',headers:{Authorization:`Bearer ${info.bearer_token}`,'Content-Type':'application/json'},body:JSON.stringify({project_id:before.project_id})})
+   const packet=await response.json() as any
+   expect(response.ok).toBe(true);expect(packet.source_understanding.sources[0]).toEqual(map);expect(coarse).toHaveBeenCalledTimes(1)
+   expect(f.actor.snapshot()).toBe(before);expect(packet.source_understanding).not.toHaveProperty('operations')
+   const review=await startAutonomousReview(info,before.project_id)
+   expect((review.editorial_evidence_packet as any).source_understanding.sources[0]).toEqual(map)
+   expect(cached).toHaveBeenCalledTimes(1);expect(coarse).toHaveBeenCalledTimes(1);expect(f.actor.snapshot()).toBe(before)
+  }finally{await host.close()}
+ })
+ it('rejects a changed authoritative state during initial source acquisition',async()=>{
+  const f=fixture(),before=f.actor.snapshot()
+  const host=await startMcpHost(f.backend,{getTsHost:()=>f.ts,sourceObservationIndex:{coarseUnderstanding:async()=>{f.actor.dispatch('update_layer',{layer:f.layerId,patch:{label:'concurrent change'}});return {}}} as never})
+  try{
+   const info=host.getInfo(),url=new URL(info.url);url.pathname='/mcp/evidence'
+   const response=await fetch(url,{method:'POST',headers:{Authorization:`Bearer ${info.bearer_token}`,'Content-Type':'application/json'},body:JSON.stringify({project_id:before.project_id})})
+   expect(response.status).toBe(409)
+  }finally{await host.close()}
+ })
+})

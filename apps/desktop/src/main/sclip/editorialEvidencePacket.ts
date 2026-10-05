@@ -8,12 +8,12 @@ import { avRelationships } from './mediaRelationships.js'
 import type { EvidenceDimension } from './evidenceModalities.js'
 
 export const PACKET_LIMITS = { clips: 16, text: 12, relationships: 16, boundaries: 16, transitions: 8, visual_bytes: 7000, bytes: 28000 } as const
-export const PACKET_FIELD_CLASSES = { identity: 'PROVENANCE', project: 'STATE', tracks: 'STATE', clips: 'EVIDENCE', relationships: 'EVIDENCE', speech: 'EVIDENCE', text: 'EVIDENCE', technical: 'TECHNICAL INVARIANT', visuals: 'EVIDENCE', deeper_evidence: 'WORKFLOW', observed_dimensions: 'PROVENANCE', truncation: 'PROVENANCE' } as const
+export const PACKET_FIELD_CLASSES = { source_understanding:'EVIDENCE', identity: 'PROVENANCE', project: 'STATE', tracks: 'STATE', clips: 'EVIDENCE', relationships: 'EVIDENCE', speech: 'EVIDENCE', text: 'EVIDENCE', technical: 'TECHNICAL INVARIANT', visuals: 'EVIDENCE', deeper_evidence: 'WORKFLOW', observed_dimensions: 'PROVENANCE', truncation: 'PROVENANCE' } as const
 function compactTransform(t: any) {
   const value=(a:any)=>a?.mode==='Static' ? a.value : {mode:a?.mode,key_count:a?.keys?.length ?? null}
   return {position:t.position.mode==='XY' ? {mode:'XY',x:value(t.position.x),y:value(t.position.y)} : {mode:t.position.mode},scale_x:value(t.scale_x),scale_y:value(t.scale_y),rotation_deg:value(t.rotation_deg),anchor_x:value(t.anchor_x),anchor_y:value(t.anchor_y),scope:'Current static values or animation index; request get_param_track for full key/path data.'}
 }
-export function buildEditorialEvidencePacket(project: Project, options: TimelineContextOptions = {}, visuals?: unknown) {
+export function buildEditorialEvidencePacket(project: Project, options: TimelineContextOptions = {}, visuals?: unknown, sourceUnderstanding?: unknown) {
   const id = options.compositionId ?? project.root_id, comp = project.compositions[id]
   if (!comp) throw new Error('Composition not found')
   const range=options.range ?? {start_us:0,end_us:comp.duration_us}
@@ -40,6 +40,7 @@ export function buildEditorialEvidencePacket(project: Project, options: Timeline
   const visualIndex=visuals ?? currentVisualIndex(project)
   const observed: EvidenceDimension[] = ['timeline','text',...(visualIndex ? ['visual' as const] : []),...(speech.some(s => s.kind==='Audio' && s.word_timing_available) ? ['speech' as const] : [])]
   const packet = {
+    source_understanding: sourceUnderstanding ?? {status:'not_generated',deeper_evidence:'get_source_understanding with media_id'},
     identity: { project_id: project.project_id, composition_id: id, state_version: createHash('sha256').update(reviewState(project)).digest('hex'), coordinate_space: 'timeline', media_hashes:Object.fromEntries(source.slice(0,PACKET_LIMITS.clips).flatMap(l=>'media' in l.params ? [[l.params.media,project.media_pool[l.params.media]?.file_hash_blake3 ?? null]] : [])), evidence_class: 'AUTHORITATIVE_STATE' },
     project: { duration_us: comp.duration_us, width: comp.width, height: comp.height, fps: comp.fps, layer_count: allLayers.length, indexed_range_us:[range.start_us,range.end_us] },
     tracks: comp.tracks.slice(0,12).map(t => ({id:t.id, enabled:t.enabled, role:t.role, layers:t.layers.length})),
@@ -51,6 +52,10 @@ export function buildEditorialEvidencePacket(project: Project, options: Timeline
     deeper_evidence: { state_text_speech:'get_editorial_evidence_packet with start_us/end_us for targeted omitted sections', timeline:'get_timeline_context', visual:'inspect_timeline_range_visuals', source:'get_media_context / get_source_observations', audio:'render_timeline_range (inspect/listen to returned media)', parameters:'get_param_track', instruction:'This is a bounded observation index, not an editorial verdict. Choose any justified issue, repair, or no repair. Reacquire after a state change; expand omitted sections using existing tools.' },
     observed_dimensions: observed,
     truncation: { source_layers_total:source.length, text_layers_total:text.length, relationships_total:rel.length, limits:PACKET_LIMITS, size_limited:false, omitted_sections:[] as string[] },
+  }
+  if(Buffer.byteLength(JSON.stringify(packet.source_understanding))>10000) {
+    packet.source_understanding={status:'omitted_size_limit',deeper_evidence:'get_source_understanding with media_id'}
+    packet.truncation.omitted_sections.push('source_understanding')
   }
   // Keep the original per-frame observations in the visual tool/cache. An oversized
   // section is explicitly unavailable here, never replaced by a consensus summary.
@@ -71,6 +76,7 @@ export function buildEditorialEvidencePacket(project: Project, options: Timeline
     packet.truncation.omitted_sections.push('technical', 'tracks')
     packet.technical.interval_spacing=[]; packet.technical.gaps=[]; packet.technical.boundaries=[]; packet.technical.transitions=[]
     packet.tracks=[]
+    packet.source_understanding={status:'omitted_size_limit',deeper_evidence:'get_source_understanding with media_id'}
   }
   if (Buffer.byteLength(JSON.stringify(packet)) > PACKET_LIMITS.bytes) throw new Error('EDITORIAL_PACKET_SIZE_LIMIT: essential state exceeds the compact packet allowance; request a narrower range.')
   return packet

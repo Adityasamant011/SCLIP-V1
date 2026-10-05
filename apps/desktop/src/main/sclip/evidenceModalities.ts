@@ -12,6 +12,8 @@ export function toolDimensions(tool: string, data: any = {}): EvidenceDimension[
   if (tool === 'get_editorial_evidence_packet') return data.observed_dimensions ?? ['timeline', 'text']
   if (tool === 'get_timeline_context') return ['timeline', 'text'] // Video-source cut cues alone do not establish audible speech in the edited Audio layer.
   if (tool === 'calculate_video_fit') return ['geometry']
+  if(tool==='get_source_understanding') return [] // Source coverage is not current timeline verification.
+  if(tool==='get_source_speech_context') return data.status==='cached' ? ['speech'] : []
   if (tool === 'get_media_context') return data.transcript ? ['speech'] : []
   return ['timeline']
 }

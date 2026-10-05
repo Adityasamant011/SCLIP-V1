@@ -4,6 +4,8 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
+import { buildSourceUnderstanding, sourceSpeechContext, SOURCE_MAP_LIMITS } from './sourceUnderstanding.js'
+import type { CachedTranscriptData } from './timelineContext.js'
 import type { MediaItem } from '../state/model.js'
 import type { AnalyzeResult, VisionSidecarManager } from './visionSidecar.js'
 
@@ -46,6 +48,7 @@ export interface SourceObservationIndexResult {
     status: 'available' | 'not_generated'
   }
   cached: boolean
+  analysis_range_us?: [number, number]
 }
 
 interface PersistedIndex extends Omit<SourceObservationIndexResult, 'cached'> {
@@ -60,6 +63,7 @@ export interface SourceObservationIndexOptions {
   now?: () => number
   readTranscript?: (media: MediaItem) => Promise<{
     segments?: Array<{ text?: string; t_start_us: number; t_end_us: number }>
+    status?: string
   } | null>
 }
 
@@ -107,11 +111,11 @@ export class SourceObservationIndex {
     })
   }
 
-  private cachePath(media: MediaItem, startUs: number, endUs: number): string {
+  private cachePath(media: MediaItem, startUs: number, endUs: number, single = false): string {
     return path.join(
       this.options.cacheDir,
       'source-observations',
-      `${sourceHash(media)}-v${SOURCE_OBSERVATION_ANALYSIS_VERSION}-${SOURCE_OBSERVATION_ANALYSIS_MODEL}-${startUs}-${endUs}.json`,
+      `${sourceHash(media)}-v${SOURCE_OBSERVATION_ANALYSIS_VERSION}-${SOURCE_OBSERVATION_ANALYSIS_MODEL}-${startUs}-${endUs}${single ? "-coarse" : ""}.json`,
     )
   }
 
@@ -120,6 +124,7 @@ export class SourceObservationIndex {
     startUs = 0,
     endUs?: number,
     limit = 8,
+    singleSample = false,
   ): Promise<SourceObservationIndexResult> {
     const durationUs = media.metadata.duration_us ?? null
     const requestedEnd = Math.min(endUs ?? startUs + 120_000_000, durationUs ?? Number.MAX_SAFE_INTEGER)
@@ -130,7 +135,7 @@ export class SourceObservationIndex {
       throw new Error('Source observation requests are limited to 120 seconds.')
     }
 
-    const cache = this.cachePath(media, startUs, requestedEnd)
+    const cache = this.cachePath(media, startUs, requestedEnd, singleSample)
     try {
       const persisted = JSON.parse(await fs.readFile(cache, 'utf8')) as PersistedIndex
       if (persisted.source_hash === sourceHash(media) &&
@@ -143,7 +148,7 @@ export class SourceObservationIndex {
       // Cache misses and stale/corrupt entries are recomputed below.
     }
 
-    const times = sampleTimes(startUs, requestedEnd)
+    const times = singleSample ? [Math.floor((startUs + requestedEnd) / 2)] : sampleTimes(startUs, requestedEnd)
     const observations: SourceObservation[] = []
     let signalAnalysis: Awaited<ReturnType<VisionSidecarManager['analyzeAudio']>> | undefined
     let audioAttempted = false
@@ -161,7 +166,7 @@ export class SourceObservationIndex {
             maxTokens: 96,
           })
           if (result.ok && result.description.trim()) {
-            const halfWindow = Math.max(250_000, Math.round((requestedEnd - startUs) / times.length / 2))
+            const halfWindow = 0 // A still does not observe surrounding time.
             observations.push({
               source_t_us: timeUs,
               kind: 'visual',
@@ -174,7 +179,7 @@ export class SourceObservationIndex {
               ],
             })
           }
-          if (!audioAttempted) {
+          if (!audioAttempted && !singleSample) {
             audioAttempted = true
             const audioPath = path.join(tempDir, 'source-audio.wav')
             try {
@@ -234,6 +239,7 @@ export class SourceObservationIndex {
       analysis_version: SOURCE_OBSERVATION_ANALYSIS_VERSION,
       analysis_model: SOURCE_OBSERVATION_ANALYSIS_MODEL,
       source_duration_us: durationUs,
+      analysis_range_us: [startUs,requestedEnd],
       verified_metadata: {
         width: media.metadata.video?.width ?? null,
         height: media.metadata.video?.height ?? null,
@@ -263,6 +269,52 @@ export class SourceObservationIndex {
     return this.select(persisted, startUs, requestedEnd, limit, false)
   }
 
+  async cachedUnderstanding(media: MediaItem) {
+    const indexes: SourceObservationIndexResult[] = []
+    let entriesTotal=0
+    try {
+      const dir = path.join(this.options.cacheDir, 'source-observations')
+      const candidates=(await fs.readdir(dir)).filter(f => f.startsWith(`${sourceHash(media)}-v${SOURCE_OBSERVATION_ANALYSIS_VERSION}-`)).sort()
+      entriesTotal=candidates.length
+      const files=candidates.slice(0,64)
+      for (const file of files) {
+        try {
+          const data = JSON.parse(await fs.readFile(path.join(dir,file),'utf8')) as PersistedIndex
+          if(data.source_hash===sourceHash(media) && data.source_path===media.path_abs && data.analysis_model===SOURCE_OBSERVATION_ANALYSIS_MODEL) indexes.push({...data,media_id:media.id,cached:true})
+        } catch {}
+      }
+    } catch {}
+    const transcript = await this.options.readTranscript?.(media).catch(()=>null) ?? null
+    const overview = {...buildSourceUnderstanding(media,indexes,transcript as CachedTranscriptData|null),cache_scan:{entries_total:entriesTotal,entries_loaded:indexes.length,entry_read_limit:64,entries_omitted:Math.max(0,entriesTotal-64),coverage_scope:'Only represented cache entries; omitted observations are not certified by this map'}}
+    while (Buffer.byteLength(JSON.stringify(overview)) > SOURCE_MAP_LIMITS.bytes && overview.observations.length) {
+      overview.observations.pop()
+      overview.truncation.observations_omitted++
+      overview.truncation.size_limited = true
+    }
+    if (Buffer.byteLength(JSON.stringify(overview)) > SOURCE_MAP_LIMITS.bytes) throw new Error('SOURCE_MAP_SIZE_LIMIT')
+    return overview
+  }
+
+  async coarseUnderstanding(media: MediaItem) {
+    const duration=media.metadata.duration_us??0
+    if(!Number.isSafeInteger(duration)||duration<1)throw new Error('Known positive source duration required')
+    // A fixed local work ceiling, independent of source duration or semantic content.
+    let fresh=false
+    for(let i=0;i<SOURCE_MAP_LIMITS.coarse_samples;i++) {
+      const t=Math.min(duration-1,Math.floor(duration*(i+0.5)/SOURCE_MAP_LIMITS.coarse_samples))
+      const result=await this.retrieve(media,t,Math.min(duration,t+1),1,true)
+      fresh ||= !result.cached
+    }
+    const overview=await this.cachedUnderstanding(media)
+    overview.acquisition.cached=!fresh
+    return overview
+  }
+
+  async speechContext(media:MediaItem,start:number,end:number,before?:number,after?:number) {
+    const transcript=await this.options.readTranscript?.(media).catch(()=>null)??null
+    return sourceSpeechContext(media,transcript as CachedTranscriptData|null,start,end,before,after)
+  }
+
   private select(
     persisted: PersistedIndex,
     startUs: number,
@@ -276,7 +328,8 @@ export class SourceObservationIndex {
       observations: persisted.observations
         .filter((observation) => observation.source_t_us >= startUs && observation.source_t_us < endUs)
         .sort((a, b) => a.source_t_us - b.source_t_us)
-        .slice(0, limit),
+        .slice(0, limit)
+        .map(o=>o.kind==='visual' ? {...o,sample_window_us:[o.source_t_us,o.source_t_us] as [number,number]} : o),
       cached,
     }
   }

@@ -27,7 +27,7 @@ A successful single holdout is promising evidence, not proof across genres.
 One session only per authorized experiment; no editorial retries or cherry-picks.
 Normal justified no-repair and honest unresolved outcomes remain valid options.
 
-## Phase 3F holdout readiness
+## Phase 3F historic holdout (now regression/reference)
 
 Candidate: existing family/lifestyle vlog, **Fun Family Morning, Garden Update &
 New FS Tracksuits.mp4**, source SHA256
@@ -46,3 +46,15 @@ If blocked, report insufficient evidence without attributing failure to the
 model or editorial architecture. Preserve readiness metadata separately from
 historic talking-head artifacts. Future explicitly authorized holdout evaluation
 must record the architecture commit actually used at that time.
+
+## Phase 4A fixture boundary
+
+The completed Phase 3F family-vlog run is now **REGRESSION / REFERENCE ONLY**.
+It informed the general coverage/modality problem; it cannot establish Phase 4A
+quality improvement. The talking-head remains **REGRESSION ONLY**.
+
+Phase 4A's proposed new holdout is the existing product demonstration:
+**See the foldable Motorola Razr in action! (Live product demo).mp4**.
+Only file identity and technical metadata were checked for readiness. No expected
+story, timeline, hook, scene duration or tool sequence was authored. The live
+allowance gate did not pass; no inference began.

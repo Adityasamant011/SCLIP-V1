@@ -147,6 +147,10 @@ const GET_TIMELINE_CRITIQUE_TOOL = {
   inputSchema: { type: 'object', properties: {}, additionalProperties: false },
 } as const
 
+const GET_SOURCE_UNDERSTANDING_TOOL = { name: 'get_source_understanding',description:'Compact source-wide coverage map and provenance. cached reads existing observations; coarse performs at most six local sampled-frame observations spread across the entire source, cached for reuse. Sampling cells are not scenes or continuous visual coverage. Missing speech/audio/text remains unknown; no editorial ranking or edit is generated.',inputSchema:{type:'object',properties:{media_id:{type:'string'},detail:{type:'string',enum:['cached','coarse']}},required:['media_id'],additionalProperties:false}} as const
+const GET_SOURCE_SPEECH_CONTEXT_TOOL = { name: 'get_source_speech_context',description:'Read cached transcript and word timing in SOURCE time with bounded before/selected/after context. Does not transcribe or choose a cut. If unavailable, transcribe_clip on a Hermes-selected timeline layer then reacquire. Spoken-story/sentence/continuity claims cannot be established by visual samples alone.',inputSchema:{type:'object',properties:{media_id:{type:'string'},start_us:{type:'integer',minimum:0},end_us:{type:'integer',minimum:1},before_us:{type:'integer',minimum:0,maximum:10000000},after_us:{type:'integer',minimum:0,maximum:10000000}},required:['media_id','start_us','end_us'],additionalProperties:false}} as const
+const SOURCE_UNDERSTANDING_TOOLS = [GET_SOURCE_UNDERSTANDING_TOOL, GET_SOURCE_SPEECH_CONTEXT_TOOL] as const
+
 const GET_SOURCE_OBSERVATIONS_TOOL = {
   name: 'get_source_observations',
   description: 'Read bounded, cached visual observations from original imported source footage. Returns model observations with source timestamps and verified media metadata. Does not edit or infer semantic audio.',
@@ -241,7 +245,7 @@ export const IMPORT_EXTERNAL_MEDIA_TOOL = {
 const REVISION_INSPECTION_TOOLS = new Set([
   'get_editorial_evidence_packet', 'get_timeline_context', 'get_media_context', 'inspect_timeline_frame', 'render_timeline_range',
   'analyze_clip', 'describe_clip', 'compare_frames', 'detect_pauses', 'extract_clip_audio',
-  'inspect_timeline_range_visuals', 'vision_inspect', 'get_timeline_critique', 'calculate_video_fit', 'get_param_track', 'get_source_observations', 'evaluate_source_passages',
+  'inspect_timeline_range_visuals', 'vision_inspect', 'get_timeline_critique', 'calculate_video_fit', 'get_param_track', 'get_source_observations', 'get_source_understanding', 'get_source_speech_context', 'evaluate_source_passages',
 ])
 const REVISION_NONMUTATING_TOOLS = new Set([
   'revision_control', 'validate_rough_cut_review', 'validate_rough_cut_plan', 'dry_run',
@@ -427,6 +431,15 @@ export async function handleCallTool(
     }
     return { content: [{ type: 'text', text: JSON.stringify({ ...summary, coordinate_space: 'timeline', evidence_origin: 'CURRENT_TIMELINE', availability: getReviewerSummary ? 'available' : 'not_generated' }, null, 2) }] } as ServerResult
   }
+  if (name === 'get_source_understanding' || name === 'get_source_speech_context') {
+    try {
+      if(!sourceObservationIndex) throw new Error('Source observation index unavailable')
+      const media=getTsHost()?.actor.snapshot().media_pool[String(args.media_id)]
+      if(!media)throw new Error('Current imported media_id required')
+      const result=name==='get_source_speech_context' ? await sourceObservationIndex.speechContext(media,Number(args.start_us),Number(args.end_us),args.before_us as number|undefined,args.after_us as number|undefined) : args.detail==='coarse' ? await sourceObservationIndex.coarseUnderstanding(media) : await sourceObservationIndex.cachedUnderstanding(media)
+      return {content:[{type:'text',text:JSON.stringify(result)}]} as ServerResult
+    } catch(e) {return revisionToolError(e instanceof Error?e.message:String(e))}
+  }
   if (name === 'get_source_observations') {
     try {
       if (!sourceObservationIndex) throw new Error('Source observation index is unavailable.')
@@ -525,7 +538,10 @@ export async function handleCallTool(
       return { content: [{ type: 'text', text: JSON.stringify(res) }] } as unknown as ServerResult
     }
     if (name === 'get_editorial_evidence_packet') {
-      const packet = buildEditorialEvidencePacket(tsHost.actor.snapshot(), { compositionId:args.composition_id as string | undefined, transcriptsDir:args.transcripts_dir as string | undefined, range:args.start_us!==undefined||args.end_us!==undefined ? {start_us:Number(args.start_us??0),end_us:Number(args.end_us??tsHost.actor.snapshot().compositions[String(args.composition_id??tsHost.actor.snapshot().root_id)].duration_us)} : undefined })
+      const snapshot=tsHost.actor.snapshot()
+      const sourceMaps=[]
+      if(sourceObservationIndex) for(const media of Object.values(snapshot.media_pool).slice(0,1)) {try{sourceMaps.push(await sourceObservationIndex.cachedUnderstanding(media))}catch{}}
+      const packet = buildEditorialEvidencePacket(snapshot, { compositionId:args.composition_id as string | undefined, transcriptsDir:args.transcripts_dir as string | undefined, range:args.start_us!==undefined||args.end_us!==undefined ? {start_us:Number(args.start_us??0),end_us:Number(args.end_us??tsHost.actor.snapshot().compositions[String(args.composition_id??tsHost.actor.snapshot().root_id)].duration_us)} : undefined }, undefined, {sources:sourceMaps,source_limit:1,sources_total:Object.keys(snapshot.media_pool).length})
       return { content:[{type:'text',text:JSON.stringify(packet)}] } as ServerResult
     }
     if (name === 'get_timeline_context') {
@@ -1257,7 +1273,7 @@ export async function registeredMcpTools(backend: Backend, opts: McpServerOption
     CALCULATE_VIDEO_FIT_TOOL,
     GET_TIMELINE_CRITIQUE_TOOL,
     ...externalTools,
-    ...(opts.sourceObservationIndex ? [GET_SOURCE_OBSERVATIONS_TOOL] : []),
+    ...(opts.sourceObservationIndex ? [GET_SOURCE_OBSERVATIONS_TOOL,...SOURCE_UNDERSTANDING_TOOLS] : []),
     ...(opts.evaluateSourcePassages ? [SOURCE_PASSAGE_TOOL] : []),
   ]).filter(t => t.name !== 'export_timeline')
   return opts.toolFilter ? all.filter(t => opts.toolFilter!(t.name)) : all

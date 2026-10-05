@@ -88,13 +88,28 @@ export async function startMcpHost(backend: Backend, opts: McpHostOptions = {}):
     next()
   })
 
+  async function sourceMaps(snap: import('../state/model.js').Project, coarse: boolean) {
+    if(!opts.sourceObservationIndex)return {status:'unavailable',reason:'Local source observations unavailable on this platform'}
+    const media=Object.values(snap.media_pool).filter(m=>m.kind==='Video'&&m.metadata.duration_us).slice(0,4)
+    const maps=[]
+    for(const m of media) {
+      try {maps.push(coarse ? await opts.sourceObservationIndex.coarseUnderstanding(m) : await opts.sourceObservationIndex.cachedUnderstanding(m))}
+      catch {maps.push({media_id:m.id,status:'unavailable',reason:'Source evidence acquisition failed; use existing senses for targeted detail'})}
+    }
+    const omitted: string[]=[]
+    while(Buffer.byteLength(JSON.stringify(maps))>9000 && maps.length) omitted.push(String((maps.pop() as any)?.identity?.media_id ?? 'unknown'))
+    return {status:'bounded_source_index',omitted_media_ids:omitted,sources:maps,sources_total:Object.keys(snap.media_pool).length,source_limit:4}
+  }
+
   // Intent is declared by the product launcher, never inferred from prompt text.
-  appExpress.post('/mcp/evidence', (req,res) => {
+  appExpress.post('/mcp/evidence', async (req,res) => {
     const snap=opts.getTsHost?.()?.actor.snapshot()
     if (!snap || snap.project_id!==req.body?.project_id) {res.status(409).json({error:'Evidence requires current project'});return}
-    res.json(buildEditorialEvidencePacket(snap,{transcriptsDir:req.body?.transcripts_dir}))
+    const maps=await sourceMaps(snap,true)
+    if(reviewState(snap)!==reviewState(opts.getTsHost?.()?.actor.snapshot())){res.status(409).json({error:'Project changed during source evidence acquisition; reacquire'});return}
+    res.json(buildEditorialEvidencePacket(snap,{transcriptsDir:req.body?.transcripts_dir},undefined,maps))
   })
-  appExpress.post('/mcp/reviews', (req, res) => {
+  appExpress.post('/mcp/reviews', async (req, res) => {
     const projectId = req.body?.project_id
     if (typeof projectId !== 'string' || opts.getTsHost?.()?.actor.snapshot().project_id !== projectId) {
       res.status(409).json({ error: 'Review requires the current authoritative project_id' }); return
@@ -106,7 +121,9 @@ export async function startMcpHost(backend: Backend, opts: McpHostOptions = {}):
     reviews.set(id, { projectId, guard })
     emitLifecycle('info', { kind: 'System' }, 'Autonomous review initialized', { review_id: id, project_id: projectId, review_session: guard.status })
     const snap=opts.getTsHost!()!.actor.snapshot()
-    const packet=buildEditorialEvidencePacket(snap,{transcriptsDir:req.body?.transcripts_dir})
+    const maps=await sourceMaps(snap,false)
+    if(reviewState(snap)!==reviewState(opts.getTsHost?.()?.actor.snapshot())) {reviews.delete(id);res.status(409).json({error:'Project changed during source evidence acquisition; reacquire'});return}
+    const packet=buildEditorialEvidencePacket(snap,{transcriptsDir:req.body?.transcripts_dir},undefined,maps)
     const receipt=guard.recordEvidence('get_editorial_evidence_packet','timeline',[0,snap.compositions[snap.root_id].duration_us],reviewState(snap),packet.observed_dimensions,'p0',evidenceCoverage('get_editorial_evidence_packet',packet,[0,snap.compositions[snap.root_id].duration_us]))
     res.json({ editorial_evidence_packet:{...packet,evidence_receipt:receipt}, review_id: id, url: `http://127.0.0.1:${port}/mcp?review_session=${id}`, review_session: guard.status })
   })

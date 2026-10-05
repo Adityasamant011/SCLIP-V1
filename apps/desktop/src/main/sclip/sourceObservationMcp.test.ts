@@ -23,3 +23,16 @@ describe('source observation MCP integration', () => {
     expect(JSON.parse(text.text).observations[0].source_t_us).toBe(500_000)
   })
 })
+
+it('advertises/routes source coverage and speech context as read-only evidence with explicit space',async()=>{
+ const media={id:'distinct-source',metadata:{duration_us:45000000}}
+ const overview={identity:{media_id:media.id,coordinate_space:'source'},structure:{cells:[{visual:{status:'sampled_instants_only'},speech:{status:'not_observed'}}]}}
+ const index={cachedUnderstanding:async()=>overview,coarseUnderstanding:async()=>overview,speechContext:async()=>({coordinate_space:'source',status:'not_generated'})}
+ const catalog=await registeredMcpTools({mcpCatalog:async()=>'{"tools":[]}'} as never,{sourceObservationIndex:index as never})
+ for(const tool of ['get_source_understanding','get_source_speech_context'])expect(catalog.some(t=>t.name===tool)).toBe(true)
+ const host={actor:{snapshot:()=>({media_pool:{[media.id]:media}})}} as never
+ for(const [tool,args] of [['get_source_understanding',{media_id:media.id,detail:'coarse'}],['get_source_speech_context',{media_id:media.id,start_us:2000000,end_us:12000000}]] as const){
+  const result:any=await handleCallTool({} as never,()=>host,tool,args,undefined,undefined,undefined,undefined,undefined,index as never)
+  expect(result.isError).not.toBe(true);expect(result.content[0].text).toContain('source')
+ }
+})
