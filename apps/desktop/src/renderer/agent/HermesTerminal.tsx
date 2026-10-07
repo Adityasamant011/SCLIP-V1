@@ -15,7 +15,7 @@ interface Props {
 function transformTerminalOutput(data: string): string {
   if (!data) return data
   let text = data
-  text = text.replace(/⚕\s*NOUS HERMES\s*-\s*AI Agent Fram/g, '✦ SCLIP - Video Editor Agent')
+  text = text.replace(/⚕\s*NOUS HERMES\s*-\s*AI Agent Framework/g, '✦ SCLIP - Video Editor Agent')
   text = text.replace(/NOUS HERMES - AI Agent Framework/g, 'SCLIP - Video Editor Framework')
   text = text.replace(/NOUS HERMES/g, 'SCLIP')
   text = text.replace(/Hermes Agent/g, 'Sclip Agent')

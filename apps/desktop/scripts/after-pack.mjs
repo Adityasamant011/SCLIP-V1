@@ -16,8 +16,8 @@ export default function afterPack(context) {
   if (context.electronPlatformName === 'darwin') {
     const worker = join(context.packager.getResourcesDir(context.appOutDir), 'vision', 'sidecar', 'vlm_worker.py')
     if (!existsSync(worker)) throw new Error(`afterPack(vision): local vision worker missing at ${worker}`)
-    const ttsWorker = join(context.packager.getResourcesDir(context.appOutDir), 'vision', 'sidecar', 'qwen_tts_worker.py')
-    if (!existsSync(ttsWorker)) throw new Error(`afterPack(vision): local Qwen TTS worker missing at ${ttsWorker}`)
+    const ttsWorker = join(context.packager.getResourcesDir(context.appOutDir), 'vision', 'sidecar', 'kokoro_tts_worker.py')
+    if (!existsSync(ttsWorker)) throw new Error(`afterPack(vision): local Kokoro TTS worker missing at ${ttsWorker}`)
   }
 
 }

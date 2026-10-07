@@ -3,9 +3,9 @@ name: weftcut
 description: Edit video in Sclip using its WeftCut MCP tools. Use before editing a Sclip project (cuts, timeline, captions, voiceover, or Motifs).
 ---
 
-# Driving WeftCut
+# Driving Sclip
 
-WeftCut is a desktop video editor; you operate it over MCP while the user
+Sclip is a desktop video editor; you operate it over MCP while the user
 watches the same project live in the app. Every mutation you commit lands in
 their undo history and on their screen. Each tool's own description carries its
 full contract — this skill covers only what no single tool can: how a session
@@ -30,7 +30,7 @@ should go.
    or unlock locally; explicit transport close also ends its owned session.
    None of these cancels running calls or prohibits later tools. Do not infer
    that a session ended because the user returned to the editor.
-5. Errors are instructions: WeftCut errors name the cause and list concrete
+5. Errors are instructions: Sclip errors name the cause and list concrete
    options. Pick one; never retry a rejected call verbatim.
 6. A commit can also fail because the user (or another agent) edited
    concurrently — re-read the resource and reapply.
@@ -173,7 +173,7 @@ Tool choices below are options, not stages or creative recipes:
   routing over text. It does NOT understand raw video/audio, cannot make
   creative decisions, and cannot manage a workflow — Hermes does all of that.
   The division is: **Jev filters the possibilities → Hermes makes the creative
-  choices → WeftCut executes the edits.** Jev uses the OpenRouter credential
+  choices → Sclip executes the edits.** Jev uses the OpenRouter credential
   and adds cost/latency; treat its Noul scores as fallible, non-exhaustive
   evidence. Always read original transcript context around promising passages
   to recover setup/payoff. Hermes makes every editorial choice.

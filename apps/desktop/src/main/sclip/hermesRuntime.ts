@@ -2,6 +2,7 @@ import { createServer } from 'node:net'
 import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
+import { parse as parseYaml } from 'yaml'
 import { hermesBaseEnvironment, redactHermesSecrets } from './hermesSecrets.js'
 import { validateHermesProfile } from './hermesSettings.js'
 
@@ -260,6 +261,12 @@ export function writeHermesProfile(
   // old development profile: Hermes's defaults supply its normal tools and
   // permissions, while Sclip adds only the WeftCut MCP server.
   const target = path.join(home, 'config.yaml')
+  let previous: any = {}
+  try { previous = parseYaml(fs.readFileSync(target, 'utf8')) ?? {} } catch { /* New or legacy profile. */ }
+  const capabilityGuidance = 'Capability reporting: describe something as AVAILABLE NOW only when the current session tool definitions or current deferred tool_search/tool_describe catalog expose it and its prerequisites are configured. Requested toolset names and installed skills are not proof of availability. Distinguish OPTIONAL / NOT CONFIGURED and NOT AVAILABLE IN THIS SESSION when appropriate. Before listing all tools, inspect the current catalog; do not invent names or counts, count skills as callable tools, or confuse server tools with protocol methods. Hermes-generated MCP utility wrappers are callable only when explicitly present in the current tool catalog; distinguish them from server-registered editing tools. Generic terminal/API access does not establish that a specific web search or authenticated service is configured. If configuration has not been checked, say it is unverified.'
+  const previousPrompt = typeof previous.agent?.system_prompt === 'string' ? previous.agent.system_prompt : ''
+  const systemPrompt = previousPrompt.includes(capabilityGuidance) ? previousPrompt : [previousPrompt, capabilityGuidance].filter(Boolean).join('\n\n')
+  const terminalCwd = typeof previous.terminal?.cwd === 'string' ? previous.terminal.cwd : '.'
 
   const modelLines = [
     'model:',
@@ -285,10 +292,11 @@ export function writeHermesProfile(
     '      Authorization: "Bearer ${SCLIP_MCP_TOKEN}"',
     '    timeout: 120',
     'terminal:',
-    '  cwd: "."',
+    `  cwd: ${JSON.stringify(terminalCwd)}`,
     'tools:',
     '  tool_search: true',
     'agent:',
+    `  system_prompt: ${JSON.stringify(systemPrompt)}`,
     `  max_turns: ${maxIterations}`,
     '',
   ].join('\n')

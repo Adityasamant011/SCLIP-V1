@@ -10,6 +10,20 @@ const SECRET = 'SCLIP_TEST_SECRET_DO_NOT_LEAK_12345'
 const base = { provider: 'openrouter', model: 'nex-agi/nex-n2.5-pro:free', maxIterations: 30 }
 
 describe('secure Hermes settings', () => {
+  it('grounds capability reporting in the runtime catalog while preserving user instructions and cwd', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'sclip-capabilities-'))
+    try {
+      writeFileSync(path.join(dir, 'config.yaml'), 'terminal:\n  cwd: "/tmp/my-project"\nagent:\n  system_prompt: "Use concise replies."\n')
+      writeHermesProfile(dir, 1234, base)
+      const saved = readFileSync(path.join(dir, 'config.yaml'), 'utf8')
+      expect(saved).toContain('Use concise replies.')
+      expect(saved).toContain('current deferred tool_search/tool_describe catalog')
+      expect(saved).toContain('installed skills are not proof of availability')
+      expect(saved).toContain('cwd: "/tmp/my-project"')
+      writeHermesProfile(dir, 5678)
+      expect(readFileSync(path.join(dir, 'config.yaml'), 'utf8').split('Capability reporting:')).toHaveLength(2)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
   it('uses the existing Hermes max_turns setting, migrating only the old Sclip default', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'sclip-hermes-budget-'))
     try {

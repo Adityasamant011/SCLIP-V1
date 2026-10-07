@@ -63,6 +63,13 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
 describe('HermesTerminal startup and typing', () => {
+  it('rebrands the complete banner without leaving a Framework suffix', async () => {
+    ipc.sclipOpenTerminal.mockResolvedValue({ history: '⚕ NOUS HERMES - AI Agent Framework\r\n', sequence: 1 })
+    render(<HermesTerminal projectId="project" sessionId="session" />)
+    await waitFor(() => expect(terminal.writes.join('')).toContain('SCLIP - Video Editor Agent'))
+    expect(terminal.writes.join('')).not.toContain('Agentework')
+    expect(terminal.writes.join('')).not.toContain('Framework')
+  })
   it('keeps live output queued until asynchronous history parsing completes', async () => {
     terminal.asyncWrite = true
     ipc.sclipOpenTerminal.mockResolvedValue({ history: '\x1b]11;?\x07\x1b[c', sequence: 1 })
