@@ -55,7 +55,7 @@ No story, cut, tool or repair decisions were made by Hermes; successful editoria
 
 `apps/desktop/e2e/bench-results/phase4b-final-poffertjes/` contains source/configuration identity, exact prompt, before/after metadata preflight, current catalog, initial evidence packet, initial/final project, observable trace, MCP/history events, metrics, render-skipped record and independent QA. No secrets or hidden model reasoning are preserved. Temporary credential/profile storage was removed. Test-only launch/guard scripts are under `.scratch/phase4b-final/`.
 
-The footage is marked retired for future unseen-holdout claims, following the instruction to retire it regardless of outcome. No second media was consumed.
+**Correction after artifact review:** POFFERTJES HOLDOUT STATUS: **STILL VALID**. Zero successful model responses, zero model-authored creative plans, zero editorial mutations and no production changes based on this footage occurred. A pre-inference harness failure does not constitute strong-model editorial exposure. Retire this footage after the first successful strong-model editorial exposure. No second media was consumed.
 
 ## Exactly one next action
 
