@@ -24,7 +24,7 @@ describe('Jev integration ownership boundaries', () => {
     expect(skill).toContain('Choose your\nown next action')
     expect(skill).toContain('skip, reorder or revisit')
     expect(skill).toContain('ignore a helper')
-    expect(skill).not.toMatch(/## Editorial Rough-Cut Planning|Tier 1:|INITIAL REVIEW|select_issue|eight perception|three mutations/)
+    expect(skill).not.toMatch(/## Editorial Rough-Cut Planning|Tier 1:|INITIAL REVIEW|eight perception|three mutations/)
     expect(skill).toContain('Export is deliberately not a tool')
   })
   it('makes semantic retrieval visible in the short manifest without forcing a tool order', () => {

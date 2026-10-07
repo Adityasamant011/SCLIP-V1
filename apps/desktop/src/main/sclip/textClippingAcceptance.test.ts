@@ -22,7 +22,7 @@ Answer:
 2. which edge, if any
 3. briefly describe the visible problem`
 
-describe('SCLIP Local Vision — Text Clipping Acceptance Suite', () => {
+describe.skipIf(process.env.SCLIP_LOCAL_VISION_ACCEPTANCE !== '1')('SCLIP Local Vision — Text Clipping Acceptance Suite', () => {
   beforeAll(() => {
     if (!fs.existsSync(FRAME_A)) {
       throw new Error(`Frame A missing: ${FRAME_A}`)

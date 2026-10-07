@@ -57,7 +57,8 @@ export async function inspectRenderedAudio(project:Project,args:Record<string,un
   validateTimelineRange(args.start_us,args.end_us,comp.duration_us,compId)
   signal?.throwIfAborted()
   const state=createHash('sha256').update(reviewState(project)).digest('hex')
-  const rendered=await deps.render(project,{start_us:Number(args.start_us),end_us:Number(args.end_us),composition_id:args.composition_id as string|undefined,getActiveWindow,signal})
+  const rendered=await deps.render(project,{start_us:Number(args.start_us),end_us:Number(args.end_us),composition_id:args.composition_id as string|undefined,getActiveWindow,signal,
+    audioOnly:comp.tracks.some(t=>t.layers.some(l=>l.params.kind==='Audio' && l.t_end_us>Number(args.start_us) && l.t_start_us<Number(args.end_us)))})
   try {
     signal?.throwIfAborted()
     const hash=createHash('sha256').update(fs.readFileSync(rendered.path)).digest('hex')

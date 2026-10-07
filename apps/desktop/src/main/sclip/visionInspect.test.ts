@@ -37,7 +37,7 @@ function ensureTestFrames() {
   }
 }
 
-describe('vision_inspect Acceptance Tests (Optimized & Hardened)', () => {
+describe.skipIf(process.env.SCLIP_LOCAL_VISION_ACCEPTANCE !== '1')('vision_inspect Acceptance Tests (Optimized & Hardened)', () => {
   beforeAll(() => {
     ensureTestFrames()
   }, 30_000)

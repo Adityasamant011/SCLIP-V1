@@ -548,13 +548,14 @@ export function App({ onCloseProject }: AppProps) {
   useEffect(() => {
     const target = window as typeof window & { __sclipExportRange?: (request: {
       projectId: string; outputPath: string; startUs: number; endUs: number;
-      resolutionHeight?: number; fps?: number;
+      resolutionHeight?: number; fps?: number; audioOnly?: boolean;
     }) => Promise<void> };
     target.__sclipExportRange = async (request) => {
       const summary = await projectSummary();
       if (!summary || summary.project_id !== request.projectId) throw new Error('Project changed before export');
       if (exportState && exportState.kind !== 'complete' && exportState.kind !== 'error') throw new Error('An export is already running');
       await runExportWithSettings({ ...DEFAULT_EXPORT_SETTINGS,
+        includeVideo: request.audioOnly ? false : DEFAULT_EXPORT_SETTINGS.includeVideo,
         resolutionHeight: request.resolutionHeight ?? null,
         fps: request.fps ?? null,
       }, request.outputPath, { startUs: request.startUs, endUs: request.endUs });

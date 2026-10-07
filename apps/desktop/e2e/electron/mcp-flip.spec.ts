@@ -42,7 +42,9 @@ test('TS actor: MCP mutate → resource read reflects it; blocked tool rejects',
       const proj = JSON.parse((after.contents[0] as { text: string }).text) as { root_id: string; compositions: Record<string, { tracks: Array<{ layers: unknown[] }> }> }
       expect(proj.compositions[proj.root_id]!.tracks.reduce((n, t) => n + t.layers.length, 0)).toBe(1)
       // A blocked hybrid rejects.
-      await expect(client.callTool({ name: 'import_media', arguments: { path: '/nope.mp4' } })).rejects.toThrow()
+      const rejected = await client.callTool({ name: 'import_media', arguments: { path: '/nope.mp4' } })
+      expect(rejected.isError).toBe(true)
+      expect(rejected.content).toHaveLength(1)
     } finally {
       await client.close()
     }

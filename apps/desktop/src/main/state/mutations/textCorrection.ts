@@ -255,10 +255,25 @@ export function applyTextCorrection(p: Project, ids: IdGen, compositionId: strin
       const group = [first], style = styleKey(first), source = JSON.stringify(timingFor(p, first)?.source)
       while (i < original.length) {
         const next = original[i]!, last = group[group.length - 1]!, nt = timingFor(p, next)
-        if (!selected.has(next.id) || !canResegment(c, next) || styleKey(next) !== style || JSON.stringify(nt?.source) !== source || next.t_start_us < last.t_end_us) break
+        if (!selected.has(next.id) || !canResegment(c, next) || JSON.stringify(nt?.source) !== source || next.t_start_us < last.t_end_us) break
         group.push(next); i++
       }
-      changed += resegment(p, c, track, group, ids, correct)
+      if (group.every(l => styleKey(l) === style)) {
+        changed += resegment(p, c, track, group, ids, correct)
+      } else {
+        // Align across appearances for spelling, then resegment only within
+        // each original appearance. Never merge away an intentional style.
+        const beforeText = group.map(l => l.params.kind === 'Text' ? l.params.content : '')
+        correctIndividually(group, correct)
+        for (let at = 0; at < group.length;) {
+          let end = at + 1
+          while (end < group.length && styleKey(group[end]!) === styleKey(group[at]!)) end++
+          const part = group.slice(at, end)
+          const corrected = part.filter((l, i) => l.params.kind === 'Text' && l.params.content !== beforeText[at + i]).length
+          changed += Math.max(corrected, resegment(p, c, track, part, ids, correct))
+          at = end
+        }
+      }
     }
   }
   return { changed }

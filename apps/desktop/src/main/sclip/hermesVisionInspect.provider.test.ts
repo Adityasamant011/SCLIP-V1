@@ -29,7 +29,7 @@ import type { TsActorHost } from '../state/ts-actor-host.js'
 import { AgentActivityService } from '../agent/activity.js'
 import { disposeVisionRuntime } from './visionRuntime.js'
 
-describe('End-to-End Hermes vision_inspect Test', () => {
+describe.skipIf(process.env.SCLIP_ALLOW_PROVIDER_TESTS !== '1')('End-to-End Hermes vision_inspect Test', () => {
   beforeAll(async () => {
     await initEval()
   })

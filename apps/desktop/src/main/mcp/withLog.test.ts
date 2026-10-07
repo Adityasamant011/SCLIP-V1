@@ -100,7 +100,7 @@ function decoratedCallTool(deps: McpLogDeps, backend = fakeBackend()) {
   const handler = withLog('tools/call', async (req: { params: { name: string; arguments: Record<string, unknown> } }) =>
     handleCallTool(backend, () => ts, req.params.name, req.params.arguments), deps)
   return async (name: string, args: Record<string, unknown> = {}) => {
-    await handler({ params: { name, arguments: args } }, undefined).catch(() => { /* the Err branch is a valid outcome here */ })
+    await handler({ params: { name, arguments: args } }, { signal: new AbortController().signal }).catch(() => { /* the Err branch is a valid outcome here */ })
   }
 }
 
@@ -112,7 +112,7 @@ function sessionCallTool(deps: McpLogDeps, ts: ReturnType<typeof tsHostStub>) {
   buildMcpServer(fakeBackend(), { log: deps, getTsHost: () => ts })
   const handler = registered.get(CallToolRequestSchema)!
   return (name: string, args: Record<string, unknown> = {}) =>
-    handler({ params: { name, arguments: args } }, undefined).catch(() => { /* the Err branch is a valid outcome here */ })
+    handler({ params: { name, arguments: args } }, { signal: new AbortController().signal }).catch(() => { /* the Err branch is a valid outcome here */ })
 }
 
 /** Opaque black — `add_color_layer`'s one required non-time arg. */
@@ -171,7 +171,7 @@ describe('all six request handlers are decorated', () => {
       const handler = registered.get(schema)
       expect(handler, expectedTool).toBeTypeOf('function')
       const before = entries.length
-      await handler!({ params }, undefined).catch(() => {})
+      await handler!({ params }, { signal: new AbortController().signal }).catch(() => {})
       expect(entries.length - before, expectedTool).toBe(1)
       // `details.tool` is the tool name for tools/call and the method for the
       // other five — either way it names the handler that emitted.
@@ -184,7 +184,7 @@ describe('all six request handlers are decorated', () => {
     const registered = spyRegistrations()
     const { entries, deps } = collector()
     buildMcpServer(fakeBackend(), { log: deps })
-    await registered.get(ListToolsRequestSchema)!({ params: {} }, undefined).catch(() => {})
+    await registered.get(ListToolsRequestSchema)!({ params: {} }, { signal: new AbortController().signal }).catch(() => {})
     expect(detailsOf(entries[0]).client_info).toEqual({ name: 'claude-code', version: '1.2.3' })
     expect(entries[0].source).toEqual({ kind: 'Agent', client: 'mcp' })
   })
@@ -206,7 +206,7 @@ describe('Phase 2E guard through the real MCP call handler', () => {
     const layerId = added.value
     buildMcpServer(fakeBackend(), { getTsHost: () => ts, revisionLoop: true })
     const handler = registered.get(CallToolRequestSchema)!
-    const call = (name: string, args: Record<string, unknown> = {}) => handler({ params: { name, arguments: args } }, undefined) as Promise<any>
+    const call = (name: string, args: Record<string, unknown> = {}) => handler({ params: { name, arguments: args } }, { signal: new AbortController().signal }) as Promise<any>
     await call('get_timeline_context')
     await call('get_timeline_context')
     const review = { version: 1, summary: 'Unwanted tail remains', clip_count: 0, inspections: [{ id: 'tail', evidence_id: 'e1', type: 'section',
@@ -239,10 +239,10 @@ describe('Phase 2E guard through the real MCP call handler', () => {
     if (!added.ok) return
     const layerId = added.value
     buildMcpServer(fakeBackend(), { getTsHost: () => ts, revisionLoop: true })
-    const listed = await registered.get(ListToolsRequestSchema)!({ params: {} }, undefined) as { tools: Array<{ name: string }> }
+    const listed = await registered.get(ListToolsRequestSchema)!({ params: {} }, { signal: new AbortController().signal }) as { tools: Array<{ name: string }> }
     expect(listed.tools.some((tool) => tool.name === 'revision_control')).toBe(true)
     const handler = registered.get(CallToolRequestSchema)!
-    const call = (name: string, args: Record<string, unknown> = {}) => handler({ params: { name, arguments: args } }, undefined) as Promise<any>
+    const call = (name: string, args: Record<string, unknown> = {}) => handler({ params: { name, arguments: args } }, { signal: new AbortController().signal }) as Promise<any>
     for (let i = 0; i < 4; i++) expect((await call('get_timeline_context')).isError).not.toBe(true)
     const overBudget = await call('get_timeline_context')
     expect(overBudget.isError).toBe(true)
@@ -272,7 +272,7 @@ describe('Phase 2E guard through the real MCP call handler', () => {
     const beforeFourth = JSON.stringify(ts.actor.snapshot())
     const blocked = await call('trim_layer', { layer_id: layerId, edge: 'out', new_t_us: 6_000_000 })
     expect(blocked.isError).toBe(true)
-    expect(blocked.content[0].text).toContain('attempt limit reached')
+    expect(JSON.parse(blocked.content[0].text).review_session.rollback_regrounding_required).toBe(true)
     expect(JSON.stringify(ts.actor.snapshot())).toBe(beforeFourth)
     const state = await call('revision_control', { action: 'status' })
     expect(JSON.parse(state.content[0].text).attempts['issue-1']).toBe(3)
@@ -286,7 +286,7 @@ describe('level follows the tool route', () => {
     const track = root(ts.actor.snapshot()).tracks[0].id
     const handler = withLog('tools/call', async (req: { params: { name: string; arguments: Record<string, unknown> } }) =>
       handleCallTool(fakeBackend(), () => ts, req.params.name, req.params.arguments), deps)
-    await handler({ params: { name: 'add_color_layer', arguments: { track_id: track, color: { r: 0, g: 0, b: 0, a: 1 }, t_start_us: 0, t_end_us: 1_000_000 } } }, undefined)
+    await handler({ params: { name: 'add_color_layer', arguments: { track_id: track, color: { r: 0, g: 0, b: 0, a: 1 }, t_start_us: 0, t_end_us: 1_000_000 } } }, { signal: new AbortController().signal })
     expect(entries[0].level).toBe('info')
     expect(entries[0].message).toBe('MCP: add_color_layer')
     expect(typeof detailsOf(entries[0]).duration_ms).toBe('number')
@@ -312,7 +312,7 @@ describe('level follows the tool route', () => {
     const gate = new Promise<void>((r) => { release = r })
     // transcribe_clip routes 'rust' — Debug when quick, but a multi-second
     // transcription is what the user is waiting on, so both rows promote.
-    const pending = withLog('tools/call', async () => { await gate; return {} }, deps)({ params: { name: 'transcribe_clip', arguments: {} } }, undefined)
+    const pending = withLog('tools/call', async () => { await gate; return {} }, deps)({ params: { name: 'transcribe_clip', arguments: {} } }, { signal: new AbortController().signal })
     await vi.advanceTimersByTimeAsync(300)
     release()
     await pending
@@ -328,9 +328,9 @@ describe('level follows the tool route', () => {
 
   it('reads, prompts and lists name their target in the message', async () => {
     const { entries, deps } = collector()
-    await withLog('resources/read', async () => ({}), deps)({ params: { uri: 'project://tracks' } }, undefined)
-    await withLog('prompts/get', async () => ({}), deps)({ params: { name: 'edit_plan' } }, undefined)
-    await withLog('tools/list', async () => ({}), deps)({ params: {} }, undefined)
+    await withLog('resources/read', async () => ({}), deps)({ params: { uri: 'project://tracks' } }, { signal: new AbortController().signal })
+    await withLog('prompts/get', async () => ({}), deps)({ params: { name: 'edit_plan' } }, { signal: new AbortController().signal })
+    await withLog('tools/list', async () => ({}), deps)({ params: {} }, { signal: new AbortController().signal })
     expect(entries.map((e) => [e.level, e.message])).toEqual([
       ['debug', 'MCP read: project://tracks'],
       ['debug', 'MCP prompt: edit_plan'],
@@ -345,7 +345,7 @@ describe('slow ops are one op, fast ops are one row', () => {
     const { entries, deps } = collector()
     let release = (): void => {}
     const gate = new Promise<void>((r) => { release = r })
-    const pending = withLog('tools/call', async () => { await gate; return {} }, deps)({ params: { name: 'add_track', arguments: {} } }, undefined)
+    const pending = withLog('tools/call', async () => { await gate; return {} }, deps)({ params: { name: 'add_track', arguments: {} } }, { signal: new AbortController().signal })
 
     await vi.advanceTimersByTimeAsync(300)
     expect(entries).toHaveLength(1)
@@ -365,7 +365,7 @@ describe('slow ops are one op, fast ops are one row', () => {
     const { entries, deps } = collector(() => workspace)
     let release = (): void => {}
     const gate = new Promise<void>((r) => { release = r })
-    const pending = withLog('tools/call', async () => { await gate; return {} }, deps)({ params: { name: 'add_track', arguments: {} } }, undefined)
+    const pending = withLog('tools/call', async () => { await gate; return {} }, deps)({ params: { name: 'add_track', arguments: {} } }, { signal: new AbortController().signal })
 
     await vi.advanceTimersByTimeAsync(300)
     workspace = 'C:/ws/after'
@@ -485,7 +485,7 @@ describe('the commit window is closed before the first await', () => {
       await Promise.resolve()
       return handleCallTool(fakeBackend(), () => ts, req.params.name, req.params.arguments)
     }, observed)
-    await late({ params: { name: 'add_color_layer', arguments: { track_id: track, color: BLACK, t_start_us: 0, t_end_us: 1_000_000 } } }, undefined)
+    await late({ params: { name: 'add_color_layer', arguments: { track_id: track, color: BLACK, t_start_us: 0, t_end_us: 1_000_000 } } }, { signal: new AbortController().signal })
 
     expect(ts.actor.historyView(1).ops[0].label_key).toBe(HISTORY_SUMMARY.layerAdd.key) // the commit did happen
     expect(entries[0].message).toBe('MCP: add_color_layer')
@@ -506,8 +506,8 @@ describe('the commit window is closed before the first await', () => {
     const slow = withLog('tools/call', async (req: { params: { name: string; arguments: Record<string, unknown> } }) => { await gate; return route(req) }, observed)
     const quick = withLog('tools/call', route, observed)
 
-    const pending = slow({ params: { name: 'add_track', arguments: {} } }, undefined)
-    await quick({ params: { name: 'add_color_layer', arguments: { track_id: track, color: BLACK, t_start_us: 0, t_end_us: 1_000_000 } } }, undefined)
+    const pending = slow({ params: { name: 'add_track', arguments: {} } }, { signal: new AbortController().signal })
+    await quick({ params: { name: 'add_color_layer', arguments: { track_id: track, color: BLACK, t_start_us: 0, t_end_us: 1_000_000 } } }, { signal: new AbortController().signal })
     release()
     await pending
 
@@ -555,7 +555,7 @@ describe('logging can never break a call', () => {
   it('a throwing emit still returns the tool result', async () => {
     const boom: McpLogDeps = { emit: () => { throw new Error('no bus') }, currentWorkspace: () => null }
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const out = await withLog('tools/call', async () => ({ ok: true }), boom)({ params: { name: 'ping', arguments: {} } }, undefined)
+    const out = await withLog('tools/call', async () => ({ ok: true }), boom)({ params: { name: 'ping', arguments: {} } }, { signal: new AbortController().signal })
     expect(out).toEqual({ ok: true })
     expect(errors).toHaveBeenCalled()
   })
@@ -565,7 +565,7 @@ describe('logging can never break a call', () => {
     let closes = 0
     const observed: McpLogDeps = { ...deps, observe: () => ({ close: () => { closes++; return null } }) }
     const sync = withLog('tools/call', () => { throw new Error('sync boom') }, observed)
-    await expect(sync({ params: { name: 'add_track', arguments: {} } }, undefined)).rejects.toThrow('sync boom')
+    await expect(sync({ params: { name: 'add_track', arguments: {} } }, { signal: new AbortController().signal })).rejects.toThrow('sync boom')
     expect(closes).toBe(1)
   })
 
@@ -573,7 +573,7 @@ describe('logging can never break a call', () => {
     const { entries, deps } = collector()
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
     const observed: McpLogDeps = { ...deps, observe: () => { throw new Error('no actor') } }
-    const out = await withLog('tools/call', async () => ({ ok: true }), observed)({ params: { name: 'add_track', arguments: {} } }, undefined)
+    const out = await withLog('tools/call', async () => ({ ok: true }), observed)({ params: { name: 'add_track', arguments: {} } }, { signal: new AbortController().signal })
     expect(out).toEqual({ ok: true })
     expect(entries[0].message).toBe('MCP: add_track')
     expect(errors).toHaveBeenCalled()

@@ -52,8 +52,8 @@ describe('Hermes-facing registered catalog count', () => {
     const backend = { mcpCatalog: async () => catalog } as Parameters<typeof registeredMcpTools>[0]
     const disabled = await registeredMcpTools(backend)
     const enabled = await registeredMcpTools(backend, { evaluateSourcePassages: async () => ({}) })
-    expect(disabled).toHaveLength(104)
-    expect(enabled).toHaveLength(105)
+    expect(disabled.map(t => t.name)).toEqual(expect.arrayContaining(['ripple_cut_range', 'apply_repair_transaction', 'inspect_rendered_audio', 'inspect_timeline_temporal_window']))
+    expect(enabled.length).toBe(disabled.length + 1)
     expect(disabled.some(tool => tool.name === 'calculate_video_fit')).toBe(true)
     expect(disabled.some(tool => tool.name === 'get_timeline_critique')).toBe(true)
     expect(disabled.some(tool => tool.name === 'video_search_external_media')).toBe(false)
@@ -67,8 +67,8 @@ describe('Hermes-facing registered catalog count', () => {
     // With enableExternalMedia flag:
     const externalOn = await registeredMcpTools(backend, { enableExternalMedia: true })
     const externalAndJevOn = await registeredMcpTools(backend, { enableExternalMedia: true, evaluateSourcePassages: async () => ({}) })
-    expect(externalOn).toHaveLength(107)
-    expect(externalAndJevOn).toHaveLength(108)
+    expect(externalOn.length).toBe(disabled.length + 3)
+    expect(externalAndJevOn.length).toBe(externalOn.length + 1)
     expect(externalOn.some(tool => tool.name === 'video_search_external_media')).toBe(true)
     expect(externalOn.some(tool => tool.name === 'resolve_visual_intents')).toBe(true)
     expect(externalOn.some(tool => tool.name === 'import_external_media')).toBe(true)

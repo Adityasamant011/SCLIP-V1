@@ -446,30 +446,33 @@ test('production terminal adapter preserves real PTY typing, resize and snapshot
   fs.chmodSync(fixture, 0o700)
   const { app, page } = await launchApp()
   try {
+    await newProject(page, { parentFolder: tmpDir('sclip-terminal-project-'), name: 'synthetic-terminal', canvas: { width: 640, height: 360, fpsNum: 30, fpsDen: 1 } })
+    const projectId = (await summary(page)).project_id
+    const mcp = await page.evaluate(() => (window as any).api.mcp.getInfo())
     await app.evaluate(async (_electron, options) => {
       // Playwright's main-process evaluation has no dynamic-import callback.
       const { HermesTerminalRuntime } = (process as any).getBuiltinModule('module').createRequire(options.modulePath)(options.modulePath)
       const events: string[] = []
       const runtime = new HermesTerminalRuntime({ isPackaged: false, resourcesPath: '', userDataPath: options.root,
-        executableOverride: options.fixture, getMcpInfo: () => ({ url: 'http://127.0.0.1:1/mcp', bearer_token: 'synthetic-mcp-secret' }),
+        executableOverride: options.fixture, getMcpInfo: () => options.mcp,
         getProviderEnvironment: () => ({ OPENROUTER_API_KEY: 'synthetic-provider-secret' }), assertSession: async () => {},
         onOutput: (event: { data: string }) => events.push(event.data), onExit: () => {},
       })
-      ;(globalThis as any).__terminalFixture = { runtime, events }
-      await runtime.ensure('synthetic-project', 'synthetic-session', 80, 24)
-    }, { modulePath, root, fixture })
+      ;(globalThis as any).__terminalFixture = { runtime, events, projectId: options.projectId }
+      await runtime.ensure(options.projectId, 'synthetic-session', 80, 24)
+    }, { modulePath, root, fixture, mcp, projectId })
     const output = () => app.evaluate(() => (globalThis as any).__terminalFixture.events.join('') as string)
     await expect.poll(output).toContain('"ready": true')
     expect(await output()).toContain('"background": "#0b0d12"')
     expect(await output()).not.toContain('synthetic-provider-secret')
     await app.evaluate(async () => {
       const runtime = (globalThis as any).__terminalFixture.runtime
-      await runtime.resize('synthetic-project', 'synthetic-session', 100, 40)
-      await runtime.input('synthetic-project', 'synthetic-session', 'hello你好\x1b[200~paste\x1b[201~\n')
+      await runtime.resize((globalThis as any).__terminalFixture.projectId, 'synthetic-session', 100, 40)
+      await runtime.input((globalThis as any).__terminalFixture.projectId, 'synthetic-session', 'hello你好\x1b[200~paste\x1b[201~\n')
     })
     await expect.poll(output).toContain('hello你好')
     await expect.poll(output).toContain('"cols": 100, "rows": 40')
-    const snapshot = await app.evaluate(() => (globalThis as any).__terminalFixture.runtime.ensure('synthetic-project', 'synthetic-session'))
+    const snapshot = await app.evaluate(() => (globalThis as any).__terminalFixture.runtime.ensure((globalThis as any).__terminalFixture.projectId, 'synthetic-session'))
     expect(snapshot.history).toContain('hello你好')
     expect(snapshot.history).not.toContain('synthetic-provider-secret')
     await invokeCmd(page, 'project_new_workspace', { parentFolder: tmpDir('sclip-post-terminal-'), name: 'post-terminal', width: 1080, height: 1920, fpsNum: 30, fpsDen: 1 })

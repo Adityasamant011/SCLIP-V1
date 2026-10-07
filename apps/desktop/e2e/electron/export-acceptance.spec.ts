@@ -14,6 +14,7 @@ test('Export acceptance test for Hermes talking-head edit', async () => {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..')
   const sourceProject = process.env.SCLIP_SOURCE_PROJECT ?? path.join(os.homedir(), 'Documents/1/Mega test')
   const sourceMedia = path.join(sourceProject, 'Media/Raw Talking head tutorial video for editing practice.mp4')
+  test.skip(process.env.SCLIP_PRIVATE_EXPORT_ACCEPTANCE !== '1', 'Manual private-project export gate; synthetic audio/export conformance is the release gate')
   expect(fs.existsSync(sourceMedia), 'Source media exists').toBe(true)
 
   const outputDir = path.resolve(repoRoot, 'apps/desktop/e2e/bench-results/real-editing')

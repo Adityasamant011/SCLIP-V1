@@ -419,7 +419,7 @@ async function runHermesTest(project: Project, prompt: string, maxTurns = 12, ti
   }
 }
 
-describe('SCLIP Phase 2D: Final Real Hermes Runtime Validation', () => {
+describe.skipIf(process.env.SCLIP_ALLOW_PROVIDER_TESTS !== '1')('SCLIP Phase 2D: Final Real Hermes Runtime Validation', () => {
   beforeAll(async () => {
     await initEval()
   })
@@ -539,7 +539,7 @@ describe('SCLIP Phase 2D: Final Real Hermes Runtime Validation', () => {
   }, 600_000)
 })
 
-describe('SCLIP Phase 2E: Real Hermes Targeted Revision', () => {
+describe.skipIf(process.env.SCLIP_ALLOW_PROVIDER_TESTS !== '1')('SCLIP Phase 2E: Real Hermes Targeted Revision', () => {
   beforeAll(async () => {
     await initEval()
   })

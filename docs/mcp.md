@@ -779,3 +779,29 @@ filters by category (`Mcp`) and source (`Agent { client }`).
 - Shim configs carry no token — the shim reads it from `mcp_auth.json` at connect time, so the bearer never spreads into client config files.
 - Token surfaced in the connect panel's advanced section; the HTTP connect snippet (which embeds the token) is printed to stdout only in unpackaged dev / e2e runs, never in a packaged build.
 - Cloud-API keys live in the OS keyring, not in project files.
+
+### Explicit repair and range operations
+
+- `ripple_cut_range { layer_ids, start_us, end_us, expected_state_version }`: explicitly selected timeline interval removal and downstream closure, respecting existing authored links. Requires fresh state and legal main-track geometry; returns authoritative affected layers and relationship/geometry changes.
+- `apply_repair_transaction { reason, expected_state_version, operations }`: 1–8 explicitly authored operations, validated and committed atomically. Invalid/stale batches publish nothing. Returns per-operation before/after and state/relationship receipts; verification follows the complete repair boundary. No partner edits or creative parameters are generated.
+- `inspect_rendered_audio { start_us, end_us, composition_id? }`: rendered current mix measurements and local speech observations, with explicit unavailable status when local recognition is not configured.
+- `inspect_timeline_temporal_window { start_us, end_us, representative_samples?, question? }`: bounded chronological rendered timeline samples and separate local-model visual observations; no editorial verdict.
+
+### Evidence and review integration
+
+- `get_editorial_evidence_packet { composition_id?, start_us?, end_us? }`: compact current structure, source mappings, paired A/V relationships and typed evidence with authoritative state identity. Model observations remain fallible; absent evidence stays unknown.
+- `get_source_observations { media_id }`: source-time visual/transcript observations and provenance, never timeline-pixel proof.
+- `get_source_understanding { media_id, detail? }`: bounded coarse coverage across available modalities, metadata and unobserved regions; no segment ranking or story selection.
+- `get_source_speech_context { media_id, start_us, end_us }`: source-time transcript and speech context around selected boundaries, with explicit availability/provenance.
+- `inspect_timeline_range_visuals { start_us, end_us, representative_samples?, question? }`: representative composed-frame observations kept separately; not a universal framing judgment. Consult current tools/list for optional parameter names.
+- `calculate_video_fit { layer_id, mode, focus_x?, focus_y? }`: deterministic cover/contain geometry only. The editor selects focus and decides whether any transform should be applied.
+- `get_timeline_critique { }`: current technical/structural diagnostics; clean status does not establish editorial quality.
+- `revision_control { action, ... }`: bounded review lifecycle, explicit issue selection, checkpoints, freshness and modality guards. No issue or creative repair is chosen automatically.
+- `record_issue { description, severity, repairable, evidence_receipt_ids, ... }`: register the editor's grounded issue using current receipts and affected layers/range.
+- `withdraw_issue { issue_id, reason, evidence_receipt_ids }`: explicit reconsideration supported by current evidence.
+
+### Optional external media (disabled by default)
+
+- `video_search_external_media { query, ... }`: external media discovery only when explicitly enabled.
+- `resolve_visual_intents { intents, ... }`: optional external visual discovery for editor-authored intent; no automatic placement.
+- `import_external_media { candidate_id, ... }`: import an explicitly selected cached candidate; no automatic cut or timeline placement.

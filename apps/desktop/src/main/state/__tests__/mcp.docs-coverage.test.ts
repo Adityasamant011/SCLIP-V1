@@ -21,8 +21,8 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { MCP_TOOL_DEFS } from '../mcp-commands'
-import { MOTIF_TOOL_DEFS, MOTIF_RESOURCE_DEFS } from '../../mcp/motifToolDefs'
+import { MOTIF_RESOURCE_DEFS } from '../../mcp/motifToolDefs'
+import { registeredMcpTools } from '../../mcp/server'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../../../..')
 const doc = readFileSync(path.join(repoRoot, 'docs/mcp.md'), 'utf8')
@@ -33,11 +33,7 @@ const rust = JSON.parse(readFileSync('fixtures/mcp/rust-catalog-snapshot.json', 
   prompts: Array<{ name: string }>
 }
 
-const toolNames = [
-  ...rust.tools.map((t) => t.name),
-  ...MCP_TOOL_DEFS.map((d) => d.name),
-  ...MOTIF_TOOL_DEFS.map((d) => d.name),
-]
+const toolNames = (await registeredMcpTools({ mcpCatalog: async () => JSON.stringify(rust) } as any, { sourceObservationIndex: {} as any, enableExternalMedia: true, evaluateSourcePassages: async () => ({}) })).map(t => t.name)
 const resourceUris = [...rust.resources.map((r) => r.uri), ...MOTIF_RESOURCE_DEFS.map((r) => r.uri)]
 const promptNames = rust.prompts.map((p) => p.name)
 

@@ -1252,6 +1252,25 @@ const enUS = {
     "validate_rough_cut_plan": "Validate rough cut plan",
     "apply_rough_cut_plan": "Apply rough cut plan",
     "get_timeline_context": "Read timeline context",
+    "get_editorial_evidence_packet": "Read editorial evidence",
+    "revision_control": "Manage review session",
+    "record_issue": "Record review issue",
+    "withdraw_issue": "Withdraw review issue",
+    "vision_inspect": "Inspect visual evidence",
+    "inspect_timeline_range_visuals": "Inspect timeline visuals",
+    "inspect_rendered_audio": "Inspect rendered audio",
+    "inspect_timeline_temporal_window": "Inspect timeline sequence",
+    "calculate_video_fit": "Calculate video fit",
+    "get_timeline_critique": "Read timeline diagnostics",
+    "video_search_external_media": "Search external media",
+    "resolve_visual_intents": "Search visual references",
+    "import_external_media": "Import external media",
+    "get_source_observations": "Read source observations",
+    "get_source_understanding": "Read source coverage",
+    "get_source_speech_context": "Read source speech context",
+    "evaluate_source_passages": "Search source passages",
+    "ripple_cut_range": "Cut and close range",
+    "apply_repair_transaction": "Apply repair transaction",
     "inspect_timeline_frame": "Inspect timeline frame",
     "render_timeline_range": "Render timeline range preview",
     "validate_rough_cut_review": "Validate rough cut review",
@@ -2426,6 +2445,7 @@ const enUS = {
   // history-labels.test.ts gates the placeholders against what each builder
   // actually supplies, so one can never render literally.
   history: {
+    repair: { transaction: "Applied repair transaction" },
     initial: "Initial",
     layer: {
       add: "Added clip",

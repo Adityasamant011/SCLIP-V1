@@ -13,14 +13,12 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import en from '../../../renderer/i18n/locales/en-US'
-import { MCP_TOOL_DEFS } from '../mcp-commands'
-import { MOTIF_TOOL_DEFS } from '../../mcp/motifToolDefs'
-import { mergeMcpCatalog } from '../../mcp/mcpCatalog'
+import { registeredMcpTools } from '../../mcp/server'
 
 const rust = JSON.parse(readFileSync('fixtures/mcp/rust-catalog-snapshot.json', 'utf8')) as {
   tools: Array<{ name: string }>
 }
-const merged = mergeMcpCatalog(rust.tools, [...MCP_TOOL_DEFS, ...MOTIF_TOOL_DEFS])
+const merged = await registeredMcpTools({ mcpCatalog: async () => JSON.stringify(rust) } as any, { sourceObservationIndex: {} as any, enableExternalMedia: true, evaluateSourcePassages: async () => ({}) })
 const labels: Record<string, string> = en.agent_panel.tools
 
 describe('agent_panel.tools labels', () => {

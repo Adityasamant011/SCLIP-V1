@@ -19,6 +19,8 @@ export interface RangeRenderOptions {
   projectDir?: string
   resourcesPath?: string
   signal?: AbortSignal
+  /** Evidence/export modality only; does not change authored timeline state. */
+  audioOnly?: boolean
 }
 
 export interface RangeRenderResult {
@@ -35,7 +37,7 @@ export interface RangeRenderResult {
 export async function exportThroughLiveCompositor(
   project: Project,
   window: { isDestroyed(): boolean; webContents: { executeJavaScript(code: string): Promise<unknown> } } | null,
-  request: { outputPath: string; startUs: number; endUs: number; resolutionHeight?: number; fps?: number },
+  request: { outputPath: string; startUs: number; endUs: number; resolutionHeight?: number; fps?: number; audioOnly?: boolean },
 ): Promise<void> {
   if (!window || window.isDestroyed()) throw new Error('Composed export requires an open Sclip desktop window')
   const code = `window.__sclipExportRange ? window.__sclipExportRange(${JSON.stringify({
@@ -45,10 +47,11 @@ export async function exportThroughLiveCompositor(
     endUs: request.endUs,
     resolutionHeight: request.resolutionHeight,
     fps: request.fps,
+    audioOnly: request.audioOnly,
   })}) : Promise.reject(new Error('Sclip export surface is not ready'))`
   await window.webContents.executeJavaScript(code)
   const stat = fs.statSync(request.outputPath, { throwIfNoEntry: false })
-  if (!stat || stat.size <= 1024) throw new Error('The production export flow did not produce a video file')
+  if (!stat || stat.size <= 1024) throw new Error('The production export flow did not produce a media file')
 }
 
 /** Hermes's short QA range: actual production video compositor and audio mix. */
@@ -66,9 +69,9 @@ export async function renderComposedTimelineRange(
   }
   options.signal?.throwIfAborted()
   const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sclip-composed-qa-'))
-  const outputPath = path.join(outputDir, `${randomUUID()}.mp4`)
+  const outputPath = path.join(outputDir, `${randomUUID()}.${options.audioOnly ? 'm4a' : 'mp4'}`)
   try {
-    await exportThroughLiveCompositor(project, options.getActiveWindow(), { outputPath, startUs: start_us, endUs: end_us })
+    await exportThroughLiveCompositor(project, options.getActiveWindow(), { outputPath, startUs: start_us, endUs: end_us, audioOnly: options.audioOnly })
     options.signal?.throwIfAborted()
   } catch (error) {
     fs.rmSync(outputDir, { recursive: true, force: true })

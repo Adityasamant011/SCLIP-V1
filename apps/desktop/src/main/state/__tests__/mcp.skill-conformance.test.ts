@@ -17,9 +17,8 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { MCP_TOOL_DEFS } from '../mcp-commands'
-import { MOTIF_TOOL_DEFS, MOTIF_RESOURCE_DEFS } from '../../mcp/motifToolDefs'
-import { SOURCE_PASSAGE_TOOL } from '../../sclip/sourcePassageEvaluation'
+import { MOTIF_RESOURCE_DEFS } from '../../mcp/motifToolDefs'
+import { registeredMcpTools } from '../../mcp/server'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../../../..')
 const SKILL_SOURCES = [
@@ -32,17 +31,7 @@ const rust = JSON.parse(readFileSync(path.join(repoRoot, 'apps/desktop/fixtures/
   resources: Array<{ uri: string }>
   prompts: Array<{ name: string }>
 }
-const toolNames = new Set([
-  ...rust.tools.map((t) => t.name),
-  ...MCP_TOOL_DEFS.map((d) => d.name),
-  ...MOTIF_TOOL_DEFS.map((d) => d.name),
-  SOURCE_PASSAGE_TOOL.name,
-  // Main-process read tools are merged at tools/list, not in the Rust
-  // snapshot/actor mutation table. Read their actual definitions rather than
-  // pretending advertised optional tools are non-tool vocabulary.
-  ...[...readFileSync(path.join(repoRoot, 'apps/desktop/src/main/mcp/server.ts'), 'utf8')
-    .matchAll(/const \w+_TOOL = \{\s*name: '([^']+)'/g)].map(m => m[1]!),
-])
+const toolNames = new Set((await registeredMcpTools({ mcpCatalog: async () => JSON.stringify(rust) } as any, { sourceObservationIndex: {} as any, enableExternalMedia: true, evaluateSourcePassages: async () => ({}) })).map(t => t.name))
 const resourceUris = new Set([
   ...rust.resources.map((r) => r.uri),
   ...MOTIF_RESOURCE_DEFS.map((r) => r.uri),
@@ -58,7 +47,7 @@ const HERMES_DISCOVERY_TOOLS = new Set(['tool_search', 'tool_describe', 'memory'
 // with a live tool name (checked below).
 const KNOWN_NON_TOOLS = new Set([
   // SKILL.md — tool params
-  'from', 'request', 'start_us', 'end_us', 'limit', 't_us', 'estimated_duration_us', 'critical', 'focus_x', 'focus_y', 'text', 'voice', 'speed',
+  'from', 'request', 'start_us', 'end_us', 'limit', 't_us', 'estimated_duration_us', 'text', 'voice', 'speed',
   // motif-authoring.md — manifest fields
   'id', 'version', 'name', 'size', 'default_duration_s', 'max_duration_s',
   'max_duration_prop', 'content_duration_s', 'settle_rafs', 'fonts',

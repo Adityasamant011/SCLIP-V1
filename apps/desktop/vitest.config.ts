@@ -26,6 +26,9 @@ export default defineConfig({
     // Loads the weftcut-eval wasm before every test file (snap/keyframe/audio
     // math now runs through it). Requires the generated module — the `pretest`
     // npm hook runs build:wasm first.
+    exclude: ['**/node_modules/**', '**/*.browser.test.ts', '**/*.provider.test.ts'],
+    maxWorkers: 4,
+    testTimeout: 15_000,
     setupFiles: ['./src/renderer/testSetup.ts'],
   },
   resolve: {

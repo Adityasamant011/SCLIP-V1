@@ -69,7 +69,7 @@ describe('text correction through project state', () => {
     delete captions()[0]!.metadata[CAPTION_TIMING_KEY]
     p.settings.correction_script = '先准备彩纸然后对折。'
     applyAddCaptionTrack(p, ids, [
-      { start_us: 3_000_000, end_us: 4_000_000, text: '然后对折。' },
+      { start_us: 3_000_000, end_us: 4_000_000, text: '然后对折。', style: { bold: true } },
       { start_us: 7_000_000, end_us: 9_000_000, text: '窗外的小鸟正在唱歌。' },
     ], c.width, c.height, null, c.id)
     applyTextCorrection(p, ids, c.id, null)
@@ -153,10 +153,19 @@ describe('text correction through project state', () => {
   })
   it('joins imported cue fragments into the manuscript sentence', () => {
     const { p, c, ids, captions } = fixture('今天介绍自动剪', false)
-    applyAddCaptionTrack(p, ids, [{ start_us: 1_400_000, end_us: 3_000_000, text: '缉功能' }], c.width, c.height, null, c.id)
+    applyAddCaptionTrack(p, ids, [{ start_us: 1_400_000, end_us: 3_000_000, text: '缉功能', style: { bold: true } }], c.width, c.height, null, c.id)
     applyTextCorrection(p, ids, c.id, null)
     expect(captions().map(l => l.params.kind === 'Text' && l.params.content)).toEqual(['今天介绍自动剪辑功能。'])
     expect(captions().map(l => [l.t_start_us, l.t_end_us])).toEqual([[0, 3_000_000]])
+    expect(applyTextCorrection(p, ids, c.id, null).changed).toBe(0)
+  })
+  it('corrects a split word across intentional style boundaries without merging them', () => {
+    const { p, c, ids, captions } = fixture('今天介绍自动剪', false)
+    applyAddCaptionTrack(p, ids, [{ start_us: 1_400_000, end_us: 3_000_000, text: '缉功能' }], c.width, c.height, null, c.id)
+    applyTextCorrection(p, ids, c.id, null)
+    expect(captions().map(l => l.params.kind === 'Text' && l.params.content)).toEqual(['今天介绍自动剪', '辑功能。'])
+    expect(captions().map(l => l.params.kind === 'Text' && l.params.font.weight)).toEqual([700, 400])
+    expect(captions().map(l => [l.t_start_us, l.t_end_us])).toEqual([[0, 1_400_000], [1_400_000, 3_000_000]])
     expect(applyTextCorrection(p, ids, c.id, null).changed).toBe(0)
   })
   it('refuses locked targets atomically', () => {

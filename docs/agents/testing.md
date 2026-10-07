@@ -119,3 +119,13 @@ in CI: `determinism-artifacts/`, `test-results/`, `playwright-report/`,
 - `docs/decode-bench.md` — the decode-strategy benchmark.
 - `docs/platform-codecs.md` — platform capability evidence, hosted-CI limits,
   and where remaining hardware verification is tracked.
+
+## Provider isolation and historical acceptance fixtures
+
+Routine Vitest always excludes `**/*.provider.test.ts`. Real Hermes provider tests were renamed to this suffix and also require `SCLIP_ALLOW_PROVIDER_TESTS=1` at suite level. The only explicit provider configuration is `vitest.provider.config.ts`; it refuses to load without the opt-in. Deliberately spending model credits requires `SCLIP_ALLOW_PROVIDER_TESTS=1 npx vitest run --config vitest.provider.config.ts` from desktop. Never use this command for release-health checks.
+
+Private local vision fixtures require `SCLIP_LOCAL_VISION_ACCEPTANCE=1`. Their skipped suites do not execute fixture setup. Private saved-project export requires `SCLIP_PRIVATE_EXPORT_ACCEPTANCE=1`; generated codec/audio export tests remain the normal gates. Eight historical Phase 2D private-media/empty-composition tests are explicitly retired/skipped; current Evidence Packet, speech-context, rendered-audio, temporal-window and live Electron tests cover their supported contracts. The old `realMediaVerification.test.ts.archived` is retained for history but retired from routine discovery: it embeds private transcripts and an obsolete deterministic creative-quality hard gate, not the current evidence-only architecture.
+
+Release unit defaults use four workers and a 15-second default timeout to keep real actor property/history and renderer tests from spuriously timing out under full-suite load. Explicit longer local-model timeouts remain unchanged.
+
+The synthetic tool-health Electron test optionally accepts `SCLIP_TEST_SPEECH_CONFIG` pointing to an existing nonsecret speech config; it copies only local Whisper settings into the isolated test profile, never provider credentials.
