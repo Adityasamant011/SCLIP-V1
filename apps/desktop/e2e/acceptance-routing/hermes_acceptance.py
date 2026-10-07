@@ -86,6 +86,11 @@ def main():
     args = sys.argv[3:]
     assert args[args.index('--provider')+1] == 'openrouter'
     assert args[args.index('-m')+1] == result['model']
+    # Read the effective timeout only when the real callback is entered.
+    import cli
+    from tools.clarify_gateway import resolve_clarify_timeout
+    from clarify_observer import install_clarify_observer
+    install_clarify_observer(cli, resolve_clarify_timeout)
     sys.argv = ['hermes_cli.main', *args]
     runpy.run_module('hermes_cli.main', run_name='__main__')
 

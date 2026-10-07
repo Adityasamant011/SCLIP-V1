@@ -1,5 +1,7 @@
 import {_electron as electron} from '@playwright/test';import {Client} from '@modelcontextprotocol/sdk/client/index.js';import {StreamableHTTPClientTransport} from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {spawn} from 'node:child_process';import {createHash} from 'node:crypto';import {parse,stringify} from 'yaml';import assert from 'node:assert/strict';
+import {superviseSession} from './session-supervisor.mjs';
+// Poffertjes is retired as holdout; existing output guard forbids repeating it.
 import {acceptanceConfig,cleanRoutingEnvironment} from './config.mjs';
 assert.equal(process.env.SCLIP_PAID_HOLDOUT_OPT_IN,'1','Paid holdout requires separate explicit authorization; this task is checks only');
 const ready=JSON.parse(fs.readFileSync('.scratch/phase4b-final/routing-readiness.json'));
@@ -40,11 +42,13 @@ try{
  const started=Date.now(),trace=fs.createWriteStream(path.join(out,'hermes-observable-trace.txt'));let pending='',thinking=false;
  const receive=c=>{pending+=String(c);let i;while((i=pending.indexOf('\n'))>=0){const line=pending.slice(0,i+1);pending=pending.slice(i+1);if(line.includes('┌─ Reasoning')){thinking=true;continue;}if(thinking){if(line.includes('└─'))thinking=false;continue;}trace.write(line);}};
  agent.stdout.on('data',receive);agent.stderr.on('data',receive);
+ const lifecycle=fs.createWriteStream(path.join(out,'session-lifecycle.jsonl'));
+ const supervisor=superviseSession(agent,{deadlineMs:1200000,onEvent:e=>lifecycle.write(JSON.stringify(e)+'\n')});
  agent.stdin.end(JSON.stringify(launchRequest));paidStarted=true;
- const progress=setInterval(()=>console.log(JSON.stringify({status:'running',elapsed_s:Math.round((Date.now()-started)/1000),provider_requests:'recorded in observable Hermes trace; no proxy'})),30000);
- const deadline=setTimeout(()=>agent.kill('SIGTERM'),1200000);
- const code=await new Promise(resolve=>agent.on('exit',c=>resolve(c))).finally(()=>{clearInterval(progress);clearTimeout(deadline);if(!thinking&&pending)trace.write(pending);trace.end();});
- json('session-result.json',{code,runtime_s:(Date.now()-started)/1000,one_session:true,paid_started:paidStarted});
+ const progress=setInterval(()=>console.log(JSON.stringify({status:'running',...supervisor.status(),provider_requests:'recorded in observable Hermes trace; no proxy'})),30000);
+ const result=await supervisor.done.finally(()=>{clearInterval(progress);if(!thinking&&pending)trace.write(pending);trace.end();lifecycle.end();});
+ const code=result.code;
+ json('session-result.json',{...result,runtime_s:(Date.now()-started)/1000,one_session:true,paid_started:paidStarted});
  await invoke('project_save');fs.copyFileSync(projectFile,path.join(out,'final-project.json'));
  const events=await invoke('log_list');json('mcp-events.json',events.filter(e=>e.category?.kind==='Mcp'));json('history.json',await invoke('project_history_view'));
  const final=JSON.parse(fs.readFileSync(projectFile));const root=final.compositions[final.root_id];const layers=root.tracks.flatMap(t=>t.layers);const duration=Math.max(0,...layers.map(l=>l.t_end_us));json('metrics.json',{duration_us:duration,layers:layers.length,kinds:layers.reduce((a,l)=>(a[l.params.kind]=(a[l.params.kind]||0)+1,a),{})});

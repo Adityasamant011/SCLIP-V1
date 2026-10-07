@@ -38,3 +38,34 @@ Offline tests, from the editor root:
 Metadata checker is bundled with esbuild, externalizing Electron, and executed by
 Electron to use the same Sclip secure-store identity. Recheck it before any later
 paid authorization; this task authorizes no inference.
+
+## Clarification safety
+
+The acceptance bootstrap observes the real `HermesCLI._clarify_callback` without
+changing its arguments, result, timeout or behavior. At entry it calls the same
+`resolve_clarify_timeout(cli.CLI_CONFIG)` used by Hermes. Structured events expose
+session identity and **effective** timeout; they contain no question, answer,
+credential or hidden reasoning. Configuration defaults are never used by the
+Node supervisor to guess how long a clarification should take.
+
+`session-supervisor.mjs` waits for the original callback to return and observes
+the same process afterward. It does not auto-answer, classify question text,
+restart, or terminate on clarification/idle time. Even when the effective timeout
+expires, it keeps waiting for Hermes's actual return event. The original absolute
+20-minute deadline remains in force; SIGTERM then a bounded SIGKILL grace stops
+an unresponsive launcher. Progress and `session-lifecycle.jsonl` make waiting,
+natural return and deadline termination explicit. Operators must let this
+supervisor own session lifetime; direct OS kills cannot be prevented by telemetry.
+
+The clarification schema has no explicit procedural/creative category. No
+heuristic classification or neutral answer injection was added.
+
+Poffertjes is **RETIRED AS HOLDOUT**, but remains valid regression/debug media.
+The existing result directory prevents the old prepared entrypoint from running
+it again. A future unseen holdout requires newly authorized media/configuration.
+No new media or model session was used for these tests.
+
+Additional offline tests:
+
+    node --test apps/desktop/e2e/acceptance-routing/session-supervisor.test.mjs
+    PYTHONDONTWRITEBYTECODE=1 /Users/adityasamant/SCLIP/hermes-agent-src/.venv/bin/python apps/desktop/e2e/acceptance-routing/test_clarify_observer.py
