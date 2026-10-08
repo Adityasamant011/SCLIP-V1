@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -15,7 +15,10 @@ describe('Finished references use current imported identity and cached local evi
       project.media_pool.source={id:'source',kind:'Video',label:'Synthetic',file_hash_blake3:'synthetic-hash',metadata:{duration_us:4_000_000}} as any
       const overview={observations:[{source_t_us:0,description:'Text visible',evidence:'model_observation'},{source_t_us:2_000_000,description:'No text',evidence:'model_observation'}],speech:{status:'not_observed'}}
       const before=structuredClone(project)
-      const result=await rememberCreatorReference(store,()=>project,{media_id:'source',relationship:'own_finished',intent:'persistent'},{cachedUnderstanding:async()=>overview} as any)
+      const cache=vi.fn(async()=>overview), analysis=vi.fn(()=>{throw new Error('Reanalysis forbidden')})
+      const result=await rememberCreatorReference(store,()=>project,{media_id:'source',relationship:'own_finished',intent:'persistent'},{cachedUnderstanding:cache,understand:analysis} as any)
+      await rememberCreatorReference(store,()=>project,{media_id:'source',relationship:'own_finished',intent:'persistent'},{cachedUnderstanding:cache,understand:analysis} as any)
+      expect(cache).toHaveBeenCalledTimes(2);expect(analysis).not.toHaveBeenCalled()
       expect(result.evidence[0]!.data.observations).toEqual(overview)
       expect(result.evidence[0]!.data.source_hash).toBe('synthetic-hash')
       expect(result.preferences).toHaveLength(0); expect(project).toEqual(before)

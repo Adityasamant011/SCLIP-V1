@@ -1291,7 +1291,7 @@ app.whenReady().then(async () => {
       }
     },
     getProfileConfig: () => readHermesProfile(path.join(app.getPath('userData'), 'sclip-hermes')),
-    getCreatorContext: projectId => creatorStyleStore?.context(projectId) ?? '',
+    getCreatorContext: (projectId, request) => creatorStyleStore?.context(projectId, request) ?? '',
     getCreatorSessionKey: projectId => creatorStyleStore?.sessionKey(projectId) ?? 'local:0',
     assertCreatorGateway: projectId => {
       if (creatorStyleStore?.binding(projectId).creatorId !== 'local') throw new Error('Use the Hermes terminal for an isolated creator session')

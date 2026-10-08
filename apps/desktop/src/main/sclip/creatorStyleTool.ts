@@ -4,6 +4,7 @@ export const CREATOR_STYLE_TOOL = {
   inputSchema: { type: 'object', properties: {
     action: { type: 'string', enum: ['context', 'evidence', 'hypothesis', 'counterexample'] },
     id: { type: 'string' }, hypothesis: { type: 'string', maxLength: 1000 }, dimension: { type: 'string', maxLength: 80 },
+    request: { type: 'string', maxLength: 1000, description: 'Optional current editing objective for local lexical memory relevance. Does not select clips or creative values.' },
     scope: { type: 'object', properties: { kind: { type: 'string', enum: ['creator', 'series', 'project'] } }, required: ['kind'], additionalProperties: false },
     evidence_ids: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 12 },
   }, required: ['action'], additionalProperties: false },

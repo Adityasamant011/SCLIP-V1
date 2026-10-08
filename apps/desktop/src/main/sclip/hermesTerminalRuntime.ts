@@ -3,7 +3,7 @@ import { startAutonomousReview, initialEditorialEvidence, stageEditorialEvidence
 import fs from 'node:fs'
 import { createHash } from 'node:crypto'
 import * as pty from 'node-pty'
-import { readHermesProfile, writeHermesProfile, initializeCreatorHermesControls } from './hermesRuntime.js'
+import { readHermesProfile, writeHermesProfile, initializeCreatorHermesControls, assertForegroundHermesConfiguration } from './hermesRuntime.js'
 import { createHermesOutputRedactor, hermesBaseEnvironment } from './hermesSecrets.js'
 import type { HermesProfileConfig } from './hermesRuntime.js'
 
@@ -65,11 +65,11 @@ export class HermesTerminalRuntime {
     const launch = this.resolveLaunch()
     const baseHome = path.join(this.options.userDataPath, 'sclip-hermes')
     const home = this.options.getCreatorHome?.(baseHome, projectId) ?? baseHome
+    const creatorKey = this.options.getCreatorSessionKey?.(projectId)
     fs.mkdirSync(home, { recursive: true, mode: 0o700 })
     const mcp = this.options.getMcpInfo()
     const review = mode === 'review' ? await startAutonomousReview(mcp, projectId) : null
     const packet=review?.editorial_evidence_packet ?? await initialEditorialEvidence(mcp,projectId)
-    const stagedEvidence=stageEditorialEvidence(home,packet,this.options.getCreatorContext?.(projectId) ?? '')
     const configPath = path.join(home, 'config.yaml')
     if (home !== baseHome) {
       initializeCreatorHermesControls(baseHome, home)
@@ -78,8 +78,12 @@ export class HermesTerminalRuntime {
       const skill = path.join(baseHome, 'skills', 'weftcut')
       if (fs.existsSync(skill)) fs.cpSync(skill, path.join(home, 'skills', 'weftcut'), { recursive: true })
     } else if (!fs.existsSync(configPath)) writeHermesProfile(home, 0)
+    assertForegroundHermesConfiguration(home)
+    await this.options.assertSession(projectId, sessionId)
+    if (creatorKey !== this.options.getCreatorSessionKey?.(projectId)) throw new Error('Creator context changed while opening Hermes; open the terminal again')
     const profile = readHermesProfile(home)
     const providerEnv = this.options.getProviderEnvironment(profile)
+    const stagedEvidence=stageEditorialEvidence(home,packet,this.options.getCreatorContext?.(projectId) ?? '')
     const env: Record<string, string | undefined> = {
       ...hermesBaseEnvironment(),
       ...providerEnv,

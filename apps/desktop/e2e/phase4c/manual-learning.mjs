@@ -1,0 +1,82 @@
+// Real graphical edits and installed runtime integration; no inference.
+import { _electron as electron, expect } from '@playwright/test';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'; import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+const root=fs.mkdtempSync(path.join(os.tmpdir(),'sclip-creator-gui-'));
+const output=path.resolve('.scratch/phase4c1');fs.mkdirSync(output,{recursive:true});
+const fixture=path.join(root,'offline-hermes');fs.copyFileSync('apps/desktop/e2e/phase4c/offline-hermes.py',fixture);fs.chmodSync(fixture,0o700);
+fs.writeFileSync(path.join(root,'recents.json'),JSON.stringify({entries:[],reopen_on_launch:false,last_new_project_parent:root}));
+fs.mkdirSync(path.join(root,'sclip-hermes'));fs.writeFileSync(path.join(root,'sclip-hermes/config.yaml'),'model:\n  provider: custom\n  default: offline-only\n  base_url: http://127.0.0.1:1/v1\n');
+const installed=process.env.SCLIP_LEARNING_INSTALLED==='1';
+const env=Object.fromEntries(Object.entries(process.env).filter(([k])=>!/(API_KEY|API_TOKEN|INFERENCE_MODEL|HERMES_HOME)/.test(k)));
+let app,client;
+const result={installed,paid_cost:0,real_model_calls:0};
+try {
+  const launch=async()=>{
+    app=await electron.launch({...(installed?{executablePath:'/Applications/Sclip.app/Contents/MacOS/Sclip'}:{}),args:[`--user-data-dir=${root}`,...(installed?[]:[path.resolve('apps/desktop/out/main/index.js')])],env:{...env,SCLIP_USER_DATA_DIR:root,SCLIP_HERMES_EXECUTABLE:fixture,SCLIP_OFFLINE_PROBE_DIR:root,SCLIP_JEV_ENABLED:'0',SCLIP_ENABLE_EXTERNAL_BROLL:'0',WEFTCUT_SUPPRESS_ELEVATION_NOTICE:'1'}});
+    const page=await app.firstWindow({timeout:60000});await page.waitForLoadState('domcontentloaded');await page.waitForFunction(()=>!!window.api?.backend);return page;
+  };
+  let page=await launch();
+  const invoke=(cmd,args={})=>page.evaluate(({cmd,args})=>window.api.backend.invoke(cmd,args),{cmd,args});
+  const connect=async()=>{
+    await client?.close();const info=await page.evaluate(()=>window.api.mcp.getInfo());
+    client=new Client({name:'creator-offline-acceptance',version:'1'},{});
+    await client.connect(new StreamableHTTPClientTransport(new URL(info.url),{requestInit:{headers:{Authorization:`Bearer ${info.bearer_token}`}}}));
+  };
+  const call=async(name,args)=>{const r=await client.callTool({name,arguments:args});assert(!r.isError,JSON.stringify(r.content));return r.content.find(c=>c.type==='text')?.text;};
+  await page.getByRole('button',{name:'New project',exact:true}).click();
+  await page.getByLabel('Project name',{exact:true}).fill('manual-correction');
+  await page.getByRole('button',{name:'Create',exact:true}).click();
+  await expect(page.locator('.startup-screen')).toHaveCount(0);
+  const initial=await invoke('project_summary');await connect();
+  const catalog=(await client.listTools()).tools;assert(catalog.some(t=>t.name==='creator_style_memory'));result.mcp_tool_count=catalog.length;
+  const id=await call('add_text_layer',{content:'Synthetic caption proposal',t_start_us:0,duration_us:2_000_000,font_size_px:76});
+  await page.getByRole('button',{name:/^Synthetic caption proposal Track/}).click();
+  const attribute=page.getByText('Attribute',{exact:true});if(await attribute.count())await attribute.first().click();
+  const font=page.getByLabel('Font size (px)',{exact:true});await expect(font).toBeVisible({timeout:20000});
+  for(const value of [70,60,54]) {
+    await font.focus();await font.press('Meta+a');await font.pressSequentially(String(value));await font.press('Enter');
+    await expect.poll(async()=>{const s=await invoke('project_summary');const l=s.compositions[s.root_id].tracks.flatMap(t=>t.layers).find(l=>l.id===id);return l?.params.font_size_px ?? l?.params.font?.size_px}).toBe(value);
+  }
+  const corrected=await invoke('sclip_creator_style',{action:'view'}),e=corrected.evidence[0],d=e.data.deltas[0];
+  assert.equal(corrected.evidence.length,1);assert.equal(e.kind,'correction');assert.equal(e.data.actor.kind,'User');assert.equal(e.data.operationCount,3);
+  assert(d.proposalOpId);assert.equal(JSON.parse(d.before).params.font.size_px,76);assert.equal(JSON.parse(d.after).params.font.size_px,54);assert.equal(corrected.preferences.length,0);
+  await page.screenshot({path:path.join(output,installed?'installed-gui.png':'workspace-gui.png')});
+  await call('creator_style_memory',{action:'hypothesis',hypothesis:'Possibly prefers smaller captions where readable',dimension:'caption',evidence_ids:[e.id]});
+  const hypothesis=(await invoke('sclip_creator_style',{action:'view'})).preferences[0];
+  await invoke('sclip_creator_style',{action:'approve',id:hypothesis.id});
+  await invoke('project_save');
+  await invoke('project_new_workspace',{parentFolder:root,name:'manual-only',width:640,height:360,fpsNum:30,fpsDen:1});
+  const next=await invoke('project_summary');
+  const mediaFile=path.join(root,'synthetic.mp4');execFileSync('/opt/homebrew/bin/ffmpeg',['-v','error','-f','lavfi','-i','color=c=blue:s=320x180:r=30','-t','3','-c:v','libx264','-pix_fmt','yuv420p',mediaFile]);
+  const mediaId=await invoke('import_media',{path:mediaFile});
+  const placed=await invoke('add_media_layer',{trackId:next.compositions[next.root_id].tracks[0].id,mediaId,tStartUs:0});
+  await invoke('trim_layer',{layerId:placed,edge:'out',newTUs:2_000_000,escapeLink:false});
+  const manual=await invoke('add_text_layer',{content:'Independent manual text',tStartUs:0,durationUs:2_000_000,fontSizePx:48});
+  const independent=(await invoke('sclip_creator_style',{action:'view'})).evidence.filter(e=>e.projectId===next.project_id);assert(independent.length>=2);assert(independent.every(e=>e.kind==='manual_edit'));
+  const demonstrated=independent.at(-1);
+  assert.equal(demonstrated.kind,'manual_edit');assert.equal(demonstrated.data.relationship,'independent_manual_edit');
+  await expect.poll(async()=>(await invoke('sclip_get_hermes_status')).runtimeState,{timeout:30000}).toBe('ready');
+  const session=await invoke('sclip_create_project_session',{projectId:next.project_id,name:'offline-context'});
+  await invoke('sclip_open_terminal',{projectId:next.project_id,sessionId:session.id});
+  await expect.poll(()=>fs.existsSync(path.join(root,'terminal-context.json'))).toBe(true);
+  const terminal=JSON.parse(fs.readFileSync(path.join(root,'terminal-context.json'),'utf8'));
+  assert(terminal.context.includes('Possibly prefers smaller captions'));assert(terminal.context.includes('CURRENT USER REQUEST takes priority'));
+  assert(/enabled: false/.test(terminal.config));
+  const source='/Users/adityasamant/SCLIP/hermes-agent-src';
+  const native=execFileSync(path.join(source,'.venv/bin/python'),['-c',"from agent.skill_commands import build_preloaded_skills_prompt; from agent.background_review import load_background_review_settings; import json,os; p,n,m=build_preloaded_skills_prompt(json.loads(os.environ['OFFLINE_SKILLS'])); assert 'Possibly prefers smaller captions' in p; assert load_background_review_settings()[0] is False; print('native preload + disabled review verified')"],{cwd:source,env:{PATH:process.env.PATH,HERMES_HOME:terminal.home,OFFLINE_SKILLS:JSON.stringify(terminal.skills),PYTHONDONTWRITEBYTECODE:'1'},encoding:'utf8'});
+  result.native_context=native.trim();result.actual_production_terminal='PASS';
+  await invoke('project_save');await client.close();client=undefined;await app.close();app=undefined;
+  page=await launch();await page.locator('.startup-recent-item').filter({hasText:'manual-only'}).click();
+  await expect(page.locator('.startup-screen')).toHaveCount(0);
+  const recovered=await invoke('sclip_creator_style',{action:'view'});
+  assert.equal(recovered.preferences.length,1);assert(recovered.context.includes('Possibly prefers smaller captions'));assert(recovered.evidence.some(record=>record.id===e.id));
+  await invoke('sclip_creator_style',{action:'disable',id:hypothesis.id});assert(!(await invoke('sclip_creator_style',{action:'view'})).context.includes('Possibly prefers smaller captions'));
+  await invoke('sclip_creator_style',{action:'reset'});assert.equal((await invoke('sclip_creator_style',{action:'view'})).evidence.length,0);
+  result.gui_manual_correction='PASS';result.gui_adjustment_grouping='PASS';result.manual_only='PASS';result.restart='PASS';result.controls_effective='PASS';
+  result.project_ids=[initial.project_id,next.project_id];result.context_characters=(corrected.context||'').length;
+  result.build=await app.evaluate(({app})=>({version:app.getVersion(),packaged:app.isPackaged,appPath:app.getAppPath()}));
+  fs.writeFileSync(path.join(output,installed?'installed-result.json':'workspace-result.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
+} catch(error) { if(app){ const p=await app.firstWindow();await p.screenshot({path:path.join(output,'failed-gui.png')}).catch(()=>{});fs.writeFileSync(path.join(output,'failed-gui.txt'),await p.locator('body').innerText().catch(()=>'')); } throw error; } finally {await client?.close().catch(()=>{});await app?.close().catch(()=>{});fs.rmSync(root,{recursive:true,force:true});}

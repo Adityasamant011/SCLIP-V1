@@ -30,7 +30,7 @@ interface BridgeConfig {
   getRuntimeStatus?: () => { state: 'stopped' | 'starting' | 'ready' | 'failed'; detail?: string }
   getMcpStatus: () => { port?: number; tools: number; resources: number }
   getProfileConfig?: () => { provider: string; model: string }
-  getCreatorContext?: (projectId: string) => string
+  getCreatorContext?: (projectId: string, request?: string) => string
   assertCreatorGateway?: (projectId: string) => void
   getCreatorSessionKey?: (projectId: string) => string
   redactForRenderer?: (text: string) => string
@@ -164,7 +164,7 @@ export async function startHermesRun(input: { prompt: string; projectId: string;
   try {
     // Hermes owns conversation identity. WeftCut remains the authority for all video state via MCP.
     bridge().assertCreatorGateway?.(input.projectId)
-    const creatorContext = bridge().getCreatorContext?.(input.projectId) ?? ''
+    const creatorContext = bridge().getCreatorContext?.(input.projectId, input.prompt) ?? ''
     const profile = bridge().getProfileConfig?.()
     const response = await request('/v1/runs', {
       method: 'POST', headers: headers(true), body: JSON.stringify({

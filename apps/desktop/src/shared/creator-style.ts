@@ -3,7 +3,7 @@ export interface CreatorBinding { creatorId: string; seriesId?: string; learning
 export interface CreatorIdentity { id: string; label: string; enabled: boolean }
 export interface CreatorEvidence {
   id: string; creatorId: string; projectId: string; seriesId?: string; at: string
-  kind: 'explicit_instruction' | 'correction' | 'undo' | 'reference'
+  kind: 'explicit_instruction' | 'correction' | 'manual_edit' | 'undo' | 'reference'
   authority: 'creator_statement' | 'ProjectActor' | 'source_metadata_and_local_observations'
   data: Record<string, unknown>
   scope?: StyleScope

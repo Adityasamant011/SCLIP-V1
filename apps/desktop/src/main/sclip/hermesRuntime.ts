@@ -66,6 +66,7 @@ export class HermesRuntime {
       const home = path.join(this.options.userDataPath, 'sclip-hermes')
       fs.mkdirSync(home, { recursive: true, mode: 0o700 })
       this.writeProfile(home)
+      assertForegroundHermesConfiguration(home)
       const profile = readHermesProfile(home)
       const providerEnv = this.options.getProviderEnvironment(profile)
       const mcp = this.options.getMcpInfo()
@@ -332,4 +333,11 @@ export function initializeCreatorHermesControls(base: string, home: string): voi
   const enabled = typeof config.auxiliary?.background_review?.enabled === 'boolean' ? config.auxiliary.background_review.enabled : false
   fs.mkdirSync(home, { recursive: true, mode: 0o700 })
   fs.writeFileSync(path.join(home, 'config.yaml'), `memory: ${JSON.stringify(memory)}\nskills: ${JSON.stringify(skills)}\nauxiliary:\n  background_review:\n    enabled: ${enabled}\n`, { mode: 0o600 })
+}
+
+/** Local learning must never start auxiliary inference. Retain explicit settings
+ * but reject unsafe launches instead of allowing Hermes's fail-open review default. */
+export function assertForegroundHermesConfiguration(home: string): void {
+  const config = parseYaml(fs.readFileSync(path.join(home, 'config.yaml'), 'utf8'))
+  if (config?.auxiliary?.background_review?.enabled !== false || config?.curator?.consolidate !== undefined && config.curator.consolidate !== false) throw new Error('Automatic memory/skill model reviews must be disabled for cost-safe Sclip editing; set auxiliary.background_review.enabled and curator.consolidate to false')
 }
