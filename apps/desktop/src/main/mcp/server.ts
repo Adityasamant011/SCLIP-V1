@@ -54,6 +54,8 @@ import { externalMediaService as defaultExternalMediaService, ExternalMediaServi
 import { downloadExternalMediaCandidate } from '../media/external/downloader.js'
 import { buildAttributionObligation, attachAttributionMetadata } from '../media/external/attribution.js'
 import type { VisualIntent } from '../media/external/types.js'
+import { CREATOR_STYLE_TOOL } from '../sclip/creatorStyleTool.js'
+import type { CreatorStyleStore } from '../sclip/creatorStyle.js'
 
 type Backend = import('@weftcut/core').Backend
 
@@ -1227,6 +1229,7 @@ export function mcpCommitObserver(getTsHost: () => TsActorHost | null): (tool: s
  *  positionals: `log` is the fourth and every one of them is optional, and each
  *  omitted seam must keep the behaviour it had before it existed. */
 export interface McpServerOptions {
+  creatorStyleStore?: CreatorStyleStore
   connectionId?: string
   getTsHost?: () => TsActorHost | null
   /** Active desktop preview for composition-faithful frame inspection. */
@@ -1280,6 +1283,7 @@ export async function registeredMcpTools(backend: Backend, opts: McpServerOption
   const all = mergeMcpCatalog(rust, [
     ...MCP_TOOL_DEFS,
     ...MOTIF_TOOL_DEFS,
+    CREATOR_STYLE_TOOL,
     EDITORIAL_PACKET_TOOL,
     REVISION_CONTROL_TOOL,
     RECORD_ISSUE_TOOL,
@@ -1301,6 +1305,9 @@ export async function registeredMcpTools(backend: Backend, opts: McpServerOption
 export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): Server {
   const revisionGuard = opts.revisionGuard ?? new RevisionLoopGuard(opts.revisionLoop === true)
   const getTsHost = opts.getTsHost ?? (() => null)
+  // A disconnected/stopping old Hermes connection must not read a newly bound creator.
+  const initialProjectId = getTsHost()?.actor.snapshot().project_id
+  let creatorSessionKey = initialProjectId && opts.creatorStyleStore ? opts.creatorStyleStore.sessionKey(initialProjectId) : undefined
   const getPreferredEngine = opts.getPreferredEngine ?? (() => null)
   const getVlm = opts.getVlm ?? NO_VLM
   const peaksPathFor = opts.peaksPathFor ?? NO_PEAKS_PATH
@@ -1327,7 +1334,7 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
     if (!service) return handler(req, extra)
     const params = (req.params ?? {}) as Record<string, unknown>
     const tool = method === 'tools/call' ? String(params.name ?? '') : method
-    const read = method !== 'tools/call' || tool === 'evaluate_source_passages' || tool === 'video_search_external_media' || tool === 'resolve_visual_intents' || /^(get_|list_|read_|ping$|view_|inspect_|analyze_|describe_|transcribe_|compare_|detect_)/.test(tool)
+    const read = method !== 'tools/call' || tool === 'creator_style_memory' || tool === 'evaluate_source_passages' || tool === 'video_search_external_media' || tool === 'resolve_visual_intents' || /^(get_|list_|read_|ping$|view_|inspect_|analyze_|describe_|transcribe_|compare_|detect_)/.test(tool)
     return service.run(connectionId, clientInfo()?.name ?? 'MCP', tool,
       method === 'tools/call' ? params.arguments ?? {} : params, read, () => handler(req, extra))
   }, deps, client)
@@ -1342,6 +1349,15 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
     try {
       const name = req.params.name
       const args = (req.params.arguments ?? {}) as Record<string, unknown>
+      if (name === 'creator_style_memory') {
+        const projectId = getTsHost()?.actor.snapshot().project_id
+        if (!projectId || !opts.creatorStyleStore) throw new Error('Creator memory unavailable in this environment')
+        const currentCreatorKey = opts.creatorStyleStore.sessionKey(projectId)
+        creatorSessionKey ??= currentCreatorKey
+        if (creatorSessionKey !== currentCreatorKey) throw new Error('Creator memory/session changed; reconnect with current creator context')
+        const result = opts.creatorStyleStore.agent(projectId, args)
+        return { content: [{ type: 'text', text: JSON.stringify(result) }] } as ServerResult
+      }
       if (opts.reviewProjectId && getTsHost()?.actor.snapshot().project_id !== opts.reviewProjectId) return revisionToolError('Review project changed; start a new deliberate review for the current project.')
       const externalEnabled = opts.enableExternalMedia ?? (process.env.SCLIP_ENABLE_EXTERNAL_BROLL === '1')
       if ((name === 'video_search_external_media' || name === 'resolve_visual_intents' || name === 'import_external_media') && !externalEnabled) {

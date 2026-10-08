@@ -13,7 +13,8 @@ import { createJevClient, JEV_MODEL } from './sclip/jevClient.js'
 import { disposeVisionRuntime } from './sclip/visionRuntime.js'
 import { createSourcePassageEvaluator, type Transcript } from './sclip/sourcePassageEvaluation.js'
 import { redactHermesSecrets } from './sclip/hermesSecrets.js'
-import { createStyleEventRecorder, type StyleEventRecorder } from './sclip/styleEvents.js'
+import { CreatorStyleStore } from './sclip/creatorStyle.js'
+import { rememberCreatorReference } from './sclip/creatorReference.js'
 import { synthesizeSpeechLocally } from './sclip/localTts.js'
 import electronUpdater from 'electron-updater'
 import { createUpdates } from './updates.js'
@@ -107,7 +108,7 @@ function emitToRenderer(event: string, payload: unknown): void {
 // `startMcpHost` resolves.
 let mcpHostRef: import('./mcp/index.js').McpHost | null = null
 let tsHost: import('./state/ts-actor-host.js').TsActorHost | null = null
-let styleEventRecorder: StyleEventRecorder | null = null
+let creatorStyleStore: CreatorStyleStore | null = null
 // Audio-effect bake orchestrator (ADR 0063). Module-scoped for the same reason
 // as `tsHost`: the `backend:invoke` handler and the before-quit hook both reach
 // it, and it does not exist until whenReady has built the actor it subscribes to.
@@ -888,11 +889,12 @@ app.whenReady().then(async () => {
     dir: app.getPath('userData'),
   })
 
-  styleEventRecorder = createStyleEventRecorder(path.join(app.getPath('userData'), 'sclip-hermes'))
+  try { creatorStyleStore = new CreatorStyleStore(path.join(app.getPath('userData'), 'creator-style')) }
+  catch (error) { console.warn('[creator-style] Existing memory preserved; learning unavailable', error) }
   tsHost = createTsActorHost({
     send: (event, payload) => emitToRenderer(event, payload),
     mcpNotify: (payload) => mcpHostRef?.notifyChange(payload),
-    onProjectChange: (change, before) => styleEventRecorder?.observe(change, before),
+    onProjectChange: (change, before) => creatorStyleStore?.observe(change, before),
     fileExists: (p) => fs.existsSync(p),
     fs: nodeFs,
     relinkFs,
@@ -1048,6 +1050,7 @@ app.whenReady().then(async () => {
     getVlm,
     getReviewerSummary: (immediate?: boolean) => (immediate ? backgroundReviewer.auditSynchronous() : backgroundReviewer.getSummary()),
     sourceObservationIndex,
+    creatorStyleStore: creatorStyleStore ?? undefined,
     // Optional helper, no new profile/settings store or model fallback.
     // Keep initial rollout opt-in until the real-provider comparison passes.
     evaluateSourcePassages: jevEnabled ? evaluateSourcePassages : undefined,
@@ -1223,6 +1226,7 @@ app.whenReady().then(async () => {
     renameProjectSession,
     archiveProjectSession,
     startHermesRun,
+    stopActiveHermesRuns,
     stopHermesRun,
     approveHermesRun,
     getHermesRun,
@@ -1287,6 +1291,12 @@ app.whenReady().then(async () => {
       }
     },
     getProfileConfig: () => readHermesProfile(path.join(app.getPath('userData'), 'sclip-hermes')),
+    getCreatorContext: projectId => creatorStyleStore?.context(projectId) ?? '',
+    getCreatorSessionKey: projectId => creatorStyleStore?.sessionKey(projectId) ?? 'local:0',
+    assertCreatorGateway: projectId => {
+      if (creatorStyleStore?.binding(projectId).creatorId !== 'local') throw new Error('Use the Hermes terminal for an isolated creator session')
+      if (fs.existsSync(path.join(app.getPath('userData'), 'sclip-hermes', 'memories', 'creator-style-profile.json'))) throw new Error('Use the Hermes terminal for creator learning: this gateway has a legacy inferred style profile')
+    },
     redactForRenderer: redactHermesForRenderer,
     sessions: sclipSessionStore,
   })
@@ -1298,6 +1308,9 @@ app.whenReady().then(async () => {
     sourceOverride: resolvedHermesSource,
     getMcpInfo: () => mcpHost.getInfo(),
     getProviderEnvironment: profile => resolveProviderEnvironment(profile),
+    getCreatorContext: projectId => creatorStyleStore?.context(projectId) ?? '',
+    getCreatorHome: (base, projectId) => creatorStyleStore?.home(base, projectId) ?? base,
+    getCreatorSessionKey: projectId => creatorStyleStore?.sessionKey(projectId) ?? 'local:0',
     assertSession: async (projectId, sessionId) => {
       if (hermesRuntime?.snapshot().state !== 'ready') throw new Error('Reconnect Hermes before opening its terminal')
       const activeProjectId = await (async () => {
@@ -1320,6 +1333,22 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.handle('backend:invoke', async (_e, { channel, args }) => {
+    if (channel === 'sclip_creator_style') {
+      if (!creatorStyleStore) throw new Error('Creator memory unavailable; existing file preserved')
+      const project = tsHost!.actor.snapshot()
+      const request = (args ?? {}) as Record<string, unknown>
+      if (request.action === 'reference') {
+        const view = await rememberCreatorReference(creatorStyleStore, () => tsHost!.actor.snapshot(), request, sourceObservationIndex)
+        return { ...view, referenceMedia: Object.values(project.media_pool).filter(m => m.kind === 'Video').map(m => ({ id: m.id, label: m.label ?? path.basename(m.path_abs) })) }
+      }
+      if (request.action !== 'view' && request.action !== 'create_creator') {
+        const startingCreatorKey = creatorStyleStore.sessionKey(project.project_id)
+        await stopActiveHermesRuns()
+        hermesTerminalRuntime?.stopAll() // invalidate already-staged memories and creator session ownership
+        if (tsHost!.actor.snapshot().project_id !== project.project_id || creatorStyleStore.sessionKey(project.project_id) !== startingCreatorKey) throw new Error('Project or creator changed; retry the creator memory action')
+      }
+      return { ...creatorStyleStore.user(project.project_id, request), referenceMedia: Object.values(project.media_pool).filter(m => m.kind === 'Video').map(m => ({ id: m.id, label: m.label ?? path.basename(m.path_abs) })) }
+    }
     if (channel === 'project_trash') {
       return trashRecentProject((args as { path?: unknown })?.path, {
         recents,
@@ -2720,7 +2749,6 @@ app.on('before-quit', (event) => {
   hermesTerminalRuntime?.stopAll()
   void Promise.all([
     tsHost.handleInvoke('project_save', {}).catch((e) => console.warn('[main] autosave quit-flush failed', e)),
-    styleEventRecorder?.flush(),
     hermesRuntime?.stop(),
     // Reuse the existing disposal path: the local worker must not outlive quit.
     disposeVisionRuntime(),

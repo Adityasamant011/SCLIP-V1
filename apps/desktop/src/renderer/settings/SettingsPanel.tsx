@@ -29,6 +29,7 @@ import { AppSwitch } from "../components/AppSwitch";
 import { Button } from "@/components/ui/button";
 import { KeybindingPanel } from "./KeybindingPanel";
 import { HermesSettingsSection } from "./HermesSettingsSection";
+import { CreatorStyleSection } from "./CreatorStyleSection";
 import { PreviewSection } from "./PreviewSection";
 import { ModelSection } from "./ModelSection";
 import { VlmSection } from "./VlmSection";
@@ -377,6 +378,7 @@ export function SettingsPanel({
             className="settings-pane"
           >
             <HermesSettingsSection />
+            <CreatorStyleSection />
           </div>
         </div>
       </div>
