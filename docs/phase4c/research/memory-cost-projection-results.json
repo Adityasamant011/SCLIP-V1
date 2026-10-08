@@ -1,0 +1,94 @@
+{
+  "model_calls": 0,
+  "tokenizer": "o200k_base cached; proxy, not verified Hermes/provider tokenizer",
+  "measured_contexts": {
+    "A": {
+      "characters": 2510,
+      "o200k_proxy_tokens": 635
+    },
+    "B": {
+      "characters": 2943,
+      "o200k_proxy_tokens": 817
+    },
+    "B_duplicates": {
+      "characters": 4126,
+      "o200k_proxy_tokens": 1160
+    },
+    "C": {
+      "characters": 1899,
+      "o200k_proxy_tokens": 458
+    },
+    "D": {
+      "characters": 1316,
+      "o200k_proxy_tokens": 315
+    },
+    "G": {
+      "characters": 1593,
+      "o200k_proxy_tokens": 394
+    },
+    "retrieval": {
+      "characters": 4011,
+      "o200k_proxy_tokens": 1169
+    }
+  },
+  "assumptions": {
+    "observations_per_video": 50,
+    "planned_context_tokens": 900,
+    "replay_turns": 16,
+    "optional_foreground_maintenance_every_videos": 5,
+    "maintenance_input_tokens": 1500,
+    "maintenance_output_tokens": 600,
+    "cost_formula": "input_tokens * actual_input_price_per_million / 1000000 + output_tokens * actual_output_price_per_million / 1000000",
+    "illustrative_only_prices": {
+      "input_per_million_usd": 1,
+      "output_per_million_usd": 5
+    },
+    "not_current_provider_quote": true
+  },
+  "workloads": [
+    {
+      "videos": 10,
+      "assumed_observations": 500,
+      "current_captured_upper_bound": 500,
+      "current_uncaptured_lower_bound": 0,
+      "uncapped_linear_bytes_projection": 1737112,
+      "planned_initial_context_tokens": 9000,
+      "planned_full_input_replay_16_turns_tokens": 144000,
+      "planned_maintenance_tokens_if_every_5_videos": 4200,
+      "planned_maintenance_calls_added": 0
+    },
+    {
+      "videos": 100,
+      "assumed_observations": 5000,
+      "current_captured_upper_bound": 600,
+      "current_uncaptured_lower_bound": 4400,
+      "uncapped_linear_bytes_projection": 17371125,
+      "planned_initial_context_tokens": 90000,
+      "planned_full_input_replay_16_turns_tokens": 1440000,
+      "planned_maintenance_tokens_if_every_5_videos": 42000,
+      "planned_maintenance_calls_added": 0
+    },
+    {
+      "videos": 500,
+      "assumed_observations": 25000,
+      "current_captured_upper_bound": 600,
+      "current_uncaptured_lower_bound": 24400,
+      "uncapped_linear_bytes_projection": 86855625,
+      "planned_initial_context_tokens": 450000,
+      "planned_full_input_replay_16_turns_tokens": 7200000,
+      "planned_maintenance_tokens_if_every_5_videos": 210000,
+      "planned_maintenance_calls_added": 0
+    },
+    {
+      "videos": 1000,
+      "assumed_observations": 50000,
+      "current_captured_upper_bound": 600,
+      "current_uncaptured_lower_bound": 49400,
+      "uncapped_linear_bytes_projection": 173711250,
+      "planned_initial_context_tokens": 900000,
+      "planned_full_input_replay_16_turns_tokens": 14400000,
+      "planned_maintenance_tokens_if_every_5_videos": 420000,
+      "planned_maintenance_calls_added": 0
+    }
+  ]
+}

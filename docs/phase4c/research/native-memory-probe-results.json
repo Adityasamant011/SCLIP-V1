@@ -1,0 +1,16 @@
+{
+  "source": "/Users/adityasamant/SCLIP/hermes-agent-src",
+  "temporary_home_only": true,
+  "model_calls": 0,
+  "network_attempts": 0,
+  "persistent_reload": "PASS",
+  "exact_duplicate_prevention": "PASS",
+  "atomic_memory_batch": "PASS",
+  "removed_text_remains_in_loaded_prompt_snapshot": true,
+  "new_instance_excludes_removed_text": true,
+  "limits": {
+    "memory_characters": 2200,
+    "user_characters": 1375
+  },
+  "scope_limit": "Home-scoped free text; no Sclip structured provenance in native records"
+}
