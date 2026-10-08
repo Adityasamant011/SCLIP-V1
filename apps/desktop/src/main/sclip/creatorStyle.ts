@@ -7,7 +7,7 @@ import type { CreatorBinding, CreatorEvidence, CreatorPreference, CreatorStyleVi
 import { changedProperties, canGroupAdjustments } from './creatorEvidence.js'
 import { emptyMemory, readMemory, validateMemory, memoryDigest, type CreatorMemoryDocument } from './creatorMemoryDocument.js'
 import { controlKey, emptyFilter, filterAdd, filterHas, filterUnion, preferenceKey } from './creatorMemoryKeys.js'
-import { selectCreatorMemory } from './creatorMemoryRetrieval.js'
+import { selectCreatorMemory, creatorPreferenceIsLive } from './creatorMemoryRetrieval.js'
 import { protectedKnowledge } from './creatorMemoryRecovery.js'
 import { retainMemory, statsFor } from './creatorMemoryRetention.js'
 
@@ -58,7 +58,10 @@ export class CreatorStyleStore {
   }
   private assertControlFloor() {
     const file = path.join(this.directory, 'creator-style-control-floor.json')
-    if (!fs.existsSync(file)) return
+    if (!fs.existsSync(file)) {
+      if(this.diskDigest!==null && (!this.sourceBytes || fs.existsSync(path.join(this.directory,'creator-style.last-good.json'))))throw Error('Creator control floor missing; existing memory preserved, recall unavailable until explicit recovery')
+      return
+    }
     const floor = JSON.parse(fs.readFileSync(file, 'utf8'))
     if (floor.schema !== 2 || !Number.isSafeInteger(floor.generation) || !Array.isArray(floor.controls) || this.sourceBytes || this.doc.generation < floor.generation || memoryDigest(this.doc.controls) !== memoryDigest(floor.controls)) throw new Error('Creator memory rollback/control mismatch; existing data preserved. Recover with current creator controls.')
   }
@@ -111,7 +114,8 @@ export class CreatorStyleStore {
     const binding = this.binding(projectId)
     const historic=this.doc.capsules.some(c=>c.samples.some(s=>s.id===e.id)&&c.version!==this.doc.preferences.find(p=>p.id===c.preferenceId)?.version)
     const current=this.doc.capsules.some(c=>c.samples.some(s=>s.id===e.id)&&c.version===this.doc.preferences.find(p=>p.id===c.preferenceId)?.version)
-    return (!historic || current || this.doc.evidence.some(raw=>raw.id===e.id&&!raw.claims?.length)) && !e.suppressed && !this.doc.controls.some(c => c.creatorId === binding.creatorId && (c.evidenceIds.includes(e.id) || e.claims?.some(v=>v.preferenceId===c.id || c.aliases.includes(v.preferenceId)))) && (e.kind !== 'explicit_instruction' || this.doc.preferences.some(p => p.support.includes(e.id) && !['disabled','superseded'].includes(p.status))) && e.creatorId === binding.creatorId && (e.scope ? this.relevantScope(e.scope, projectId) : !e.seriesId || e.seriesId === binding.seriesId) && (e.kind !== 'reference' || e.data.intent === 'persistent' || e.projectId === projectId)
+    const liveClaim=!e.claims?.length||e.claims.some(v=>this.doc.preferences.some(p=>p.id===v.preferenceId&&p.version===v.version&&creatorPreferenceIsLive(this.doc,binding.creatorId,p.id)))
+    return liveClaim && (!historic || current || this.doc.evidence.some(raw=>raw.id===e.id&&!raw.claims?.length)) && !e.suppressed && !this.doc.controls.some(c => c.creatorId === binding.creatorId && (c.evidenceIds.includes(e.id) || e.claims?.some(v=>v.preferenceId===c.id || c.aliases.includes(v.preferenceId)))) && (e.kind !== 'explicit_instruction' || this.doc.preferences.some(p => p.support.includes(e.id) && !['disabled','superseded'].includes(p.status))) && e.creatorId === binding.creatorId && (e.scope ? this.relevantScope(e.scope, projectId) : !e.seriesId || e.seriesId === binding.seriesId) && (e.kind !== 'reference' || e.data.intent === 'persistent' || e.projectId === projectId)
   }
   home(base: string, projectId: string): string {
     const creatorId = this.binding(projectId).creatorId
@@ -185,7 +189,8 @@ export class CreatorStyleStore {
           doc.evidence.push({ id, creatorId: creator.id, projectId, seriesId: binding.seriesId, scope: preference.scope, at, kind: 'explicit_instruction', authority: 'creator_statement', data: { quote: preference.hypothesis, revises: preference.id } })
           preference.support.push(id); preference.origin = 'explicit'; preference.confidence = 'explicit'
         }
-        preference.status = 'active'
+        preference.status = action==='revise' && doc.controls.some(c=>c.id===preference.id&&c.kind==='disabled') ? 'disabled' : 'active'
+        if(preference.status==='disabled')this.control(doc,preference,'disabled')
         if (action === 'approve') {
           doc.controls = doc.controls.filter(c => c.id !== preference.id || c.kind !== 'disabled')
           for (const e of doc.evidence) if (preference.support.includes(e.id)) { e.suppressedBy = e.suppressedBy?.filter(id => id !== preference.id); if (!e.suppressedBy?.length && !doc.controls.some(c => c.kind === 'forgotten' && c.evidenceIds.includes(e.id))) e.suppressed = false }
@@ -267,6 +272,7 @@ export class CreatorStyleStore {
       if (args.id && !preference) throw new Error('Unknown/forgotten preference; creator controls cannot be bypassed')
       if (preference && (args.expected_version !== preference.version || !this.relevantScope(preference.scope, projectId))) throw new Error('Stale preference version or wrong scope; retrieve current evidence')
       if (preference?.status === 'disabled' || preference && doc.controls.some(c => c.id === preference!.id || c.aliases.includes(preference!.id))) throw new Error('Preference is disabled/forgotten; only creator controls may re-enable it')
+      if(preference && !creatorPreferenceIsLive(doc,binding.creatorId,preference.id))throw Error('Preference has a controlled/stale dependency; reground memory')
       const at = new Date().toISOString()
       if (['hypothesis','exception','consolidate','supersede','link'].includes(String(args.action))) {
         if (args.id && !preference) throw new Error('Unknown preference')
@@ -281,7 +287,7 @@ export class CreatorStyleStore {
         if(args.action==='exception' && (!applicability||!exceptionTo))throw Error('Exception requires explicit applicability and an existing base preference')
         if(exceptionTo && !doc.preferences.some(p=>p.id===exceptionTo&&p.version===exceptionVersion&&p.creatorId===binding.creatorId&&this.relevantScope(p.scope,projectId)&&!['disabled','superseded'].includes(p.status)))throw Error('Unknown, controlled or cross-creator exception base')
         const scope = !linking && args.scope ? scopeFor(args.scope, projectId, binding) : preference?.scope ?? scopeFor(undefined, projectId, binding)
-        if (doc.controls.some(c => c.creatorId === binding.creatorId && filterHas(c.keyFilter, controlKey(scope, hypothesis)))) throw new Error('Controlled/forgotten wording; only the creator may restore it')
+        if (!linking && doc.controls.some(c => c.creatorId === binding.creatorId && filterHas(c.keyFilter, controlKey(scope, hypothesis)))) throw new Error('Controlled/forgotten wording; only the creator may restore it')
         if (!evidence.every(e => this.evidenceFitsScope(e, scope))) throw new Error('Evidence scope does not support the requested preference scope')
         if(!preference)preference=doc.preferences.find(p=>p.creatorId===binding.creatorId && preferenceKey(p)===preferenceKey({scope,hypothesis,dimension,origin:'inferred',applicability,exceptionTo,exceptionVersion}))
         if(preference && (args.action!=='link' && preference.approved || preference.status==='disabled'))throw Error('Protected preference cannot be overwritten')

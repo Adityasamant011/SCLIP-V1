@@ -133,3 +133,22 @@ it('100 repeated foreground consolidations bound aliases and capsules, without t
  store.user('one',{action:'remove',id:v.preferences[0]!.id})
  expect(fs.readFileSync(generic,'utf8')).toBe('Historic generic memory is separate and preserved.')
 },30000)
+it('creator revision retains disabled authority until approval; an explicit creator restoration is legal',()=>{
+ const {store}=setup(),p=store.user('one',{action:'explicit',text:'Initial creator wording'}).preferences[0]!
+ store.user('one',{action:'disable',id:p.id});store.user('one',{action:'revise',id:p.id,text:'New disabled creator wording'})
+ expect(store.view('one').preferences[0]!.status).toBe('disabled');expect(store.context('one')).not.toContain('New disabled creator wording')
+ expect(()=>creatorAgent(store,'one',hypothesis(fact(store),'New disabled creator wording'))).toThrow('Controlled')
+ store.user('one',{action:'approve',id:p.id});expect(store.context('one')).toContain('New disabled creator wording')
+ store.user('one',{action:'remove',id:p.id})
+ const restored=store.user('one',{action:'explicit',text:'New disabled creator wording'}).preferences[0]!
+ maintain(store,[{action:'link',id:restored.id,expected_version:restored.version,evidence_ids:[fact(store)]}])
+ expect(store.context('one')).toContain('New disabled creator wording')
+})
+it('missing control protection fails closed for both reopened and already-running recall',()=>{
+ const {store,dir}=setup(),p=store.user('one',{action:'explicit',text:'Protected creator instruction'}).preferences[0]!
+ store.user('one',{action:'disable',id:p.id})
+ fs.rmSync(path.join(dir,'creator-style-control-floor.json'))
+ expect(()=>new CreatorStyleStore(dir)).toThrow('control floor missing')
+ expect(()=>store.context('one')).toThrow('control floor missing')
+ expect(fs.readFileSync(store.file,'utf8')).toContain('Protected creator instruction')
+})

@@ -37,11 +37,15 @@ export function validateMemory(value: unknown): void {
     evidenceIds.add(e.id)
   }
   if (d.version === 2) {
-    requireThat(Number.isSafeInteger(d.revision) && d.revision >= 0 && Array.isArray(d.controls) && Array.isArray(d.capsules) && d.stats && typeof d.stats === 'object', 'v2 envelope')
+    requireThat(Number.isSafeInteger(d.revision) && d.revision >= 0 && Array.isArray(d.controls) && Array.isArray(d.capsules) && d.stats && typeof d.stats === 'object' && !Array.isArray(d.stats), 'v2 envelope')
     for (const c of d.controls) requireThat(c && string(c.id) && creators.has(c.creatorId) && scopeValid(c.scope) && ['disabled', 'forgotten'].includes(c.kind) && validFilter(c.keyFilter) && Array.isArray(c.aliases) && Array.isArray(c.evidenceIds), 'control')
     for (const c of d.capsules) {
       requireThat(c && string(c.id) && creators.has(c.creatorId) && scopeValid(c.scope) && Number.isSafeInteger(c.version) && c.version > 0 && ['support', 'counterexample'].includes(c.role) && validFilter(c.seenFilter) && Array.isArray(c.samples) && Array.isArray(c.projects), 'capsule')
-      for (const e of c.samples) { requireThat(e.creatorId === c.creatorId && string(e.id), 'capsule evidence ownership'); evidenceIds.add(e.id) }
+      for (const e of c.samples) {
+        requireThat(e.creatorId === c.creatorId && string(e.id) && string(e.projectId) && string(e.at) && e.data && typeof e.data==='object' && !Array.isArray(e.data), 'capsule evidence ownership/data')
+        requireThat(['explicit_instruction','correction','manual_edit','undo','reference'].includes(e.kind) && ['creator_statement','ProjectActor','source_metadata_and_local_observations'].includes(e.authority),'capsule provenance')
+        evidenceIds.add(e.id)
+      }
     }
   }
   const allEvidence = [...d.evidence, ...(d.capsules ?? []).flatMap(c => c.samples)]
@@ -55,9 +59,13 @@ export function validateMemory(value: unknown): void {
   for (const c of d.capsules ?? []) {
     const p=d.preferences.find(p=>p.id===c.preferenceId)
     requireThat(p && p.creatorId===c.creatorId && (p.version===c.version || p.history?.some(v=>v.version===c.version)), 'orphan/cross-creator capsule version')
+    const meaning=p!.version===c.version?p!:p!.history!.find(v=>v.version===c.version)!
+    requireThat(memoryDigest(c.scope)===memoryDigest(meaning.scope),'capsule scope/version mismatch')
     for(const n of [c.observations,c.operations,c.omittedSamples])requireThat(Number.isSafeInteger(n)&&n>=0,'capsule counts')
     requireThat(c.samples.length<=3 && c.projects.length<=128,'capsule detail budget')
   }
+  requireThat(new Set((d.capsules??[]).map(c=>c.id)).size===(d.capsules??[]).length,'duplicate capsule identity')
+  requireThat(new Set((d.capsules??[]).map(c=>JSON.stringify([c.preferenceId,c.version,c.role]))).size===(d.capsules??[]).length,'duplicate capsule role/version')
   for(const p of d.preferences)for(const v of p.history??[]){
     requireThat(Number.isSafeInteger(v.version)&&v.version<p.version! && scopeValid(v.scope)&&string(v.hypothesis)&&string(v.dimension)&&Array.isArray(v.support)&&Array.isArray(v.counterexamples),'historical version')
     for(const id of [...v.support,...v.counterexamples])requireThat(allEvidence.some(e=>e.id===id&&e.creatorId===p.creatorId),'historical provenance')

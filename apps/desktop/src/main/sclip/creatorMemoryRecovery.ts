@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { readMemory, validateMemory, type CreatorMemoryDocument } from './creatorMemoryDocument'
+import { readMemory, validateMemory, memoryDigest, type CreatorMemoryDocument } from './creatorMemoryDocument'
 import { retainMemory } from './creatorMemoryRetention'
 
 /** Creator-owned durable records only; not a cold archive of editing events. */
@@ -21,6 +21,7 @@ export function recoverCreatorMemory(directory:string,commit=false) {
  const floor=JSON.parse(fs.readFileSync(floorPath,'utf8'))
  if(floor.schema!==2 || !Number.isSafeInteger(floor.generation) || !Array.isArray(floor.controls))throw Error('Invalid control floor; recovery requires creator review')
  const knowledge=floor.knowledge ? readMemory(JSON.stringify(floor.knowledge)) : null
+ if(knowledge && (knowledge.generation!==floor.generation || memoryDigest(knowledge.controls)!==memoryDigest(floor.controls)))throw Error('Protected knowledge/control mismatch; existing memory preserved')
  const checkpoint=readMemory(fs.readFileSync(path.join(directory,'creator-style.last-good.json'),'utf8'))
  const next=structuredClone(checkpoint)
  if(knowledge && (knowledge.revision>checkpoint.revision || floor.generation>checkpoint.generation)){
