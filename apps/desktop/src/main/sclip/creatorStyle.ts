@@ -3,15 +3,12 @@ import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import type { ChangeEvent } from '../state/actor.js'
 import type { Project, Layer } from '../state/model.js'
-import type { CreatorBinding, CreatorEvidence, CreatorIdentity, CreatorPreference, CreatorStyleView, StyleScope } from '../../shared/creator-style.js'
+import type { CreatorBinding, CreatorEvidence, CreatorPreference, CreatorStyleView, StyleScope } from '../../shared/creator-style.js'
 import { changedProperties, canGroupAdjustments, summarizeCreatorEvidence } from './creatorEvidence.js'
+import { emptyMemory, readMemory, validateMemory, memoryDigest, type CreatorMemoryDocument } from './creatorMemoryDocument.js'
+import { controlKey, emptyFilter, filterAdd, filterHas } from './creatorMemoryKeys.js'
 
 const MAX_EVIDENCE = 600, MAX_PREFERENCES = 100, MAX_DOCUMENT_BYTES = 4_000_000
-interface Proposal { creatorId: string; projectId: string; layerId: string; opId: string; valueHash: string }
-interface Document {
-  version: 1; generation: number; creators: CreatorIdentity[]; bindings: Record<string, CreatorBinding>
-  evidence: CreatorEvidence[]; preferences: CreatorPreference[]; proposals: Proposal[]
-}
 const clean = (value: unknown, name: string, max = 1000): string => {
   if (typeof value !== 'string' || !value.trim() || value.length > max) throw new Error(`Invalid ${name} (1–${max} characters required)`)
   return value.trim()
@@ -35,28 +32,61 @@ function scopeFor(value: unknown, projectId: string, binding: CreatorBinding): S
 }
 /** One app-owned writer. All methods are synchronous and atomic; no inference or timeline calls. */
 export class CreatorStyleStore {
-  private doc: Document
+  private doc: CreatorMemoryDocument
   private captureWarning = ''
+  private sourceBytes: string | null = null
+  private diskDigest: string | null = null
   readonly file: string
   constructor(private readonly directory: string) {
     this.file = path.join(directory, 'creator-style.json')
     if (fs.existsSync(this.file)) {
       const bytes = fs.readFileSync(this.file, 'utf8')
-      if (Buffer.byteLength(bytes) > MAX_DOCUMENT_BYTES) throw new Error('Creator memory exceeds supported size; existing file preserved')
-      const parsed = JSON.parse(bytes) as Document
-      if (parsed.version !== 1 || !Array.isArray(parsed.creators) || !Array.isArray(parsed.evidence) || !Array.isArray(parsed.preferences) || !Array.isArray(parsed.proposals) || !parsed.bindings) throw new Error('Unsupported creator memory; existing file preserved')
-      this.doc = parsed
-    } else this.doc = { version: 1, generation: 0, creators: [{ id: 'local', label: 'Local creator', enabled: true }], bindings: {}, evidence: [], preferences: [], proposals: [] }
+      this.doc = readMemory(bytes)
+      this.diskDigest = digest(bytes)
+      if (JSON.parse(bytes).version === 1) this.sourceBytes = bytes
+    } else {
+      if (fs.existsSync(path.join(directory, 'creator-style-control-floor.json')) || fs.existsSync(path.join(directory, 'creator-style.last-good.json'))) throw new Error('Creator memory is missing; existing recovery data preserved. Recover explicitly, never initialize empty.')
+      this.doc = emptyMemory()
+    }
+    this.assertControlFloor()
   }
-  private mutate<T>(action: (doc: Document) => T): T {
+  private assertControlFloor() {
+    const file = path.join(this.directory, 'creator-style-control-floor.json')
+    if (!fs.existsSync(file)) return
+    const floor = JSON.parse(fs.readFileSync(file, 'utf8'))
+    if (floor.schema !== 2 || !Number.isSafeInteger(floor.generation) || !Array.isArray(floor.controls) || this.sourceBytes || this.doc.generation < floor.generation || this.doc.generation === floor.generation && memoryDigest(this.doc.controls) !== memoryDigest(floor.controls)) throw new Error('Creator memory rollback/control mismatch; existing data preserved. Recover with current creator controls.')
+  }
+  private writeAtomic(file: string, bytes: string) {
+    const temp = `${file}.${randomUUID()}.tmp`
+    try { fs.writeFileSync(temp, bytes, { mode: 0o600 }); fs.renameSync(temp, file) }
+    finally { fs.rmSync(temp, { force: true }) }
+  }
+  private mutate<T>(action: (doc: CreatorMemoryDocument) => T): T {
+    this.assertControlFloor()
+    if (this.diskDigest !== null && (!fs.existsSync(this.file) || digest(fs.readFileSync(this.file, 'utf8')) !== this.diskDigest)) throw new Error('Creator memory changed on disk; reopen with fresh state. Nothing changed.')
     const next = structuredClone(this.doc), result = action(next)
+    next.revision++
+    validateMemory(next)
     const bytes = JSON.stringify(next, null, 2)
     if (next.evidence.length > MAX_EVIDENCE || next.preferences.length > MAX_PREFERENCES || Buffer.byteLength(bytes) > MAX_DOCUMENT_BYTES) throw new Error('Creator memory is full; inspect/remove old evidence or reset before adding more. Nothing changed.')
     fs.mkdirSync(this.directory, { recursive: true, mode: 0o700 })
-    const temp = `${this.file}.${randomUUID()}.tmp`
-    try { fs.writeFileSync(temp, bytes, { mode: 0o600 }); fs.renameSync(temp, this.file) }
-    finally { fs.rmSync(temp, { force: true }) }
+    if (this.sourceBytes) {
+      const backup = path.join(this.directory, `creator-style.v1.${next.migration!.sourceSha256}.backup`)
+      if (!fs.existsSync(backup)) this.writeAtomic(backup, this.sourceBytes)
+      if (fs.readFileSync(backup, 'utf8') !== this.sourceBytes) throw new Error('Migration backup checksum mismatch; existing file preserved')
+    }
+    const floor = path.join(this.directory, 'creator-style-control-floor.json')
+    if (!fs.existsSync(floor) || memoryDigest(next.controls) !== memoryDigest(this.doc.controls)) {
+      // Restrictive creator intent survives a failed commit or rollback. If the
+      // following write fails, recall fails closed until explicit recovery.
+      this.writeAtomic(floor, JSON.stringify({ schema: 2, generation: next.generation, controls: next.controls }))
+    }
+    this.writeAtomic(this.file, bytes)
     this.doc = next
+    this.diskDigest = digest(bytes); this.sourceBytes = null
+    // One bounded recovery checkpoint, never an accumulating raw-event archive.
+    try { this.writeAtomic(path.join(this.directory, 'creator-style.last-good.json'), bytes) }
+    catch { this.captureWarning = 'Memory committed; recovery checkpoint unavailable. Existing checkpoint preserved.' }
     return result
   }
   binding(projectId: string): CreatorBinding { return { ...(this.doc.bindings[projectId] ?? { creatorId: 'local' }) } }
@@ -72,7 +102,7 @@ export class CreatorStyleStore {
   }
   private relevantEvidence(e: CreatorEvidence, projectId: string) {
     const binding = this.binding(projectId)
-    return !e.suppressed && e.creatorId === binding.creatorId && (e.scope ? this.relevantScope(e.scope, projectId) : !e.seriesId || e.seriesId === binding.seriesId) && (e.kind !== 'reference' || e.data.intent === 'persistent' || e.projectId === projectId)
+    return !e.suppressed && !this.doc.controls.some(c => c.creatorId === binding.creatorId && c.evidenceIds.includes(e.id)) && (e.kind !== 'explicit_instruction' || this.doc.preferences.some(p => p.support.includes(e.id) && !['disabled','superseded'].includes(p.status))) && e.creatorId === binding.creatorId && (e.scope ? this.relevantScope(e.scope, projectId) : !e.seriesId || e.seriesId === binding.seriesId) && (e.kind !== 'reference' || e.data.intent === 'persistent' || e.projectId === projectId)
   }
   home(base: string, projectId: string): string {
     const creatorId = this.binding(projectId).creatorId
@@ -80,16 +110,17 @@ export class CreatorStyleStore {
   }
   view(projectId: string): CreatorStyleView {
     const binding = this.binding(projectId)
-    return structuredClone({ binding, creators: this.doc.creators, preferences: this.doc.preferences.filter(p => p.creatorId === binding.creatorId), evidence: this.doc.evidence.filter(e => e.creatorId === binding.creatorId), context: this.context(projectId), generation: this.doc.generation, captureWarning: this.captureWarning })
+    return structuredClone({ binding, creators: this.doc.creators, preferences: this.doc.preferences.filter(p => p.creatorId === binding.creatorId), evidence: this.doc.evidence.filter(e => e.creatorId === binding.creatorId), context: this.context(projectId), generation: this.doc.generation, revision: this.doc.revision, capsules: this.doc.capsules.filter(c => c.creatorId === binding.creatorId), captureWarning: this.captureWarning })
   }
   context(projectId: string, request = ''): string {
+    this.assertControlFloor()
     const binding = this.binding(projectId), creator = this.creator(binding)
     if (!this.enabled(projectId)) return ''
     const relevant = (scope: StyleScope) => scope.kind === 'creator' || (scope.kind === 'project' && scope.id === projectId) || (scope.kind === 'series' && scope.id === binding.seriesId)
     // Lexical relevance ranks memory, not source clips or creative decisions.
     const words = new Set(request.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? [])
     const relevance = (text: string) => (text.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? []).filter(w => words.has(w)).length
-    const preferences = this.doc.preferences.filter(p => p.creatorId === creator.id && p.status !== 'disabled' && relevant(p.scope))
+    const preferences = this.doc.preferences.filter(p => p.creatorId === creator.id && !['disabled', 'superseded'].includes(p.status) && relevant(p.scope))
       .sort((a, b) => Number(b.status === 'active') - Number(a.status === 'active') || relevance(b.hypothesis) - relevance(a.hypothesis) || Number(b.scope.kind === 'project') - Number(a.scope.kind === 'project') || Number(b.confidence === 'supported') - Number(a.confidence === 'supported') || Number(b.counterexamples.length > 0) - Number(a.counterexamples.length > 0) || b.updated.localeCompare(a.updated)).slice(0, 8)
     const evidence = this.doc.evidence.filter(e => this.relevantEvidence(e, projectId)).reverse().sort((a,b) => relevance(JSON.stringify(summarizeCreatorEvidence(b))) - relevance(JSON.stringify(summarizeCreatorEvidence(a)))).slice(0, 3)
     if (!preferences.length && !evidence.length) return ''
@@ -119,29 +150,32 @@ export class CreatorStyleStore {
       const creator = doc.creators.find(c => c.id === binding.creatorId)!
       if (action === 'enable') { if (typeof args.enabled !== 'boolean') throw new Error('enabled must be boolean'); creator.enabled = args.enabled; return }
       if (action === 'reset') {
+        for (const p of doc.preferences.filter(p => p.creatorId === creator.id)) this.control(doc, p, 'forgotten')
         doc.preferences = doc.preferences.filter(p => p.creatorId !== creator.id); doc.evidence = doc.evidence.filter(e => e.creatorId !== creator.id); doc.proposals = doc.proposals.filter(p => p.creatorId !== creator.id); return
       }
       if (action === 'explicit') {
         const at = new Date().toISOString(), hypothesis = clean(args.text, 'preference')
         const evidence: CreatorEvidence = { id: randomUUID(), creatorId: creator.id, projectId, seriesId: binding.seriesId, scope: scopeFor(args.scope, projectId, binding), at, kind: 'explicit_instruction', authority: 'creator_statement', data: { quote: hypothesis } }
         doc.evidence.push(evidence)
-        doc.preferences.push({ id: randomUUID(), creatorId: creator.id, scope: scopeFor(args.scope, projectId, binding), dimension: typeof args.dimension === 'string' ? clean(args.dimension, 'dimension', 80) : 'editorial', hypothesis, origin: 'explicit', status: 'active', support: [evidence.id], counterexamples: [], confidence: 'explicit', firstObserved: at, updated: at }); return
+        doc.preferences.push({ id: randomUUID(), creatorId: creator.id, scope: scopeFor(args.scope, projectId, binding), dimension: typeof args.dimension === 'string' ? clean(args.dimension, 'dimension', 80) : 'editorial', hypothesis, origin: 'explicit', status: 'active', support: [evidence.id], counterexamples: [], confidence: 'explicit', firstObserved: at, updated: at, version: 1, approved: true, history: [], aliases: [], lineageFilter: filterAdd(emptyFilter(), controlKey(scopeFor(args.scope, projectId, binding), hypothesis)) }); return
       }
       if (action === 'remove_evidence') {
         const id = clean(args.id, 'id', 100)
         if (!doc.evidence.some(e => e.id === id && e.creatorId === creator.id)) throw new Error('Evidence does not belong to this creator')
         doc.evidence = doc.evidence.filter(e => e.id !== id)
-        for (const p of doc.preferences) if (p.support.includes(id) || p.counterexamples.includes(id)) { p.support = p.support.filter(e => e !== id); p.counterexamples = p.counterexamples.filter(e => e !== id); p.status = 'disabled' }
+        for (const p of doc.preferences) if (p.support.includes(id) || p.counterexamples.includes(id)) { this.control(doc, p, 'disabled'); p.support = p.support.filter(e => e !== id); p.counterexamples = p.counterexamples.filter(e => e !== id); p.status = 'disabled' }
         return
       }
       const preference = doc.preferences.find(p => p.id === args.id && p.creatorId === creator.id)
       if (!preference) throw new Error('Preference does not belong to this creator')
       if (action === 'remove') {
-        for (const e of doc.evidence) if (preference.support.includes(e.id) || preference.counterexamples.includes(e.id)) e.suppressed = true
+        this.control(doc, preference, 'forgotten')
+        for (const e of doc.evidence) if (preference.support.includes(e.id) || preference.counterexamples.includes(e.id)) { e.suppressed = true; e.suppressedBy = [...new Set([...(e.suppressedBy ?? []), preference.id])] }
         doc.preferences = doc.preferences.filter(p => p !== preference); return
       }
       if (action === 'approve' || action === 'revise') {
-        if (args.text !== undefined) preference.hypothesis = clean(args.text, 'preference')
+        if (args.text !== undefined && clean(args.text, 'preference') !== preference.hypothesis) this.newVersion(preference, clean(args.text, 'preference'), preference.dimension, preference.scope)
+        preference.approved = true
         if (action === 'revise') {
           for (const e of doc.evidence) if (preference.support.includes(e.id) && e.kind === 'explicit_instruction') e.suppressed = true
           const at = new Date().toISOString(), id = randomUUID()
@@ -150,14 +184,16 @@ export class CreatorStyleStore {
         }
         preference.status = 'active'
         if (action === 'approve') {
-          for (const e of doc.evidence) if (preference.support.includes(e.id)) e.suppressed = false
+          doc.controls = doc.controls.filter(c => c.id !== preference.id || c.kind !== 'disabled')
+          for (const e of doc.evidence) if (preference.support.includes(e.id)) { e.suppressedBy = e.suppressedBy?.filter(id => id !== preference.id); if (!e.suppressedBy?.length && !doc.controls.some(c => c.kind === 'forgotten' && c.evidenceIds.includes(e.id))) e.suppressed = false }
           const at = new Date().toISOString(), id = randomUUID()
           doc.evidence.push({ id, creatorId: creator.id, projectId, seriesId: binding.seriesId, scope: preference.scope, at, kind: 'explicit_instruction', authority: 'creator_statement', data: { quote: preference.hypothesis, approvalOf: preference.id } })
           preference.support.push(id); preference.confidence = 'explicit'
         }
       } else if (action === 'disable') {
+        this.control(doc, preference, 'disabled')
         preference.status = 'disabled'
-        for (const e of doc.evidence) if (preference.support.includes(e.id) || preference.counterexamples.includes(e.id)) e.suppressed = true
+        for (const e of doc.evidence) if (preference.support.includes(e.id) || preference.counterexamples.includes(e.id)) { e.suppressed = true; e.suppressedBy = [...new Set([...(e.suppressedBy ?? []), preference.id])] }
       }
       else throw new Error('Unsupported creator action')
       preference.updated = new Date().toISOString()
@@ -169,8 +205,8 @@ export class CreatorStyleStore {
     const response = () => {
       const view = this.view(projectId)
       const enabled = this.enabled(projectId)
-      return { binding: view.binding, generation: view.generation, context: this.context(projectId, typeof args.request === 'string' ? args.request.slice(0,1000) : ''),
-        preferences: enabled ? view.preferences.filter(p => p.status !== 'disabled' && (p.scope.kind === 'creator' || p.scope.kind === 'project' && p.scope.id === projectId || p.scope.kind === 'series' && p.scope.id === view.binding.seriesId)).slice(-8).map(p => ({id:p.id,status:p.status,scope:p.scope})) : [],
+      return { binding: view.binding, generation: view.generation, revision: this.doc.revision, context: this.context(projectId, typeof args.request === 'string' ? args.request.slice(0,1000) : ''),
+        preferences: enabled ? view.preferences.filter(p => !['disabled', 'superseded'].includes(p.status) && (p.scope.kind === 'creator' || p.scope.kind === 'project' && p.scope.id === projectId || p.scope.kind === 'series' && p.scope.id === view.binding.seriesId)).slice(-8).map(p => ({id:p.id,status:p.status,scope:p.scope,version:p.version})) : [],
         evidence: enabled ? view.evidence.filter(e => this.relevantEvidence(e, projectId)).slice(-6).map(e => ({ id:e.id,kind:e.kind,authority:e.authority,projectId:e.projectId,relationship:e.data.relationship })) : [],
         omitted_evidence: Math.max(0, view.evidence.filter(e => this.relevantEvidence(e, projectId)).length - 6),
       }
@@ -183,6 +219,8 @@ export class CreatorStyleStore {
       if (!evidence) throw new Error('Unknown or cross-creator evidence')
       return { ...response(), evidence: [structuredClone(evidence)] }
     }
+    if (args.creator_id !== binding.creatorId) throw new Error('Unknown or cross-creator memory identity; retrieve current context')
+    if (args.expected_revision !== this.doc.revision) throw new Error('Stale memory revision; retrieve current context. Nothing changed.')
     this.mutate(doc => {
       const ids = args.evidence_ids
       if (!Array.isArray(ids) || ids.length < 1 || ids.length > 12 || !ids.every(id => typeof id === 'string')) throw new Error('Supply 1–12 actual evidence_ids')
@@ -192,24 +230,45 @@ export class CreatorStyleStore {
         return e
       })
       let preference = doc.preferences.find(p => p.id === args.id && p.creatorId === binding.creatorId)
+      if (args.id && !preference) throw new Error('Unknown/forgotten preference; creator controls cannot be bypassed')
+      if (preference && (args.expected_version !== preference.version || !this.relevantScope(preference.scope, projectId))) throw new Error('Stale preference version or wrong scope; retrieve current evidence')
+      if (preference?.status === 'disabled' || preference && doc.controls.some(c => c.id === preference!.id || c.aliases.includes(preference!.id))) throw new Error('Preference is disabled/forgotten; only creator controls may re-enable it')
       const at = new Date().toISOString()
       if (args.action === 'hypothesis') {
         if (args.id && !preference) throw new Error('Unknown preference')
-        if (preference && (preference.origin === 'explicit' || preference.status === 'active' || doc.evidence.some(e => e.data.approvalOf === preference!.id))) throw new Error('Do not overwrite an explicit/approved creator preference; propose a separate candidate or attach a counterexample')
+        if (preference && (preference.approved || preference.origin === 'explicit' || preference.status === 'active')) throw new Error('Do not overwrite an explicit/approved creator preference; propose a separate candidate or attach a counterexample')
         const hypothesis = clean(args.hypothesis, 'hypothesis'), dimension = clean(args.dimension, 'dimension', 80)
+        const scope = args.scope ? scopeFor(args.scope, projectId, binding) : preference?.scope ?? scopeFor(undefined, projectId, binding)
+        if (doc.controls.some(c => c.creatorId === binding.creatorId && filterHas(c.keyFilter, controlKey(scope, hypothesis)))) throw new Error('Controlled/forgotten wording; only the creator may restore it')
+        if (!evidence.every(e => this.evidenceFitsScope(e, scope))) throw new Error('Evidence scope does not support the requested preference scope')
         if (!preference) {
-          preference = { id: randomUUID(), creatorId: binding.creatorId, scope: scopeFor(args.scope, projectId, binding), dimension, hypothesis, origin: 'inferred', status: 'candidate', support: [], counterexamples: [], confidence: 'tentative', firstObserved: at, updated: at }
+          preference = { id: randomUUID(), creatorId: binding.creatorId, scope, dimension, hypothesis, origin: 'inferred', status: 'candidate', support: [], counterexamples: [], confidence: 'tentative', firstObserved: at, updated: at, version: 1, approved: false, history: [], aliases: [], lineageFilter: filterAdd(emptyFilter(), controlKey(scope, hypothesis)) }
           doc.preferences.push(preference)
-        } else { preference.hypothesis = hypothesis; preference.dimension = dimension; preference.status = 'candidate'; if (args.scope) preference.scope = scopeFor(args.scope, projectId, binding) }
+        } else { if (hypothesis !== preference.hypothesis || dimension !== preference.dimension || digest(scope) !== digest(preference.scope)) this.newVersion(preference, hypothesis, dimension, scope); preference.status = 'candidate' }
         preference.support = [...new Set([...preference.support, ...ids])]
       } else if (args.action === 'counterexample' && preference) {
+        if (!evidence.every(e => this.evidenceFitsScope(e, preference!.scope))) throw new Error('Evidence scope does not support the current preference')
         preference.counterexamples = [...new Set([...preference.counterexamples, ...ids])]; preference.status = 'disputed'
       } else throw new Error('Hermes may context, hypothesis or counterexample; creator controls explicit approval and bindings')
-      const supportingProjects = new Set(doc.evidence.filter(e => preference!.support.includes(e.id) && (e.kind === 'correction' || e.kind === 'manual_edit')).map(e => e.projectId))
-      preference.confidence = preference.origin === 'explicit' ? 'explicit' : supportingProjects.size >= 2 && evidence.every(e => e.kind !== 'undo') && !preference.counterexamples.length ? 'supported' : 'tentative'
+      preference.confidence = preference.approved || preference.origin === 'explicit' ? 'explicit' : 'tentative'
       preference.updated = at
     })
     return response()
+  }
+  private evidenceFitsScope(e: CreatorEvidence, scope: StyleScope) {
+    if (scope.kind === 'project') return e.projectId === scope.id && (!e.scope || e.scope.kind !== 'series' || e.scope.id === e.seriesId)
+    if (scope.kind === 'series') return e.seriesId === scope.id || e.scope?.kind === 'series' && e.scope.id === scope.id
+    return !e.scope || e.scope.kind === 'creator' // Project instructions cannot silently become global taste.
+  }
+  private newVersion(p: CreatorPreference, hypothesis: string, dimension: string, scope: StyleScope) {
+    p.history!.push({ version: p.version!, hypothesis: p.hypothesis, dimension: p.dimension, scope: p.scope, support: [...p.support], counterexamples: [...p.counterexamples], updated: p.updated })
+    p.version!++; p.hypothesis = hypothesis; p.dimension = dimension; p.scope = scope
+    p.support = []; p.counterexamples = []
+    p.lineageFilter = filterAdd(p.lineageFilter!, controlKey(scope, hypothesis))
+  }
+  private control(doc: CreatorMemoryDocument, p: CreatorPreference, kind: 'disabled' | 'forgotten') {
+    doc.controls = doc.controls.filter(c => c.id !== p.id)
+    doc.controls.push({ id: p.id, creatorId: p.creatorId, scope: p.scope, kind, aliases: p.aliases!, keyFilter: p.lineageFilter!, evidenceIds: [...p.support, ...p.counterexamples], at: new Date().toISOString() })
   }
   observe(change: ChangeEvent, before: Project): void {
     try { this.observeChange(change, before) }

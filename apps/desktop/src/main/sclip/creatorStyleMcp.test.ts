@@ -26,10 +26,10 @@ describe('Real MCP creator memory integration without inference', () => {
       const read:any=await client.callTool({name:tool.name,arguments:{action:'context'}})
       const packet=JSON.parse(read.content[0].text)
       expect(packet.context).toContain('Prefer natural editing')
-      const result:any=await client.callTool({name:tool.name,arguments:{action:'hypothesis',hypothesis:'Perhaps natural framing matters',dimension:'visual',evidence_ids:[packet.evidence[0].id]}})
+      const result:any=await client.callTool({name:tool.name,arguments:{action:'hypothesis',creator_id:packet.binding.creatorId,expected_revision:store.view(projectId).revision,hypothesis:'Perhaps natural framing matters',dimension:'visual',evidence_ids:[packet.evidence[0].id]}})
       expect(result.isError).not.toBe(true)
       expect(new CreatorStyleStore(directory).view(projectId).preferences.at(-1)).toMatchObject({hypothesis:'Perhaps natural framing matters',status:'candidate'})
-      const invalid:any=await client.callTool({name:tool.name,arguments:{action:'hypothesis',hypothesis:'Unsupported',dimension:'pacing',evidence_ids:['invented']}})
+      const invalid:any=await client.callTool({name:tool.name,arguments:{action:'hypothesis',creator_id:packet.binding.creatorId,expected_revision:store.view(projectId).revision,hypothesis:'Unsupported',dimension:'pacing',evidence_ids:['invented']}})
       expect(invalid.isError).toBe(true)
       expect(actor.snapshot()).toBe(before);expect(actor.historyView(100)).toEqual(history)
     } finally {await client.close();await server.close();fs.rmSync(directory,{recursive:true,force:true})}

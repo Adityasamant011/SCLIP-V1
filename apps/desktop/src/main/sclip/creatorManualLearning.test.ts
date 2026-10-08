@@ -1,3 +1,4 @@
+import { creatorAgent } from './creatorMemory.test-utils'
 import { afterEach, expect, it, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -66,13 +67,13 @@ it('captures independent manual edits, lane changes and layering without inventi
 it('retains two independent projects and retrieves supported tentative history in a third after restart',async()=>{
   const a=setup(),id=proposal(a);await size(a,id,54)
   const first=a.memory.view(a.project).evidence[0]!
-  a.memory.agent(a.project,{action:'hypothesis',hypothesis:'Possibly prefers smaller captions when readable',dimension:'caption',evidence_ids:[first.id]})
+  creatorAgent(a.memory,a.project,{action:'hypothesis',hypothesis:'Possibly prefers smaller captions when readable',dimension:'caption',evidence_ids:[first.id]})
   const pref=a.memory.view(a.project).preferences[0]!
   const b=setup(new CreatorStyleStore(a.dir)),bid=proposal(b);await size(b,bid,55)
   const second=b.memory.view(b.project).evidence.at(-1)!
-  b.memory.agent(b.project,{action:'hypothesis',id:pref.id,hypothesis:pref.hypothesis,dimension:'caption',evidence_ids:[second.id]})
+  creatorAgent(b.memory,b.project,{action:'hypothesis',id:pref.id,hypothesis:pref.hypothesis,dimension:'caption',evidence_ids:[second.id]})
   const reopened=new CreatorStyleStore(a.dir)
-  expect(reopened.view('third').preferences[0]).toMatchObject({confidence:'supported',status:'candidate',support:[first.id,second.id]})
+  expect(reopened.view('third').preferences[0]).toMatchObject({confidence:'tentative',status:'candidate',support:[first.id,second.id]})
   expect(reopened.context('third')).toContain('Possibly prefers smaller captions')
 })
 
@@ -88,7 +89,7 @@ it('undo/redo breaks adjustment grouping and never approves an experimental pref
 it('never groups across referenced evidence, a different property, creator, or intervening AI state',async()=>{
   const s=setup(),id=proposal(s);await size(s,id,54)
   const e=s.memory.view(s.project).evidence[0]!
-  s.memory.agent(s.project,{action:'hypothesis',hypothesis:'Maybe smaller text',dimension:'text',evidence_ids:[e.id]})
+  creatorAgent(s.memory,s.project,{action:'hypothesis',hypothesis:'Maybe smaller text',dimension:'text',evidence_ids:[e.id]})
   await size(s,id,53)
   expect(s.memory.view(s.project).evidence).toHaveLength(2)
   expect(JSON.parse((s.memory.view(s.project).evidence[0]!.data.deltas as any[])[0].after).params.font.size_px).toBe(54)

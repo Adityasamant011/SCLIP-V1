@@ -1,3 +1,4 @@
+import { creatorAgent } from './creatorMemory.test-utils'
 import { afterEach, describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -42,7 +43,7 @@ describe('Creator learning foundation and complete offline path', () => {
     expect(store.context('two')).not.toContain('Energetic captions')
     expect(store.context('one')).not.toContain('Minimal text')
     expect(store.home(directory,'one')).not.toBe(store.home(directory,'two'))
-    expect(() => store.agent('two',{action:'hypothesis',hypothesis:'Something',dimension:'text',evidence_ids:[a.evidence[0]!.id]})).toThrow('cross-creator')
+    expect(() => creatorAgent(store,'two',{action:'hypothesis',hypothesis:'Something',dimension:'text',evidence_ids:[a.evidence[0]!.id]})).toThrow('cross-creator')
   })
   it('captures actual Agent → human correction provenance, persists it, and strengthens Hermes-authored hypotheses across projects', () => {
     const {store,directory} = setup()
@@ -51,13 +52,13 @@ describe('Creator learning foundation and complete offline path', () => {
     expect(first.authority).toBe('ProjectActor')
     expect((first.data.deltas as any[])[0].proposalOpId).toBeTruthy()
     expect(first.data.intention).toContain('unknown')
-    store.agent(projectId,{action:'hypothesis',hypothesis:'Possibly prefers this caption treatment',dimension:'typography',evidence_ids:[first.id]})
+    creatorAgent(store,projectId,{action:'hypothesis',hypothesis:'Possibly prefers this caption treatment',dimension:'typography',evidence_ids:[first.id]})
     const preference = store.view(projectId).preferences[0]!
     expect(preference.status).toBe('candidate'); expect(preference.confidence).toBe('tentative')
     const reopened = new CreatorStyleStore(directory), secondActor = correction(reopened,1000)
     const second = reopened.view(secondActor.snapshot().project_id).evidence.at(-1)!
-    reopened.agent(secondActor.snapshot().project_id,{action:'hypothesis',id:preference.id,hypothesis:preference.hypothesis,dimension:'typography',evidence_ids:[second.id]})
-    expect(reopened.view('third').preferences[0]).toMatchObject({confidence:'supported',status:'candidate',support:[first.id,second.id]})
+    creatorAgent(reopened,secondActor.snapshot().project_id,{action:'hypothesis',id:preference.id,hypothesis:preference.hypothesis,dimension:'typography',evidence_ids:[second.id]})
+    expect(reopened.view('third').preferences[0]).toMatchObject({confidence:'tentative',status:'candidate',support:[first.id,second.id]})
     expect(reopened.context('third')).toContain(preference.hypothesis)
     expect(reopened.view('third').preferences[0]!.status).not.toBe('active')
   })
@@ -75,10 +76,10 @@ describe('Creator learning foundation and complete offline path', () => {
     actor.dispatch('undo',{})
     const undo = store.view(projectId).evidence.at(-1)!
     expect(undo.kind).toBe('undo'); expect(store.view(projectId).preferences).toHaveLength(0)
-    store.agent(projectId,{action:'hypothesis',hypothesis:'Possibly experimental',dimension:'rhythm',evidence_ids:[undo.id]})
+    creatorAgent(store,projectId,{action:'hypothesis',hypothesis:'Possibly experimental',dimension:'rhythm',evidence_ids:[undo.id]})
     const p = store.view(projectId).preferences[0]!
     expect(p).toMatchObject({confidence:'tentative',status:'candidate'})
-    store.agent(projectId,{action:'counterexample',id:p.id,evidence_ids:[undo.id]})
+    creatorAgent(store,projectId,{action:'counterexample',id:p.id,evidence_ids:[undo.id]})
     expect(store.view(projectId).preferences[0]).toMatchObject({status:'disputed',counterexamples:[undo.id]})
   })
   it('scopes series/project directions, keeps current brief priority and accepts different Hermes hypotheses/creative decisions', () => {
@@ -92,7 +93,7 @@ describe('Creator learning foundation and complete offline path', () => {
     expect(store.context('other')).not.toContain('Series opening convention')
     expect(store.context('one')).toContain('CURRENT USER REQUEST takes priority')
     const id = store.view('one').evidence[0]!.id
-    for (const hypothesis of ['Maybe restrained visuals', 'Maybe preserve emotional pauses']) store.agent('one',{action:'hypothesis',hypothesis,dimension:'editorial',evidence_ids:[id]})
+    for (const hypothesis of ['Maybe restrained visuals', 'Maybe preserve emotional pauses']) creatorAgent(store,'one',{action:'hypothesis',hypothesis,dimension:'editorial',evidence_ids:[id]})
     expect(store.view('one').preferences.slice(-2).map(p=>p.hypothesis)).toEqual(['Maybe restrained visuals','Maybe preserve emotional pauses'])
     expect(store.context('one')).toContain('no repair is also valid')
   })
@@ -104,9 +105,9 @@ describe('Creator learning foundation and complete offline path', () => {
     store.user('one',{action:'revise',id:p.id,text:'Prefer stylized shots for this series'})
     expect(store.context('one')).not.toContain('"hypothesis":"Natural shots"')
     store.user('one',{action:'disable',id:p.id})
-    expect(store.agent('one',{action:'context'}).preferences).toHaveLength(0)
+    expect(creatorAgent(store,'one',{action:'context'}).preferences).toHaveLength(0)
     store.user('one',{action:'enable',enabled:false})
-    expect(store.context('one')).toBe(''); expect(store.agent('one',{action:'context'}).evidence).toHaveLength(0)
+    expect(store.context('one')).toBe(''); expect(creatorAgent(store,'one',{action:'context'}).evidence).toHaveLength(0)
     store.user('one',{action:'reset'})
     expect(new CreatorStyleStore(directory).view('one').evidence).toHaveLength(0)
   })
@@ -135,7 +136,7 @@ it('offline fake-Hermes learning path changes a subsequent edit, while an explic
   const {store,directory}=setup(), first=correction(store,100), projectId=first.snapshot().project_id
   const evidenceId=store.view(projectId).evidence[0]!.id
   // This fake model supplies its own interpretation and value, outside production.
-  store.agent(projectId,{action:'hypothesis',hypothesis:'Prefer caption size 64 when readable at this resolution',dimension:'typography',evidence_ids:[evidenceId]})
+  creatorAgent(store,projectId,{action:'hypothesis',hypothesis:'Prefer caption size 64 when readable at this resolution',dimension:'typography',evidence_ids:[evidenceId]})
   store.user(projectId,{action:'approve',id:store.view(projectId).preferences[0]!.id})
   const reopened=new CreatorStyleStore(directory),idGen=seededGen(8000), second=createActor({initial:blankProject(idGen,'next'),idGen})
   const context=reopened.context(second.snapshot().project_id)
@@ -152,10 +153,10 @@ it('disabled/forgotten evidence cannot silently reinstate a preference, includin
  const {store}=setup(), v=store.user('one',{action:'explicit',text:'A distinctive preference to forget'}),p=v.preferences[0]!,e=v.evidence[0]!
  store.user('one',{action:'disable',id:p.id})
  expect(store.context('other')).not.toContain('distinctive')
- expect(()=>store.agent('other',{action:'evidence',id:e.id})).toThrow('Unknown')
+ expect(()=>creatorAgent(store,'other',{action:'evidence',id:e.id})).toThrow('Unknown')
  store.user('one',{action:'approve',id:p.id});expect(store.context('other')).toContain('distinctive')
  store.user('one',{action:'remove',id:p.id});expect(store.context('other')).not.toContain('distinctive')
- expect(()=>store.agent('other',{action:'hypothesis',hypothesis:'Restore forgotten taste',dimension:'editorial',evidence_ids:[e.id]})).toThrow()
+ expect(()=>creatorAgent(store,'other',{action:'hypothesis',hypothesis:'Restore forgotten taste',dimension:'editorial',evidence_ids:[e.id]})).toThrow()
 })
 
 it('records video/audio source changes as facts, preserves intentional offsets, and leaves undo/history intact',()=>{
@@ -182,7 +183,7 @@ it('records video/audio source changes as facts, preserves intentional offsets, 
 it('rejects agent overwrites of creator-authored instructions and keeps original provenance',()=>{
  const {store}=setup(),view=store.user('one',{action:'explicit',text:'Keep natural pauses'})
  const p=view.preferences[0]!,e=view.evidence[0]!
- expect(()=>store.agent('one',{action:'hypothesis',id:p.id,hypothesis:'Remove all pauses',dimension:'rhythm',evidence_ids:[e.id]})).toThrow('Do not overwrite')
+ expect(()=>creatorAgent(store,'one',{action:'hypothesis',id:p.id,hypothesis:'Remove all pauses',dimension:'rhythm',evidence_ids:[e.id]})).toThrow('Do not overwrite')
  expect(store.view('one').preferences[0]!.hypothesis).toBe('Keep natural pauses')
 })
 
@@ -200,17 +201,17 @@ it('project opt-out excludes capture and retrieval without clearing other projec
 it('project-only explicit instructions do not leak through raw evidence or deeper retrieval',()=>{
  const {store}=setup(),v=store.user('one',{action:'explicit',text:'Use celebratory titles only today',scope:{kind:'project'}})
  expect(store.context('other')).not.toContain('celebratory')
- expect(store.agent('other',{action:'context'}).evidence).toHaveLength(0)
- expect(()=>store.agent('other',{action:'evidence',id:v.evidence[0]!.id})).toThrow('Unknown')
+ expect(creatorAgent(store,'other',{action:'context'}).evidence).toHaveLength(0)
+ expect(()=>creatorAgent(store,'other',{action:'evidence',id:v.evidence[0]!.id})).toThrow('Unknown')
  expect(store.context('one')).toContain('celebratory')
 })
 
 it('a counterexample cannot give Hermes permission to overwrite a creator-approved preference',()=>{
  const {store}=setup(),actor=correction(store,100),project=actor.snapshot().project_id,e=store.view(project).evidence[0]!
- store.agent(project,{action:'hypothesis',hypothesis:'Preserve natural pauses',dimension:'rhythm',evidence_ids:[e.id]})
+ creatorAgent(store,project,{action:'hypothesis',hypothesis:'Preserve natural pauses',dimension:'rhythm',evidence_ids:[e.id]})
  const id=store.view(project).preferences[0]!.id
  store.user(project,{action:'approve',id})
- store.agent(project,{action:'counterexample',id,evidence_ids:[e.id]})
- expect(()=>store.agent(project,{action:'hypothesis',id,hypothesis:'Remove all pauses',dimension:'rhythm',evidence_ids:[e.id]})).toThrow('Do not overwrite')
+ creatorAgent(store,project,{action:'counterexample',id,evidence_ids:[e.id]})
+ expect(()=>creatorAgent(store,project,{action:'hypothesis',id,hypothesis:'Remove all pauses',dimension:'rhythm',evidence_ids:[e.id]})).toThrow('Do not overwrite')
  expect(store.view(project).preferences[0]).toMatchObject({hypothesis:'Preserve natural pauses',status:'disputed'})
 })
