@@ -833,3 +833,17 @@ duration, error and actual history IDs. Reverted describes an edit's current
 effect, independently of whether its call completed or failed. The bounded
 activity stream retains running calls and does not restore from disk.
 _Avoid_: diagnostic log entry, history entry, permanent transcript
+
+### Creator memory (Phase 4C.3)
+
+`main/sclip/creatorStyle.ts` is the app-owned canonical creator-memory writer;
+ProjectActor remains the sole timeline writer and Hermes the sole interpreter of
+editorial meaning. Recent observations rotate under per-creator count/byte limits;
+versioned inferred beliefs use bounded factual capsules and foreground atomic
+`creator_style_memory` maintenance. Creator approval/disable/forget controls have
+priority over agent updates and recovery snapshots. `creatorMemoryRetrieval.ts`
+selects the same scoped packet for launch context and tool metadata; omitted
+applicable instructions remain retrievable. No background memory inference or
+mirroring into generic Hermes memory. See
+`docs/phase4c/phase4c-memory-consolidation-final.md` for measured limits, migration,
+recovery, offline validation and the outstanding live learning acceptance.

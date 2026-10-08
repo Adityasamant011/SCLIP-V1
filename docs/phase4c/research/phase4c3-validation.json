@@ -1,0 +1,141 @@
+{
+  "verdict": "A \u2014 SUSTAINABLE MEMORY INFRASTRUCTURE VERIFIED OFFLINE",
+  "behavioral_acceptance": "PENDING",
+  "provider_cost_usd": 0,
+  "provider_inference_calls": 0,
+  "background_inference_calls": 0,
+  "tests": {
+    "focused_typescript": {
+      "passed": 235,
+      "files": 10
+    },
+    "capacity": {
+      "passed": 3,
+      "files": 1
+    },
+    "rust_library": {
+      "passed": 613,
+      "skipped_live_perception": 1
+    },
+    "native_hermes_offline": {
+      "passed": 3
+    },
+    "typecheck": "PASS",
+    "desktop_cli_skills_build": "PASS",
+    "workspace_gui": "PASS",
+    "diff_check": "PASS",
+    "installed_gui": "PASS"
+  },
+  "stress": {
+    "operations": 10000,
+    "projects": 100,
+    "retained": 600,
+    "stats": {
+      "admittedObservations": 10000,
+      "groupedOperations": 0,
+      "evictedObservations": 9400,
+      "evictedOperations": 9400,
+      "compactedObservations": 0
+    },
+    "bytes": 1920946,
+    "runtime_ms": 781390.7243750001,
+    "samples": [
+      {
+        "projects": 1,
+        "bytes": 324305,
+        "elapsed_ms": 1111.3644580000005
+      },
+      {
+        "projects": 10,
+        "bytes": 1915243,
+        "elapsed_ms": 62472.635749999994
+      },
+      {
+        "projects": 50,
+        "bytes": 1915365,
+        "elapsed_ms": 422039.7305
+      },
+      {
+        "projects": 100,
+        "bytes": 1915367,
+        "elapsed_ms": 780991.096
+      }
+    ],
+    "inference_calls": 0
+  },
+  "capsules": {
+    "preferences": 1,
+    "capsules": [
+      {
+        "role": "support",
+        "observations": 100,
+        "operations": 100,
+        "projects": 100,
+        "samples": 3,
+        "omitted_samples": 97
+      },
+      {
+        "role": "counterexample",
+        "observations": 1,
+        "operations": 1,
+        "projects": 1,
+        "samples": 1,
+        "omitted_samples": 0
+      }
+    ],
+    "retention": {
+      "admittedObservations": 800,
+      "groupedOperations": 0,
+      "evictedObservations": 100,
+      "evictedOperations": 100,
+      "compactedObservations": 100
+    },
+    "bytes": 179760
+  },
+  "context": {
+    "tokenizer": "cached o200k_base proxy, not confirmed provider tokenizer",
+    "context_tokens": 939,
+    "tool_response_tokens": 1404,
+    "context_utf8_bytes": 3290,
+    "retrieval_latency_ms": 6.317332999999053,
+    "provider_calls": 0
+  },
+  "installation": {
+    "installed": "/Applications/Sclip.app",
+    "backup": "/Users/adityasamant/SCLIP V1/backups/installed-apps/Sclip-backup-20261008-202812.app",
+    "commit": "7759bb409e51cf97e81c658f85bba5d262309155",
+    "protected_profile_file_count": 27035,
+    "profile_files_unchanged": true,
+    "launcher_unchanged": true
+  },
+  "asset_verification": {
+    "bundle": "/Applications/Sclip.app",
+    "compiled_assets": 51,
+    "skill_assets": 13,
+    "main_sha256": "74d5cd04979f3c317891fc1459f906b3dd7a58c9e3a45cfb750c6387d922b0c8",
+    "match": true
+  },
+  "installed_gui": {
+    "installed": true,
+    "paid_cost": 0,
+    "real_model_calls": 0,
+    "mcp_tool_count": 116,
+    "native_context": "native preload + disabled review verified",
+    "actual_production_terminal": "PASS",
+    "gui_manual_correction": "PASS",
+    "gui_adjustment_grouping": "PASS",
+    "manual_only": "PASS",
+    "restart": "PASS",
+    "controls_effective": "PASS",
+    "project_ids": [
+      "01a11cc6-c0b6-725b-bcee-4746ba56ac52",
+      "01a11cc6-c9fd-7e01-b0e4-d206d099bc69"
+    ],
+    "context_characters": 1740,
+    "build": {
+      "version": "0.1.8",
+      "packaged": true,
+      "appPath": "/Applications/Sclip.app/Contents/Resources/app.asar"
+    }
+  }
+}
