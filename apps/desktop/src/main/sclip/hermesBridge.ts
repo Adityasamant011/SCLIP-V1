@@ -30,12 +30,26 @@ interface BridgeConfig {
   getRuntimeStatus?: () => { state: 'stopped' | 'starting' | 'ready' | 'failed'; detail?: string }
   getMcpStatus: () => { port?: number; tools: number; resources: number }
   getProfileConfig?: () => { provider: string; model: string }
+  getCreatorContext?: (projectId: string) => string
+  assertCreatorGateway?: (projectId: string) => void
+  getCreatorSessionKey?: (projectId: string) => string
   redactForRenderer?: (text: string) => string
   sessions: SclipSessionStore
 }
 
 let config: BridgeConfig | null = null
 const activeRuns = new Map<string, { projectId: string; sessionId: string }>()
+function remoteSessionId(projectId: string, sessionId: string): string {
+  const key = bridge().getCreatorSessionKey?.(projectId)
+  return key === undefined ? sessionId : `sclip-style-${createHash('sha256').update(`${projectId}\0${sessionId}\0${key}`).digest('hex').slice(0, 32)}`
+}
+export async function stopActiveHermesRuns(): Promise<void> {
+  for (const id of activeRuns.keys()) {
+    const result = await stopHermesRun(id)
+    if (!result.ok) throw new Error('Stop the active Hermes run before changing creator memory')
+    activeRuns.delete(id)
+  }
+}
 
 /** Called once by Electron main after its user-data stores are available. */
 export function configureHermesBridge(next: BridgeConfig): void {
@@ -97,7 +111,7 @@ export async function getHermesStatus(): Promise<HermesStatus> {
 
 export async function listProjectSessions(projectId: string): Promise<{ activeSessionId: string | null; sessions: HermesSessionView[] }> {
   const local = bridge().sessions.list(projectId)
-  const sessions = await Promise.all(local.sessions.map(async session => ({ ...session, messages: await sessionMessages(session.id) })))
+  const sessions = await Promise.all(local.sessions.map(async session => ({ ...session, messages: await sessionMessages(remoteSessionId(projectId, session.id)) })))
   return { activeSessionId: local.activeSessionId, sessions }
 }
 
@@ -112,7 +126,7 @@ export async function createProjectSession(projectId: string, name: string): Pro
   }
   const title = hermesSessionTitle(projectId, session.id)
   const profile = config?.getProfileConfig?.()
-  const payload: Record<string, unknown> = { id: session.id, title, source: 'sclip' }
+  const payload: Record<string, unknown> = { id: remoteSessionId(projectId, session.id), title, source: 'sclip' }
   if (profile?.model) payload.model = profile.model
   if (profile?.provider) payload.provider = profile.provider
   const response = await request('/api/sessions', {
@@ -149,10 +163,12 @@ export async function startHermesRun(input: { prompt: string; projectId: string;
   }
   try {
     // Hermes owns conversation identity. WeftCut remains the authority for all video state via MCP.
+    bridge().assertCreatorGateway?.(input.projectId)
+    const creatorContext = bridge().getCreatorContext?.(input.projectId) ?? ''
     const profile = bridge().getProfileConfig?.()
     const response = await request('/v1/runs', {
       method: 'POST', headers: headers(true), body: JSON.stringify({
-        input: input.prompt, session_id: input.sessionId,
+        input: creatorContext ? `${input.prompt}\n\n${creatorContext}` : input.prompt, session_id: remoteSessionId(input.projectId, input.sessionId),
         ...(profile?.provider ? { provider: profile.provider } : {}),
         ...(profile?.model ? { model: profile.model } : {}),
       }),

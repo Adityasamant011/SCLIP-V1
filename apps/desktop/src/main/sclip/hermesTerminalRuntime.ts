@@ -3,7 +3,7 @@ import { startAutonomousReview, initialEditorialEvidence, stageEditorialEvidence
 import fs from 'node:fs'
 import { createHash } from 'node:crypto'
 import * as pty from 'node-pty'
-import { readHermesProfile, writeHermesProfile } from './hermesRuntime.js'
+import { readHermesProfile, writeHermesProfile, initializeCreatorHermesControls } from './hermesRuntime.js'
 import { createHermesOutputRedactor, hermesBaseEnvironment } from './hermesSecrets.js'
 import type { HermesProfileConfig } from './hermesRuntime.js'
 
@@ -25,6 +25,9 @@ export interface HermesTerminalOptions {
   getProviderEnvironment: (profile: HermesProfileConfig) => Record<string, string>
   /** Reject stale renderer/project/session combinations before a PTY is created. */
   assertSession: (projectId: string, sessionId: string) => Promise<void>
+  getCreatorContext?: (projectId: string) => string
+  getCreatorHome?: (baseHome: string, projectId: string) => string
+  getCreatorSessionKey?: (projectId: string) => string
   onOutput: (event: { projectId: string; sessionId: string; sequence: number; data: string }) => void
   onExit: (event: { projectId: string; sessionId: string; code: number }) => void
 }
@@ -60,14 +63,21 @@ export class HermesTerminalRuntime {
       return { history: existing.history, sequence: existing.sequence }
     }
     const launch = this.resolveLaunch()
-    const home = path.join(this.options.userDataPath, 'sclip-hermes')
+    const baseHome = path.join(this.options.userDataPath, 'sclip-hermes')
+    const home = this.options.getCreatorHome?.(baseHome, projectId) ?? baseHome
     fs.mkdirSync(home, { recursive: true, mode: 0o700 })
     const mcp = this.options.getMcpInfo()
     const review = mode === 'review' ? await startAutonomousReview(mcp, projectId) : null
     const packet=review?.editorial_evidence_packet ?? await initialEditorialEvidence(mcp,projectId)
-    const stagedEvidence=stageEditorialEvidence(home,packet)
+    const stagedEvidence=stageEditorialEvidence(home,packet,this.options.getCreatorContext?.(projectId) ?? '')
     const configPath = path.join(home, 'config.yaml')
-    if (!fs.existsSync(configPath)) writeHermesProfile(home, 0)
+    if (home !== baseHome) {
+      initializeCreatorHermesControls(baseHome, home)
+      writeHermesProfile(home, 0, readHermesProfile(baseHome))
+      // Ship tools/skill knowledge, never another creator's learned memories or sessions.
+      const skill = path.join(baseHome, 'skills', 'weftcut')
+      if (fs.existsSync(skill)) fs.cpSync(skill, path.join(home, 'skills', 'weftcut'), { recursive: true })
+    } else if (!fs.existsSync(configPath)) writeHermesProfile(home, 0)
     const profile = readHermesProfile(home)
     const providerEnv = this.options.getProviderEnvironment(profile)
     const env: Record<string, string | undefined> = {
@@ -184,7 +194,8 @@ export class HermesTerminalRuntime {
 
   private key(projectId: string, sessionId: string): string { return `${projectId}\u0000${sessionId}` }
   private hermesSessionTitle(projectId: string, sessionId: string): string {
-    return `sclip-${createHash('sha256').update(this.key(projectId, sessionId)).digest('hex').slice(0, 32)}`
+    const identity = this.key(projectId, sessionId) + (this.options.getCreatorSessionKey ? `\u0000${this.options.getCreatorSessionKey(projectId)}` : '')
+    return `sclip-${createHash('sha256').update(identity).digest('hex').slice(0, 32)}`
   }
   private dimension(value: number, fallback: number): number {
     return Number.isInteger(value) && value >= 2 && value <= 500 ? value : fallback

@@ -1,6 +1,6 @@
-vi.mock('./autonomousReview', () => ({startAutonomousReview: vi.fn(async()=>({url:'http://127.0.0.1:44555/mcp?review_session=synthetic',review_id:'synthetic',editorial_evidence_packet:{identity:{state_version:'synthetic'}}})),initialEditorialEvidence:vi.fn(async()=>({identity:{state_version:'synthetic'}})),stageEditorialEvidence:()=>({name:'synthetic-evidence',cleanup:()=>{}})}))
+vi.mock('./autonomousReview', () => ({startAutonomousReview: vi.fn(async()=>({url:'http://127.0.0.1:44555/mcp?review_session=synthetic',review_id:'synthetic',editorial_evidence_packet:{identity:{state_version:'synthetic'}}})),initialEditorialEvidence:vi.fn(async()=>({identity:{state_version:'synthetic'}})),stageEditorialEvidence:vi.fn(()=>({name:'synthetic-evidence',cleanup:()=>{}}))}))
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -27,8 +27,27 @@ vi.mock('node-pty', () => ({
 }))
 
 import { HermesTerminalRuntime } from './hermesTerminalRuntime'
+import { stageEditorialEvidence } from './autonomousReview'
 
 describe('HermesTerminalRuntime', () => {
+  it('loads chosen creator context through actual launch arguments, isolates native memory, and changes resumed identity after reset', async () => {
+    const directory=mkdtempSync(path.join(os.tmpdir(),'creator-terminal-'))
+    try {
+      const base=path.join(directory,'sclip-hermes'),home=path.join(base,'creators','isolated')
+      mkdirSync(path.join(base,'memories'),{recursive:true});writeFileSync(path.join(base,'memories','USER.md'),'Creator A private preference')
+      let epoch='creator-b:1'
+      const runtime=new HermesTerminalRuntime({isPackaged:false,resourcesPath:'',userDataPath:directory,executableOverride:'/usr/bin/python3',getMcpInfo:()=>({url:'http://127.0.0.1/mcp',bearer_token:'synthetic'}),getProviderEnvironment:()=>({}),assertSession:async()=>{},onOutput:()=>{},onExit:()=>{},getCreatorHome:()=>home,getCreatorContext:()=> 'Creator B: minimal text. Current request overrides.',getCreatorSessionKey:()=>epoch})
+      await runtime.ensure('project','session')
+      const first=spawnedArgs[spawnedArgs.indexOf('--continue')+1]
+      expect(spawnedEnv.HERMES_HOME).toBe(home)
+      expect(stageEditorialEvidence).toHaveBeenCalledWith(home,expect.anything(),'Creator B: minimal text. Current request overrides.')
+      expect(spawnedArgs[spawnedArgs.indexOf('--skills')+1]).toContain('synthetic-evidence')
+      expect(existsSync(path.join(home,'memories','USER.md'))).toBe(false)
+      runtime.stopAll();epoch='creator-b:2';await runtime.ensure('project','session')
+      expect(spawnedArgs[spawnedArgs.indexOf('--continue')+1]).not.toBe(first)
+      runtime.stopAll()
+    } finally {rmSync(directory,{recursive:true,force:true})}
+  })
   let tmpDir: string
   let outputEvents: any[]
   let exitEvents: any[]

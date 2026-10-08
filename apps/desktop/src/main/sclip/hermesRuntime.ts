@@ -301,7 +301,35 @@ export function writeHermesProfile(
     '',
   ].join('\n')
 
-  fs.writeFileSync(`${target}.tmp`, config, { encoding: 'utf8', mode: 0o600 })
+  // Memory controls are supported Hermes settings, not credentials. Preserve
+  // deliberate user choices instead of silently resetting them on reconnect.
+  const supported = ['memory', 'skills'] as const
+  const memoryConfig = supported.filter(key => previous[key] && typeof previous[key] === 'object')
+    .map(key => `${key}: ${JSON.stringify(previous[key])}`).join('\n')
+  // Creator learning uses foreground Hermes. Do not silently spawn an extra
+  // model to curate it; retain a user's explicit supported setting if present.
+  const backgroundEnabled = previous.auxiliary?.background_review?.enabled ?? false
+  const backgroundConfig = typeof backgroundEnabled === 'boolean'
+    ? `auxiliary:\n  background_review:\n    enabled: ${backgroundEnabled}\n` : ''
+
+  fs.writeFileSync(`${target}.tmp`, `${config}${memoryConfig}\n${backgroundConfig}`, { encoding: 'utf8', mode: 0o600 })
   fs.renameSync(`${target}.tmp`, target)
   try { fs.chmodSync(target, 0o600) } catch { /* Windows lacks POSIX modes. */ }
+}
+
+/** Inherit safe learning controls on first creator launch, never memory content,
+ * external provider credentials/configuration, personality or session history. */
+export function initializeCreatorHermesControls(base: string, home: string): void {
+  if (home === base || fs.existsSync(path.join(home, 'config.yaml'))) return
+  let config: any = {}
+  try { config = parseYaml(fs.readFileSync(path.join(base, 'config.yaml'), 'utf8')) ?? {} } catch {}
+  const pick = (section: string, keys: string[]) => Object.fromEntries(keys.flatMap(key => {
+    const value = config[section]?.[key]
+    return typeof value === 'boolean' || typeof value === 'number' && Number.isFinite(value) ? [[key, value]] : []
+  }))
+  const memory = pick('memory', ['memory_enabled', 'user_profile_enabled', 'write_approval', 'memory_char_limit', 'user_char_limit', 'nudge_interval'])
+  const skills = pick('skills', ['creation_nudge_interval', 'write_approval'])
+  const enabled = typeof config.auxiliary?.background_review?.enabled === 'boolean' ? config.auxiliary.background_review.enabled : false
+  fs.mkdirSync(home, { recursive: true, mode: 0o700 })
+  fs.writeFileSync(path.join(home, 'config.yaml'), `memory: ${JSON.stringify(memory)}\nskills: ${JSON.stringify(skills)}\nauxiliary:\n  background_review:\n    enabled: ${enabled}\n`, { mode: 0o600 })
 }

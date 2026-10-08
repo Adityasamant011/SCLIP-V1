@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { configuredHermesKeys, credentialTags, resolveHermesProviderEnvironment, testHermesConnection, validateHermesProfile } from './hermesSettings.js'
 import { createHermesOutputRedactor, hermesBaseEnvironment, redactHermesSecrets } from './hermesSecrets.js'
-import { readHermesProfile, writeHermesProfile } from './hermesRuntime.js'
+import { readHermesProfile, writeHermesProfile, initializeCreatorHermesControls } from './hermesRuntime.js'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -10,6 +10,30 @@ const SECRET = 'SCLIP_TEST_SECRET_DO_NOT_LEAK_12345'
 const base = { provider: 'openrouter', model: 'nex-agi/nex-n2.5-pro:free', maxIterations: 30 }
 
 describe('secure Hermes settings', () => {
+  it('defaults to foreground learning and isolates inherited controls without copying credentials or memories',()=>{
+    const dir=mkdtempSync(path.join(os.tmpdir(),'creator-controls-')),home=path.join(dir,'creator-b')
+    try {
+      writeFileSync(path.join(dir,'config.yaml'),'memory:\n  memory_enabled: true\n  user_profile_enabled: false\n  provider: private-provider\n  api_key: PRIVATE_SYNTHETIC_VALUE\n')
+      initializeCreatorHermesControls(dir,home)
+      const controls=readFileSync(path.join(home,'config.yaml'),'utf8')
+      expect(controls).toContain('"user_profile_enabled":false');expect(controls).toContain('enabled: false')
+      expect(controls).not.toContain('PRIVATE_SYNTHETIC_VALUE');expect(controls).not.toContain('private-provider')
+      writeHermesProfile(home,0,base)
+      expect(readFileSync(path.join(home,'config.yaml'),'utf8')).toContain('enabled: false')
+      writeHermesProfile(dir,0,base)
+      expect(readFileSync(path.join(dir,'config.yaml'),'utf8')).toContain('enabled: false')
+    }finally{rmSync(dir,{recursive:true,force:true})}
+  })
+  it('preserves supported memory choices and disabled automatic inference on profile rewrite', () => {
+    const dir=mkdtempSync(path.join(os.tmpdir(),'creator-config-'))
+    try {
+      writeFileSync(path.join(dir,'config.yaml'),'memory:\n  memory_enabled: true\n  user_profile_enabled: false\nskills:\n  creation_nudge_interval: 0\nauxiliary:\n  background_review:\n    enabled: false\n')
+      writeHermesProfile(dir,1234,base)
+      const output=readFileSync(path.join(dir,'config.yaml'),'utf8')
+      expect(output).toContain('"memory_enabled":true');expect(output).toContain('"user_profile_enabled":false')
+      expect(output).toContain('"creation_nudge_interval":0');expect(output).toContain('enabled: false')
+    }finally{rmSync(dir,{recursive:true,force:true})}
+  })
   it('grounds capability reporting in the runtime catalog while preserving user instructions and cwd', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'sclip-capabilities-'))
     try {

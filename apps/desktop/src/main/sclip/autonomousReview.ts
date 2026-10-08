@@ -24,9 +24,9 @@ export function editorialEvidenceContext(packet: unknown): string {
 
 /** Preload a session-scoped evidence snapshot through Hermes's existing skills mechanism.
  * Does not override its configured system prompt/personality or run inference at startup. */
-export function stageEditorialEvidence(home:string,packet:unknown) {
+export function stageEditorialEvidence(home:string,packet:unknown,creatorContext = '') {
   const name=`sclip-evidence-${randomUUID()}`, dir=path.join(home,'skills',name)
   fs.mkdirSync(dir,{recursive:true,mode:0o700})
-  fs.writeFileSync(path.join(dir,'SKILL.md'),`---\nname: ${name}\ndescription: Current project observation index for this session\n---\n\n${editorialEvidenceContext(packet)}\n`,{mode:0o600})
+  fs.writeFileSync(path.join(dir,'SKILL.md'),`---\nname: ${name}\ndescription: Current project observation index for this session\n---\n\n${editorialEvidenceContext(packet)}\n\n${creatorContext}\n`,{mode:0o600})
   return {name,cleanup:()=>fs.rmSync(dir,{recursive:true,force:true})}
 }

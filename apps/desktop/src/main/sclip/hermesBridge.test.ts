@@ -45,3 +45,20 @@ describe('Hermes bridge secret boundary', () => {
     vi.unstubAllGlobals()
   })
 })
+
+it('injects current creator context into the real gateway request and rotates conversation identity after forgetting', async()=>{
+  let epoch='local:1'
+  configureHermesBridge({getGatewayUrl:()=> 'http://127.0.0.1:12345',getGatewayToken:()=>SECRET,getActiveProjectId:async()=> 'project',getMcpStatus:()=>({tools:1,resources:1}),sessions:sessions as any,getCreatorContext:()=> 'Creator evidence: restrained visuals; current brief takes priority',getCreatorSessionKey:()=>epoch})
+  const fetchMock=vi.fn(async(_url:string,init?:RequestInit)=>init?.method==='POST' ? new Response(JSON.stringify({run_id:'offline-run',status:'running'})):new Response(''))
+  vi.stubGlobal('fetch',fetchMock)
+  try{
+    const input={prompt:'Make this energetic',projectId:'project',sessionId:'same-session'}
+    await startHermesRun(input)
+    const first=JSON.parse(String(fetchMock.mock.calls[0]![1]!.body))
+    expect(first.input).toContain('Make this energetic');expect(first.input).toContain('current brief takes priority')
+    epoch='local:2';fetchMock.mockClear();await startHermesRun(input)
+    const second=JSON.parse(String(fetchMock.mock.calls[0]![1]!.body))
+    expect(second.session_id).not.toBe(first.session_id)
+    expect(JSON.stringify(second)).not.toContain(SECRET)
+  }finally{vi.unstubAllGlobals()}
+})
