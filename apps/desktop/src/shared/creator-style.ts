@@ -14,7 +14,7 @@ export interface CreatorEvidence {
 export interface CreatorPreferenceVersion {
   version: number; hypothesis: string; dimension: string; scope: StyleScope
   support: string[]; counterexamples: string[]; updated: string
-  applicability?: string; exceptionTo?: string
+  applicability?: string; exceptionTo?: string; exceptionVersion?: number
 }
 export interface CreatorPreference {
   id: string; creatorId: string; scope: StyleScope; dimension: string; hypothesis: string
@@ -22,7 +22,8 @@ export interface CreatorPreference {
   support: string[]; counterexamples: string[]; confidence: 'explicit' | 'tentative' | 'supported'
   firstObserved: string; updated: string
   version?: number; approved?: boolean; history?: CreatorPreferenceVersion[]
-  aliases?: string[]; lineageFilter?: string; applicability?: string; exceptionTo?: string
+  aliases?: string[]; lineageFilter?: string; applicability?: string; exceptionTo?: string; exceptionVersion?: number
+  consolidation?: Array<{id:string;version:number;hypothesis:string;reason:string;observations:number;counterexamples:number;omittedSamples:number}>
   supersededBy?: string; legacyConfidence?: string
 }
 export interface CreatorMemoryControl {

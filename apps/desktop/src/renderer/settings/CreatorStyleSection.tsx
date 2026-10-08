@@ -30,6 +30,7 @@ export function CreatorStyleSection() {
     {error && <p role="alert">{error}</p>}
     {view && <>
       {view.captureWarning && <p role="alert">{view.captureWarning}</p>}
+      {view.retention && <p>Recent observations admitted: {view.retention.admittedObservations}. Uninterpreted observations lost: {view.retention.evictedObservations} ({view.retention.evictedOperations} edits). Claimed observations compacted: {view.retention.compactedObservations}. No style conclusions are made during rotation.</p>}
       <label>Creator <select aria-label="Creator" disabled={busy} value={view.binding.creatorId} onChange={e => void update({ action: 'bind', creatorId: e.target.value })}>
         {view.creators.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
       </select></label>
@@ -45,7 +46,8 @@ export function CreatorStyleSection() {
       <Button disabled={busy || !text.trim()} onClick={() => void update({ action: 'explicit', text, scope: { kind: scope } })}>Remember preference</Button>
       <Button disabled={busy} onClick={() => void update({ action: 'view' })}>Refresh</Button>
       <ul>{view.preferences.map(p => <li key={p.id}>
-        <p>{p.hypothesis} — {p.status}, {p.confidence}, {p.scope.kind}; {p.support.length} evidence, {p.counterexamples.length} counterexamples</p>
+        <p>{p.hypothesis} — {p.status}, {p.approved ? 'creator-approved' : 'tentative'}, {p.scope.kind}, version {p.version}; {p.support.length} retained support samples, {p.counterexamples.length} counterexample samples. Counts are factual coverage, not certainty.</p>
+        {p.applicability && <p>Applies when: {p.applicability}</p>}
         <Button disabled={busy} onClick={() => void update({ action: 'approve', id: p.id })}>Approve</Button>
         <Button disabled={busy || !text.trim()} onClick={() => void update({ action: 'revise', id: p.id, text })}>Replace with entered preference</Button>
         <Button disabled={busy} onClick={() => void update({ action: 'disable', id: p.id })}>Disable</Button>
@@ -53,7 +55,10 @@ export function CreatorStyleSection() {
       </li>)}</ul>
       <details><summary>Correction and reference evidence ({view.evidence.length})</summary>
         {view.evidence.slice(-30).map(e => <div key={e.id}><p>{e.kind} · {e.authority} · {e.projectId}</p><pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(e.data, null, 2)}</pre><Button disabled={busy} onClick={() => void update({ action: 'remove_evidence', id: e.id })}>Forget evidence</Button></div>)}
-        {view.evidence.length > 30 && <p>Showing the latest 30. All evidence remains in the local creator ledger.</p>}
+        {view.evidence.length > 30 && <p>Showing the latest 30. Older observations may rotate out. Retained capsule samples and loss counts are shown separately.</p>}
+      </details>
+      <details><summary>Compact provenance capsules ({view.capsules?.length ?? 0})</summary>
+        {view.capsules?.map(c=><div key={c.id}><p>{c.role} · version {c.version} · at least {c.observations} distinct observations across {c.projects.length} recorded projects; {c.omittedSamples} sample details omitted.</p>{c.samples.map(e=><details key={e.id}><summary>{e.kind} · {e.authority} · {e.projectId}</summary><pre style={{whiteSpace:'pre-wrap'}}>{JSON.stringify(e.data,null,2)}</pre><Button disabled={busy} onClick={()=>void update({action:'remove_evidence',id:e.id})}>Forget evidence</Button></details>)}</div>)}
       </details>
       <details><summary>Register a supplied finished-video reference</summary>
         <p>Import it first. Cached local observations are retained; missing analysis stays unknown. Original edit decisions cannot be reconstructed.</p>

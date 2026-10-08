@@ -25,4 +25,4 @@ export function filterUnion(a: string, b: string) {
 }
 export const validFilter = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]+$/.test(value) && value.length === BYTES * 2
 export const controlKey = (scope: StyleScope, text: string) => JSON.stringify([scope, text.trim()])
-export const preferenceKey = (p: Pick<CreatorPreference, 'scope' | 'hypothesis' | 'dimension' | 'origin' | 'applicability' | 'exceptionTo'>) => JSON.stringify([p.scope, p.hypothesis, p.dimension, p.origin, p.applicability ?? '', p.exceptionTo ?? ''])
+export const preferenceKey = (p: Pick<CreatorPreference, 'scope' | 'hypothesis' | 'dimension' | 'origin' | 'applicability' | 'exceptionTo' | 'exceptionVersion'>) => JSON.stringify([p.scope, p.hypothesis, p.dimension, p.origin, p.applicability ?? '', p.exceptionTo ?? '', p.exceptionVersion ?? 0])

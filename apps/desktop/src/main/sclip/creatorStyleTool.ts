@@ -1,14 +1,23 @@
+const operationProperties = {
+  action:{type:'string',enum:['hypothesis','link','counterexample','exception','consolidate','supersede']},
+  id:{type:'string'},expected_version:{type:'integer',minimum:1},
+  hypothesis:{type:'string',maxLength:1000},dimension:{type:'string',maxLength:80},
+  scope:{type:'object',properties:{kind:{type:'string',enum:['creator','series','project']}},required:['kind'],additionalProperties:false},
+  evidence_ids:{type:'array',items:{type:'string'},minItems:1,maxItems:12},
+  applicability:{type:'string',maxLength:400},exception_to:{type:'string'},exception_version:{type:'integer',minimum:1},reason:{type:'string',maxLength:600},
+  source_preferences:{type:'array',items:{type:'object',properties:{id:{type:'string'},expected_version:{type:'integer',minimum:1}},required:['id','expected_version'],additionalProperties:false},minItems:1,maxItems:8},
+  counterexample_ids:{type:'array',items:{type:'string'},maxItems:12},
+} as const
 export const CREATOR_STYLE_TOOL = {
-  name: 'creator_style_memory',
-  description: 'Local creator-scoped style evidence, not an editing rule engine. context returns current revision, creator binding, preference versions and attributed facts. YOU interpret evidence and choose hypothesis text, dimension and scope. For writes supply creator_id and expected_revision from fresh context, actual evidence_ids, and expected_version when updating an existing id. Disabled/forgotten preferences can only be restored by the creator. A revised meaning starts a new evidence version. Inferred claims stay tentative; factual counts are not editorial certainty. Current request overrides memory. One undo, saving/exporting or your own edits do not prove taste. No timeline edits, creative values, automatic A/V sync or new model calls. Do not mirror style into generic USER.md/MEMORY.md. Creator approval and bindings are user controls.',
-  inputSchema: { type: 'object', properties: {
-    action: { type: 'string', enum: ['context', 'evidence', 'hypothesis', 'counterexample'] },
-    id: { type: 'string' }, hypothesis: { type: 'string', maxLength: 1000 }, dimension: { type: 'string', maxLength: 80 },
-    creator_id: { type: 'string', description: 'Exact current creator identity from context; required for writes.' },
-    expected_revision: { type: 'integer', minimum: 0, description: 'Fresh memory revision from context; required for writes.' },
-    expected_version: { type: 'integer', minimum: 1, description: 'Current version of an existing preference being updated.' },
-    request: { type: 'string', maxLength: 1000, description: 'Optional current editing objective for local lexical memory relevance. Does not select clips or creative values.' },
-    scope: { type: 'object', properties: { kind: { type: 'string', enum: ['creator', 'series', 'project'] } }, required: ['kind'], additionalProperties: false },
-    evidence_ids: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 12 },
-  }, required: ['action'], additionalProperties: false },
+ name:'creator_style_memory',
+ description:'Canonical local creator memory; no timeline edits or background model calls. context returns the SAME compact packet selection and IDs used in your current context, fresh creator/revision, versions and evidence-loss disclosure. preference/evidence retrieve relevant details; preferences pages omitted applicable knowledge (requires creator_id/expected_revision). YOU interpret facts: counts are not certainty. Writes require creator_id/expected_revision and actual evidence_ids; existing targets/source_preferences require expected_version. maintenance atomically applies 1–8 YOUR operations with request_id (idempotency): hypothesis, link, counterexample, contextual exception, consolidate or supersede inferred candidates. You supply meanings, scopes, applicability, evidence and semantic reason. Consolidation sources must have the same scope; retain their selected counterexamples explicitly. Changed meanings start new evidence versions; old support is not inherited. Disabled/forgotten controls and creator-approved wording cannot be overridden. Exact duplicates reuse the current canonical family. Evidence can be insufficient: decline to learn. Current brief overrides memory. Do not mirror style into USER.md/MEMORY.md; generic memory remains for non-style facts. Creator approval/disable/forget are user controls.',
+ inputSchema:{type:'object',properties:{
+  ...operationProperties,
+  action:{type:'string',enum:['context','preferences','preference','evidence','hypothesis','counterexample','maintenance']},
+  creator_id:{type:'string',description:'Exact current creator identity; required for writes/pagination.'},
+  expected_revision:{type:'integer',minimum:0,description:'Fresh memory revision; required for writes/pagination.'},
+  request:{type:'string',maxLength:1000,description:'Current objective for local lexical relevance; never chooses edits.'},
+  cursor:{type:'integer',minimum:0},request_id:{type:'string',maxLength:80},
+  operations:{type:'array',minItems:1,maxItems:8,items:{type:'object',properties:operationProperties,required:['action','evidence_ids'],additionalProperties:false}},
+ },required:['action'],additionalProperties:false},
 } as const

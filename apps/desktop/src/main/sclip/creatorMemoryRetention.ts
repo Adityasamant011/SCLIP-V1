@@ -83,7 +83,13 @@ export function retainMemory(doc: CreatorMemoryDocument) {
     const p=doc.preferences.find(p=>p.id===c.preferenceId)
     return !!p && (p.version===c.version || p.history!.some(v=>v.version===c.version))
   })
-  for(const e of doc.evidence) if(e.claims) e.claims=e.claims.filter(v=>doc.capsules.some(c=>c.preferenceId===v.preferenceId && c.version===v.version))
+  for(const e of doc.evidence) if(e.claims?.length) {
+    const old=e.claims
+    e.claims=old.filter(v=>doc.capsules.some(c=>c.preferenceId===v.preferenceId && c.version===v.version))
+    // Retiring a meaning must not turn its already-interpreted facts back into
+    // "new" unresolved evidence. No semantic conclusion is made here.
+    if(!e.claims.length){e.suppressed=true;e.suppressedBy=[...new Set([...e.suppressedBy??[],...old.map(v=>v.preferenceId)])].slice(-8)}
+  }
   for(const creator of doc.creators) {
     const inferred=doc.preferences.filter(p=>p.creatorId===creator.id && !p.approved)
     if(inferred.length>CREATOR_MEMORY_LIMITS.inferred || size([inferred,doc.capsules.filter(c=>inferred.some(p=>p.id===c.preferenceId))])>CREATOR_MEMORY_LIMITS.inferredBytes) throw new Error('Inferred memory budget full; use one atomic maintenance batch to consolidate/compact or supersede candidates. Creator-approved knowledge is preserved.')

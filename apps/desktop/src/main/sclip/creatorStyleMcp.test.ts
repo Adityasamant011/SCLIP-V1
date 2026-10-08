@@ -26,7 +26,7 @@ describe('Real MCP creator memory integration without inference', () => {
       const read:any=await client.callTool({name:tool.name,arguments:{action:'context'}})
       const packet=JSON.parse(read.content[0].text)
       expect(packet.context).toContain('Prefer natural editing')
-      const result:any=await client.callTool({name:tool.name,arguments:{action:'hypothesis',creator_id:packet.binding.creatorId,expected_revision:store.view(projectId).revision,hypothesis:'Perhaps natural framing matters',dimension:'visual',evidence_ids:[packet.evidence[0].id]}})
+      const result:any=await client.callTool({name:tool.name,arguments:{action:'hypothesis',creator_id:packet.binding.creatorId,expected_revision:store.view(projectId).revision,hypothesis:'Perhaps natural framing matters',dimension:'visual',evidence_ids:[store.view(projectId).preferences[0]!.support[0]]}})
       expect(result.isError).not.toBe(true)
       expect(new CreatorStyleStore(directory).view(projectId).preferences.at(-1)).toMatchObject({hypothesis:'Perhaps natural framing matters',status:'candidate'})
       const invalid:any=await client.callTool({name:tool.name,arguments:{action:'hypothesis',creator_id:packet.binding.creatorId,expected_revision:store.view(projectId).revision,hypothesis:'Unsupported',dimension:'pacing',evidence_ids:['invented']}})

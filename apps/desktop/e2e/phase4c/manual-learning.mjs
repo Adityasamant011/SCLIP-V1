@@ -5,7 +5,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'; import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 const root=fs.mkdtempSync(path.join(os.tmpdir(),'sclip-creator-gui-'));
-const output=path.resolve('.scratch/phase4c1');fs.mkdirSync(output,{recursive:true});
+const output=path.resolve(process.env.SCLIP_LEARNING_OUTPUT || '.scratch/phase4c1');fs.mkdirSync(output,{recursive:true});
 const fixture=path.join(root,'offline-hermes');fs.copyFileSync('apps/desktop/e2e/phase4c/offline-hermes.py',fixture);fs.chmodSync(fixture,0o700);
 fs.writeFileSync(path.join(root,'recents.json'),JSON.stringify({entries:[],reopen_on_launch:false,last_new_project_parent:root}));
 fs.mkdirSync(path.join(root,'sclip-hermes'));fs.writeFileSync(path.join(root,'sclip-hermes/config.yaml'),'model:\n  provider: custom\n  default: offline-only\n  base_url: http://127.0.0.1:1/v1\n');
@@ -44,7 +44,8 @@ try {
   assert.equal(corrected.evidence.length,1);assert.equal(e.kind,'correction');assert.equal(e.data.actor.kind,'User');assert.equal(e.data.operationCount,3);
   assert(d.proposalOpId);assert.equal(JSON.parse(d.before).params.font.size_px,76);assert.equal(JSON.parse(d.after).params.font.size_px,54);assert.equal(corrected.preferences.length,0);
   await page.screenshot({path:path.join(output,installed?'installed-gui.png':'workspace-gui.png')});
-  await call('creator_style_memory',{action:'hypothesis',hypothesis:'Possibly prefers smaller captions where readable',dimension:'caption',evidence_ids:[e.id]});
+  const memoryContext=JSON.parse(await call('creator_style_memory',{action:'context'}));
+  await call('creator_style_memory',{action:'hypothesis',creator_id:memoryContext.binding.creatorId,expected_revision:memoryContext.revision,hypothesis:'Possibly prefers smaller captions where readable',dimension:'caption',evidence_ids:[e.id]});
   const hypothesis=(await invoke('sclip_creator_style',{action:'view'})).preferences[0];
   await invoke('sclip_creator_style',{action:'approve',id:hypothesis.id});
   await invoke('project_save');
