@@ -9,6 +9,7 @@ export interface CreatorMemoryDocument {
   evidence: CreatorEvidence[]; preferences: CreatorPreference[]; proposals: CreatorProposal[]
   controls: CreatorMemoryControl[]; capsules: CreatorEvidenceCapsule[]
   stats: Record<string, CreatorMemoryStats>
+  maintenance?: Array<{id:string;creatorId:string;digest:string;revision:number;operations:number;at:string}>
   migration?: { sourceSha256: string; evidence: number; preferences: number; creators: number }
 }
 export const memoryDigest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
@@ -51,7 +52,18 @@ export function validateMemory(value: unknown): void {
     if (d.version === 2) requireThat(Number.isSafeInteger(p.version) && p.version! > 0 && typeof p.approved === 'boolean' && Array.isArray(p.history) && Array.isArray(p.aliases) && validFilter(p.lineageFilter), 'preference version')
     preferenceIds.add(p.id)
   }
-  for (const c of d.capsules ?? []) requireThat(preferenceIds.has(c.preferenceId), 'orphan capsule')
+  for (const c of d.capsules ?? []) {
+    const p=d.preferences.find(p=>p.id===c.preferenceId)
+    requireThat(p && p.creatorId===c.creatorId && (p.version===c.version || p.history?.some(v=>v.version===c.version)), 'orphan/cross-creator capsule version')
+    for(const n of [c.observations,c.operations,c.omittedSamples])requireThat(Number.isSafeInteger(n)&&n>=0,'capsule counts')
+    requireThat(c.samples.length<=3 && c.projects.length<=128,'capsule detail budget')
+  }
+  for(const p of d.preferences)for(const v of p.history??[]){
+    requireThat(Number.isSafeInteger(v.version)&&v.version<p.version! && scopeValid(v.scope)&&string(v.hypothesis)&&string(v.dimension)&&Array.isArray(v.support)&&Array.isArray(v.counterexamples),'historical version')
+    for(const id of [...v.support,...v.counterexamples])requireThat(allEvidence.some(e=>e.id===id&&e.creatorId===p.creatorId),'historical provenance')
+  }
+  for(const [creator,stats] of Object.entries(d.stats??{}))requireThat(creators.has(creator)&&Object.values(stats).every(n=>Number.isSafeInteger(n)&&n>=0),'retention statistics')
+  for(const r of d.maintenance??[])requireThat(creators.has(r.creatorId)&&string(r.id)&&string(r.digest)&&Number.isSafeInteger(r.revision)&&r.operations>0&&r.operations<=8,'maintenance receipt')
   for (const p of d.proposals) requireThat(p && creators.has(p.creatorId) && string(p.projectId) && string(p.layerId) && string(p.opId) && string(p.valueHash), 'proposal')
 }
 

@@ -9,6 +9,7 @@ export interface CreatorEvidence {
   scope?: StyleScope
   suppressed?: boolean
   suppressedBy?: string[]
+  claims?: Array<{ preferenceId: string; version: number }>
 }
 export interface CreatorPreferenceVersion {
   version: number; hypothesis: string; dimension: string; scope: StyleScope
