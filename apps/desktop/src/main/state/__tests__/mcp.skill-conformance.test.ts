@@ -24,6 +24,8 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../
 const SKILL_SOURCES = [
   path.join(repoRoot, 'skills/weftcut/SKILL.md'),
   path.join(repoRoot, 'docs/motif-authoring.md'),
+  path.join(repoRoot, 'skills/weftcut/references/editing-knowledge/speech-boundary-decisions.md'),
+  path.join(repoRoot, 'apps/desktop/e2e/editorial-boundary-experiment/skill-addition.md'),
 ]
 
 const rust = JSON.parse(readFileSync(path.join(repoRoot, 'apps/desktop/fixtures/mcp/rust-catalog-snapshot.json'), 'utf8')) as {

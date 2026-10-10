@@ -25,6 +25,12 @@ export const REQUIRED_SKILL = 'weftcut'
 /// assertion looks for afterwards.
 export const REQUIRED_DOCS = ['motif-authoring.md']
 
+// Unpromoted editorial experiment: available to explicit isolated staging,
+// never discoverable in the normal shipped skill's linked-file catalog.
+export function omitExperimentalReferences(bundle) {
+  fs.rmSync(path.join(bundle, REQUIRED_SKILL, 'references/editing-knowledge/speech-boundary-decisions.md'), { force: true })
+}
+
 /// Record the app version inside a SKILL.md's frontmatter.
 ///
 /// It goes under `metadata`, the one key the Agent Skills spec reserves for an

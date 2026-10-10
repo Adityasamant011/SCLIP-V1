@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { assertSkillLayout, assertSkillVersions, stampSkillVersion } from './build-skills-lib.mjs'
+import { assertSkillLayout, assertSkillVersions, stampSkillVersion, omitExperimentalReferences } from './build-skills-lib.mjs'
 
 const SKILL = `---
 name: weftcut
@@ -58,6 +58,19 @@ test('a complete bundle passes and reports the skills it holds', t => {
   const root = bundle(t)
   assert.deepEqual(assertSkillLayout(root), ['weftcut'])
   assert.doesNotThrow(() => assertSkillVersions(root, ['weftcut'], '0.1.7'))
+})
+
+test('normal skill packaging omits the unpromoted boundary experiment and preserves existing references', t => {
+  const root = bundle(t), refs = path.join(root, 'weftcut/references/editing-knowledge')
+  fs.mkdirSync(refs, { recursive: true })
+  fs.writeFileSync(path.join(refs, 'speech-boundary-decisions.md'), 'Experimental')
+  fs.writeFileSync(path.join(refs, 'editing-review.md'), 'Existing guidance')
+  const main = fs.readFileSync(path.join(root, 'weftcut/SKILL.md'))
+  omitExperimentalReferences(root)
+  omitExperimentalReferences(root)
+  assert(!fs.existsSync(path.join(refs, 'speech-boundary-decisions.md')))
+  assert.equal(fs.readFileSync(path.join(refs, 'editing-review.md'), 'utf8'), 'Existing guidance')
+  assert(fs.readFileSync(path.join(root, 'weftcut/SKILL.md')).equals(main))
 })
 
 test('an empty bundle fails the build rather than shipping a panel with nothing to offer', t => {

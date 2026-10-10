@@ -15,6 +15,7 @@ import {
   REQUIRED_DOCS,
   REQUIRED_SKILL,
   stampSkillVersion,
+  omitExperimentalReferences,
 } from './build-skills-lib.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -24,6 +25,7 @@ const OUT = path.join(HERE, '..', 'out', 'skills')
 // Clean first: a renamed or deleted skill file must not survive in the bundle.
 fs.rmSync(OUT, { recursive: true, force: true })
 fs.cpSync(path.join(REPO, 'skills'), OUT, { recursive: true })
+omitExperimentalReferences(OUT)
 // Docs land inside the required skill, so the layout has to hold before they
 // can be placed. Asserting here rather than letting `copyFileSync` raise ENOENT
 // is what turns "skills/ was emptied or renamed" into a message that says so.
