@@ -76,6 +76,8 @@ export function HermesTerminal({ projectId, sessionId, onTerminalReady }: Props)
     onTerminalReady?.({ clear: () => terminal.clear() })
 
     let ready = false
+    let finishStartup!: () => void
+    const startupReady = new Promise<void>(resolve => { finishStartup = resolve })
     let replayHandlers: Array<{ dispose: () => void }> = []
     let lastSequence = 0
     const queuedOutput: Array<{ sequence: number; data: string }> = []
@@ -101,22 +103,42 @@ export function HermesTerminal({ projectId, sessionId, onTerminalReady }: Props)
       // at the PTY out of order or race its first launch.
       inputQueue = inputQueue.then(async () => {
         await openPromise
-        if (active) await sclipTerminalInput(projectId, sessionId, data)
+        await startupReady
+        if (active) {
+          // Keep typing visible even if the user previously scrolled up, and
+          // synchronize the PTY width before it renders another input row.
+          terminal.scrollToBottom()
+          await syncSize()
+          await sclipTerminalInput(projectId, sessionId, data)
+        }
       }).catch(problem => {
         if (active) setError(problem instanceof Error ? problem.message : String(problem))
       })
     })
-    let lastCols = terminal.cols
-    let lastRows = terminal.rows
+    let lastCols = -1
+    let lastRows = -1
+
+    const syncSize = async () => {
+      const { cols, rows } = terminal
+      if (cols === lastCols && rows === lastRows) return
+      await sclipTerminalResize(projectId, sessionId, cols, rows)
+      lastCols = cols
+      lastRows = rows
+    }
 
     const resize = () => {
       if (!active) return
       try {
         fit.fit()
-        if (terminal.cols !== lastCols || terminal.rows !== lastRows) {
-          lastCols = terminal.cols
-          lastRows = terminal.rows
-          void sclipTerminalResize(projectId, sessionId, terminal.cols, terminal.rows).catch(() => {})
+        if (ready) {
+          // Opening the PTY is asynchronous. Earlier resize messages were lost
+          // while no session existed, leaving Hermes wider than the panel.
+          // Serialize size changes with keystrokes and read the latest size.
+          inputQueue = inputQueue.then(async () => {
+            if (active) await syncSize()
+          }).catch(problem => {
+            if (active) setError(problem instanceof Error ? problem.message : String(problem))
+          })
         }
       } catch {
         // ignore layout transition errors
@@ -139,6 +161,8 @@ export function HermesTerminal({ projectId, sessionId, onTerminalReady }: Props)
         if (!active) return
         terminal.scrollToBottom()
         ready = true
+        finishStartup()
+        resize()
         for (const event of queuedOutput.sort((a, b) => a.sequence - b.sequence)) acceptOutput(event)
         queuedOutput.length = 0
       }
@@ -155,6 +179,7 @@ export function HermesTerminal({ projectId, sessionId, onTerminalReady }: Props)
     })
     return () => {
       active = false
+      finishStartup()
       observer.disconnect()
       disposable.dispose()
       unsubscribe()

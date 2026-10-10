@@ -9,6 +9,8 @@ const terminal = vi.hoisted(() => ({
   replayDone: null as (() => void) | null,
   asyncWrite: false,
   handlers: [] as Array<{ dispose: ReturnType<typeof vi.fn> }>,
+  instance: null as null | { cols: number; rows: number },
+  resize: null as null | (() => void),
 }))
 const ipc = vi.hoisted(() => ({
   sclipOpenTerminal: vi.fn(),
@@ -17,6 +19,7 @@ const ipc = vi.hoisted(() => ({
 }))
 
 vi.mock('@xterm/xterm', () => ({ Terminal: class {
+  constructor() { terminal.instance = this }
   cols = 80
   rows = 24
   loadAddon() {}
@@ -57,12 +60,31 @@ beforeEach(() => {
       return () => { terminal.output = null }
     },
   } })
-  vi.stubGlobal('ResizeObserver', class { observe() {}; disconnect() {} })
+  vi.stubGlobal('ResizeObserver', class {
+    constructor(callback: () => void) { terminal.resize = callback }
+    observe() {}; disconnect() {}
+  })
 })
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
 describe('HermesTerminal startup and typing', () => {
+  it('sends the latest panel dimensions after asynchronous PTY startup, before typing', async () => {
+    let resolveOpen!: (value: { history: string; sequence: number }) => void
+    ipc.sclipOpenTerminal.mockImplementation(() => new Promise(resolve => { resolveOpen = resolve }))
+    render(<HermesTerminal projectId="project" sessionId="session" />)
+    act(() => {
+      terminal.instance!.cols = 42
+      terminal.instance!.rows = 18
+      terminal.resize?.()
+    })
+    expect(ipc.sclipTerminalResize).not.toHaveBeenCalled()
+    await act(async () => { resolveOpen({ history: '', sequence: 0 }) })
+    await waitFor(() => expect(ipc.sclipTerminalResize).toHaveBeenLastCalledWith('project', 'session', 42, 18))
+    act(() => terminal.onData?.('long input'))
+    await waitFor(() => expect(ipc.sclipTerminalInput).toHaveBeenCalled())
+    expect(ipc.sclipTerminalResize.mock.invocationCallOrder[0]).toBeLessThan(ipc.sclipTerminalInput.mock.invocationCallOrder[0]!)
+  })
   it('rebrands the complete banner without leaving a Framework suffix', async () => {
     ipc.sclipOpenTerminal.mockResolvedValue({ history: '⚕ NOUS HERMES - AI Agent Framework\r\n', sequence: 1 })
     render(<HermesTerminal projectId="project" sessionId="session" />)

@@ -131,6 +131,8 @@ describe('HermesTerminalRuntime', () => {
     expect(outputEvents.map(e => e.data).join('')).toBe('Welcome to Hermes\r\n')
     expect(outputEvents.map(e => e.sequence)).toEqual([1])
     expect(await runtime.ensure('proj-123', 'sess-456')).toEqual({ history: 'Welcome to Hermes\r\n', sequence: 1 })
+    await runtime.ensure('proj-123', 'sess-456', 42, 18)
+    expect(ptyResizeMock).toHaveBeenLastCalledWith(42, 18)
 
     await runtime.input('proj-123', 'sess-456', 'hello\n')
     expect(ptyWriteMock).toHaveBeenCalledWith('hello\n')

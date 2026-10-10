@@ -60,6 +60,9 @@ export class HermesTerminalRuntime {
     const existing = this.sessions.get(key)
     if (existing) {
       if (existing.mode !== mode) throw new Error('Use a new session ID or restart explicitly when changing editing/review intent')
+      // A dock/tab remount can have a different width. Reattach to the same
+      // conversation with the current geometry, rather than its old PTY size.
+      existing.pty.resize(this.dimension(cols, 100), this.dimension(rows, 30))
       return { history: existing.history, sequence: existing.sequence }
     }
     const launch = this.resolveLaunch()
