@@ -25,7 +25,7 @@ function makeMockProject(overrides?: any): any {
     root_id: 'root-comp-id',
     active_composition_id: 'root-comp-id',
     compositions: { 'root-comp-id': rootComp },
-    media_pool: overrides?.media_pool ?? {},
+    media_pool: Object.fromEntries(Object.entries(overrides?.media_pool ?? {}).map(([id, m]: [string, any]) => [id, { ...m, metadata: m.metadata ?? { duration_us: 30_000_000 } }])),
     links: {},
     groups: {},
     history: { entries: [{ id: 'commit_1' }] },
@@ -274,6 +274,7 @@ describe('BackgroundReviewer Audit', () => {
       ],
     })
     proj.media_pool['m-1'] = {
+      metadata: { duration_us: 30_000_000 },
       transcript: {
         segments: [
           {
@@ -324,7 +325,7 @@ describe('BackgroundReviewer Audit', () => {
       cached: true,
     })
 
-    const reviewer = new BackgroundReviewer(mockHost, mockVisionSidecar, 50, mockRangeRenderer)
+    const reviewer = new BackgroundReviewer(mockHost, mockVisionSidecar, 50, mockRangeRenderer, undefined, undefined, { localPerception: () => true })
     const summary = await reviewer.runReview()
 
     expect(summary.status).toBe('has_issues')
@@ -382,102 +383,25 @@ describe('BackgroundReviewer Audit', () => {
 
     const mockFrameExtractor = vi.fn().mockResolvedValue(true)
 
-    const reviewer = new BackgroundReviewer(mockHost, mockVisionSidecar, 50, mockRangeRenderer, mockFrameExtractor)
+    const reviewer = new BackgroundReviewer(mockHost, mockVisionSidecar, 50, mockRangeRenderer, mockFrameExtractor, undefined, { localPerception: () => true })
     const summary = await reviewer.runReview()
 
     expect(summary.issues.some((i) => i.category === 'energy_mismatch')).toBe(true)
     const mismatch = summary.issues.find((i) => i.category === 'energy_mismatch')
     expect(mismatch?.description).toContain('Stadium crowd roar detected')
-    expect(mismatch?.suggested_action).toContain('dynamic action B-roll')
+    expect(mismatch?.suggested_action).toContain('intentional')
   })
 })
 
 describe('Hard Enforcement Gate (server.ts)', () => {
-  it('refuses end_agent_session when Background Reviewer has critical issues unless force=true', async () => {
+  it('legacy dispatcher no longer forces repair from ungrounded critical warnings', async () => {
     const { handleCallTool } = await import('../../mcp/server.js')
-
-    const mockTsHost = {
-      agent: {
-        begin: vi.fn(),
-        end: vi.fn(),
-        lock: vi.fn(),
-        unlock: vi.fn(),
-      },
-      actor: { snapshot: () => makeMockProject() },
-    } as any
-
-    const mockReviewerSummaryWithCritical = () => ({
-      commit_id: 'c_test',
-      status: 'has_issues' as const,
-      updated_at: Date.now(),
-      total_issues: 1,
-      critical_count: 1,
-      warning_count: 0,
-      suggestion_count: 0,
-      issues: [
-        {
-          id: 'test_crit',
-          severity: 'critical' as const,
-          category: 'caption_placement' as const,
-          t_us: 1_000_000,
-          description: 'Captions are off-screen',
-          suggested_action: 'Shift Y to -220',
-        },
-      ],
-    })
-
-    // 1. Calling end_agent_session with critical issues should fail and return error
-    const refusal = await handleCallTool(
-      {} as any,
-      () => mockTsHost,
-      'end_agent_session',
-      {},
-      () => null,
-      undefined,
-      undefined,
-      () => null,
-      mockReviewerSummaryWithCritical,
-    )
-
-    expect(refusal).toHaveProperty('isError', true)
-    const errorText = (refusal as any).content[0].text
-    expect(errorText).toContain('Background AI Reviewer detected 1 critical issue(s)')
-    expect(errorText).toContain('Captions are off-screen')
-    expect(mockTsHost.agent.end).not.toHaveBeenCalled()
-
-    // 2. Calling end_agent_session with force: true should bypass the gate
-    const forced = await handleCallTool(
-      {} as any,
-      () => mockTsHost,
-      'end_agent_session',
-      { force: true },
-      () => null,
-      undefined,
-      undefined,
-      () => null,
-      mockReviewerSummaryWithCritical,
-    )
-
-    expect(forced).not.toHaveProperty('isError')
-    expect(mockTsHost.agent.end).toHaveBeenCalledWith('agent')
-
-    // 3. get_timeline_critique should return the structured critique summary
-    const critiqueResult = await handleCallTool(
-      {} as any,
-      () => mockTsHost,
-      'get_timeline_critique',
-      {},
-      () => null,
-      undefined,
-      undefined,
-      () => null,
-      mockReviewerSummaryWithCritical,
-    )
-
-    expect(critiqueResult).not.toHaveProperty('isError')
-    const parsed = JSON.parse((critiqueResult as any).content[0].text)
-    expect(parsed.critical_count).toBe(1)
-    expect(parsed.issues[0].id).toBe('test_crit')
+    const end = vi.fn()
+    const host = { agent: { end }, actor: { snapshot: () => makeMockProject() } } as any
+    const result = await handleCallTool({} as any, () => host, 'end_agent_session', {})
+    expect(result).not.toHaveProperty('isError')
+    expect(end).toHaveBeenCalledWith('agent')
+    // The registered MCP path owns guarded completion; cache severity never chooses an edit.
   })
 
   it('flags video clips that do not fill the composition canvas (partial screen / corner floating)', async () => {
@@ -607,7 +531,7 @@ describe('Jev Narrative Coherence Audit', () => {
       latency_ms: 100,
     })
 
-    const reviewer = new BackgroundReviewer(mockHost, undefined, 50, undefined, undefined, mockJev)
+    const reviewer = new BackgroundReviewer(mockHost, undefined, 50, undefined, undefined, mockJev, { jev: () => true })
     const summary = await reviewer.runReview()
 
     expect(mockJev).toHaveBeenCalledOnce()
@@ -615,7 +539,7 @@ describe('Jev Narrative Coherence Audit', () => {
     const broken = summary.issues.find((i) => i.id.startsWith('broken_thought_'))
     expect(broken?.category).toBe('audio_cutoff')
     expect(broken?.description).toContain('Frankenbite')
-    expect(broken?.description).toContain('85%')
+    expect(broken?.description).toContain('uncalibrated Jev score 0.85')
   })
 
   it('flags narrative whiplash (abrupt topic jump) via Jev when score >= 0.72', async () => {
@@ -636,14 +560,14 @@ describe('Jev Narrative Coherence Audit', () => {
       latency_ms: 120,
     })
 
-    const reviewer = new BackgroundReviewer(mockHost, undefined, 50, undefined, undefined, mockJev)
+    const reviewer = new BackgroundReviewer(mockHost, undefined, 50, undefined, undefined, mockJev, { jev: () => true })
     const summary = await reviewer.runReview()
 
     expect(summary.issues.some((i) => i.id.startsWith('narrative_whiplash_'))).toBe(true)
     const whiplash = summary.issues.find((i) => i.id.startsWith('narrative_whiplash_'))
     expect(whiplash?.category).toBe('pacing')
     expect(whiplash?.description).toContain('whiplash')
-    expect(whiplash?.description).toContain('90%')
+    expect(whiplash?.description).toContain('uncalibrated Jev score 0.90')
   })
 
   it('does not flag anything when both Jev scores are below threshold', async () => {
@@ -664,7 +588,7 @@ describe('Jev Narrative Coherence Audit', () => {
       latency_ms: 80,
     })
 
-    const reviewer = new BackgroundReviewer(mockHost, undefined, 50, undefined, undefined, mockJev)
+    const reviewer = new BackgroundReviewer(mockHost, undefined, 50, undefined, undefined, mockJev, { jev: () => true })
     const summary = await reviewer.runReview()
 
     expect(
@@ -703,7 +627,7 @@ describe('Jev Narrative Coherence Audit', () => {
 
     const mockJevThatThrows = vi.fn().mockRejectedValue(new Error('Jev provider HTTP 429 (credit/key spending limit)'))
 
-    const reviewer = new BackgroundReviewer(mockHost, undefined, 50, undefined, undefined, mockJevThatThrows)
+    const reviewer = new BackgroundReviewer(mockHost, undefined, 50, undefined, undefined, mockJevThatThrows, { jev: () => true })
     // Should not throw
     const summary = await reviewer.runReview()
 

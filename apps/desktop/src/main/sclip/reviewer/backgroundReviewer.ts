@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+import { reviewState } from '../evidenceCoordinates.js'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import * as os from 'node:os'
@@ -43,6 +45,10 @@ export class BackgroundReviewer {
   private debounceTimer: NodeJS.Timeout | null = null
   private inFlightCommitId: string | null = null
   private destroyed = false
+  private unsubscribe?: () => void
+  private generation = 0
+  private controller?: AbortController
+  private cachedState?: string
 
   constructor(
     private readonly tsHost: TsActorHost,
@@ -51,6 +57,7 @@ export class BackgroundReviewer {
     private readonly rangeRenderer: typeof renderTimelineRange = renderTimelineRange,
     private readonly frameExtractor: (videoPath: string, timeSec: number, outputPath: string) => Promise<boolean> = extractFrameAtTime,
     private readonly jevDecide?: JevDecide,
+    private readonly authorization: { jev?: () => boolean; localPerception?: () => boolean; deadlineMs?: number } = {},
   ) {
     this.attachListener()
   }
@@ -60,8 +67,12 @@ export class BackgroundReviewer {
     // Listen to changes in project actor
     const actor = (this.tsHost as any).actor
     if (actor && typeof actor.subscribe === 'function') {
-      actor.subscribe(() => {
+      this.unsubscribe = actor.subscribe(() => {
         if (!this.destroyed) {
+          this.cachedState = undefined
+          this.generation++
+          this.inFlightCommitId = null
+          this.controller?.abort()
           this.scheduleReview()
         }
       })
@@ -69,113 +80,93 @@ export class BackgroundReviewer {
   }
 
   public scheduleReview(): void {
-    if (this.debounceTimer) {
-      clearTimeout(this.debounceTimer)
-    }
-    this.debounceTimer = setTimeout(() => {
-      this.runReview().catch((err) => {
-        console.error('[BackgroundReviewer] review run failed:', err)
-      })
-    }, this.debounceMs)
+    if (this.destroyed) return
+    if (this.debounceTimer) clearTimeout(this.debounceTimer)
+    // Mutations refresh cheap deterministic facts, not full perception/model review.
+    this.debounceTimer = setTimeout(() => { this.debounceTimer = null; this.auditSynchronous() }, this.debounceMs)
   }
 
   public getSummary(): TimelineReviewSummary {
+    if (this.destroyed) return { ...this.currentSummary, availability: 'unavailable', issues: [], total_issues: 0, critical_count: 0, warning_count: 0, suggestion_count: 0 }
+    return this.cachedState === reviewState(this.tsHost.actor.snapshot()) ? this.currentSummary : this.auditSynchronous()
+  }
+
+  private publish(snap: Project, issues: TimelineCritiqueIssue[], state: string, deep = false): TimelineReviewSummary {
+    const identity = { project_id: snap.project_id, composition_id: snap.root_id, state_version: createHash('sha256').update(state).digest('hex') }
+    const unique = [...new Map(issues.map(i => [i.id, i])).values()]
+    this.cachedState = state
+    this.currentSummary = {
+      ...identity, commit_id: identity.state_version, status: unique.length ? 'has_issues' : 'clean',
+      availability: 'available', updated_at: Date.now(), total_issues: unique.length,
+      critical_count: unique.filter(i => i.severity === 'critical').length,
+      warning_count: unique.filter(i => i.severity === 'warning').length,
+      suggestion_count: unique.filter(i => i.severity === 'suggestion').length,
+      coverage: deep ? 'Authorized optional observations where available; partial, not comprehensive' : 'Deterministic layout estimates only; rendered audio, meaning, story and export uninspected',
+      issues: unique.map(i => ({ ...i, coordinate_space: 'timeline', ...identity,
+        evidence_class: /^(speech_chop|pop_|silence_|beat_|energy_|visual_mismatch|broken_thought|narrative_whiplash)/.test(i.id) ? 'MODEL_OBSERVATION' : 'DETERMINISTIC_MEASUREMENT',
+        evidence_basis: /^(broken_thought|narrative_whiplash)/.test(i.id) ? 'Legacy inline VIDEO source transcript windows mapped to the cut; not proof of the audible mixed speech. Normal cached transcript availability is separate.' : /^(speech_chop|pop_|silence_|beat_|energy_|visual_mismatch)/.test(i.id) ? 'Optional bounded rendered-range sidecar observation; partial coverage and fallible interpretation.' : 'Authoritative layer/media metadata, deterministic layout estimate; not rendered pixels.',
+        requires_inspection: true, uncertainty: 'Potential concern; Hermes must inspect relevant rendered evidence and decide whether intentional or actionable.' })),
+    }
     return this.currentSummary
   }
 
   public auditSynchronous(): TimelineReviewSummary {
-    const snap = this.tsHost.actor.snapshot() as any
-    const rootComp = snap?.compositions?.[snap?.root_id]
-    if (!rootComp) return this.currentSummary
-
-    const entries = snap.history?.entries ?? []
-    const commitId = entries.length > 0 ? entries[entries.length - 1].id : `c_${Date.now()}`
-
+    if (this.destroyed) return this.getSummary()
+    const snap = this.tsHost.actor.snapshot(), state = reviewState(snap)
+    if (this.cachedState === state) return this.currentSummary
+    const comp = snap.compositions[snap.root_id]
+    if (!comp) return { ...this.currentSummary, availability: 'unavailable', issues: [], total_issues: 0, critical_count: 0, warning_count: 0, suggestion_count: 0 }
     const issues: TimelineCritiqueIssue[] = []
-    this.auditLayoutAndMotifs(snap, rootComp, issues)
-
-    let criticalCount = 0
-    let warningCount = 0
-    let suggestionCount = 0
-
-    for (const issue of issues) {
-      if (issue.severity === 'critical') criticalCount++
-      else if (issue.severity === 'warning') warningCount++
-      else suggestionCount++
-    }
-
-    this.currentSummary = {
-      commit_id: commitId,
-      status: issues.length === 0 ? 'clean' : 'has_issues',
-      updated_at: Date.now(),
-      total_issues: issues.length,
-      critical_count: criticalCount,
-      warning_count: warningCount,
-      suggestion_count: suggestionCount,
-      issues,
-    }
-
-    return this.currentSummary
+    this.auditLayoutAndMotifs(snap, comp, issues)
+    return this.publish(snap, issues, state)
   }
 
+  /** Full optional pass is a completion/explicit-review request, never per mutation. */
   public async runReview(): Promise<TimelineReviewSummary> {
-    const snap = this.tsHost.actor.snapshot() as any
-    const rootComp = snap?.compositions?.[snap?.root_id]
-    if (!rootComp) return this.currentSummary
+    const work = this.performReview()
+    const controller = this.controller
+    let timer: NodeJS.Timeout | undefined
+    let onAbort: (() => void) | undefined
+    try {
+      return await Promise.race([work, new Promise<TimelineReviewSummary>(resolve => {
+        onAbort = () => resolve({ ...this.getSummary(), optional_observations: 'canceled' })
+        controller?.signal.addEventListener('abort', onAbort, { once: true })
+        timer = setTimeout(() => {
+          if (onAbort) controller?.signal.removeEventListener('abort', onAbort)
+          controller?.abort()
+          resolve({ ...this.getSummary(), optional_observations: 'timed_out' })
+        }, this.authorization.deadlineMs ?? 30_000)
+      })])
+    } finally {
+      if (timer) clearTimeout(timer)
+      if (onAbort) controller?.signal.removeEventListener('abort', onAbort)
+    }
+  }
 
-    // Use current history cursor or generate synthetic commit tag
-    const entries = snap.history?.entries ?? []
-    const commitId = entries.length > 0 ? entries[entries.length - 1].id : `c_${Date.now()}`
+  private authorized(kind: 'jev' | 'localPerception'): boolean {
+    try { return this.authorization[kind]?.() === true } catch { return false }
+  }
 
+  private async performReview(): Promise<TimelineReviewSummary> {
+    if (this.destroyed) return this.getSummary()
+    this.controller?.abort()
+    this.controller = new AbortController()
+    const generation = ++this.generation
+    const snap = this.tsHost.actor.snapshot(), state = reviewState(snap), comp = snap.compositions[snap.root_id]
+    if (!comp) return this.auditSynchronous()
+    const commitId = `${createHash('sha256').update(state).digest('hex')}:${generation}`
     this.inFlightCommitId = commitId
-
     const issues: TimelineCritiqueIssue[] = []
+    this.auditLayoutAndMotifs(snap, comp, issues)
+    // Optional perception has its own explicit local authorization. No automatic model calls.
+    if (this.visionSidecar && this.authorized('localPerception')) await this.auditAudioPerception(snap, comp, issues, commitId)
+    if (this.isCurrent(generation, state) && this.jevDecide && this.authorized('jev')) await this.auditNarrativeCoherence(snap, comp, issues, commitId)
+    if (!this.isCurrent(generation, state)) return this.getSummary()
+    return this.publish(snap, issues, state, true)
+  }
 
-    // ── 1. Deterministic Layout & Visual Constraints Audit ────────────────────
-    this.auditLayoutAndMotifs(snap, rootComp, issues)
-
-    // ── 2. Speech & Audio Perception Audit ─────────────────────────────────────
-    if (this.visionSidecar) {
-      await this.auditAudioPerception(snap, rootComp, issues, commitId)
-    }
-
-    // ── 3. Jev Narrative Coherence Audit (async, gracefully degraded) ─────────
-    if (this.jevDecide) {
-      await this.auditNarrativeCoherence(snap, rootComp, issues, commitId)
-    }
-
-
-    // Drop stale results if a newer commit arrived during async review
-    if (this.inFlightCommitId !== commitId) {
-      console.log(`[BackgroundReviewer] Discarding stale review for commit ${commitId}`)
-      return this.currentSummary
-    }
-
-    let criticalCount = 0
-    let warningCount = 0
-    let suggestionCount = 0
-
-    for (const issue of issues) {
-      if (issue.severity === 'critical') criticalCount++
-      else if (issue.severity === 'warning') warningCount++
-      else suggestionCount++
-    }
-
-    this.currentSummary = {
-      commit_id: commitId,
-      status: issues.length === 0 ? 'clean' : 'has_issues',
-      updated_at: Date.now(),
-      total_issues: issues.length,
-      critical_count: criticalCount,
-      warning_count: warningCount,
-      suggestion_count: suggestionCount,
-      issues,
-    }
-
-    console.log(
-      `[BackgroundReviewer] Review complete for ${commitId}: ${criticalCount} critical, ${warningCount} warnings, ${suggestionCount} suggestions.`,
-    )
-    return this.currentSummary
+  private isCurrent(generation: number, state: string) {
+    return !this.destroyed && !this.controller?.signal.aborted && generation === this.generation && state === reviewState(this.tsHost.actor.snapshot())
   }
 
   private auditLayoutAndMotifs(
@@ -222,7 +213,7 @@ export class BackgroundReviewer {
         const posX = extractNumeric(rawX) ?? 0
         const posY = extractNumeric(rawY)
         if (posY !== null) {
-          const isCenterRelative = Math.abs(posX) < 50
+          const isCenterRelative = !p?.transform && Math.abs(posX) < 50
           const absoluteBottomY = isCenterRelative ? centerY + posY : posY
           if (absoluteBottomY > compH + 50) {
             issues.push({
@@ -233,7 +224,7 @@ export class BackgroundReviewer {
               affected_range_us: [text.t_start_us, text.t_end_us],
               layer_id: text.id,
               description: `Caption '${p.content?.slice(0, 30) ?? p.text?.slice(0, 30) ?? ''}' sits at Y=${posY}, rendering it below the bottom edge of the ${compW}x${compH} frame.`,
-              suggested_action: `Shift caption transform.position.y to negative space (e.g. y: -250) or leave default anchor to keep text visible in lower third.`,
+              suggested_action: `Inspect the actual caption bounds; Hermes chooses whether placement is appropriate and any repair.`,
             })
           }
         }
@@ -248,8 +239,8 @@ export class BackgroundReviewer {
           category: 'caption_placement',
           t_us: text.t_start_us,
           layer_id: text.id,
-          description: `Caption font size (${fontSize}px) is too small for mobile vertical video readability.`,
-          suggested_action: `Increase font_size to 60px–72px for high mobile retention.`,
+          description: `Caption font size (${fontSize}px) may be too small for mobile vertical video readability; verify the rendered text.`,
+          suggested_action: `Inspect rendered readability in context; choose a change only if justified.`,
         })
       }
     }
@@ -277,7 +268,7 @@ export class BackgroundReviewer {
               t_us: overlapStart,
               affected_range_us: [overlapStart, overlapEnd],
               description: `Motifs '${name1}' and '${name2}' overlap on timeline from ${(overlapStart / 1e6).toFixed(1)}s to ${(overlapEnd / 1e6).toFixed(1)}s with same alignment ('${v1}').`,
-              suggested_action: `Sequence the motifs sequentially or assign distinct vertical positions (top vs bottom).`,
+              suggested_action: `Inspect the overlapping interval; Hermes decides whether the combination is intentional.`,
             })
           }
         }
@@ -312,8 +303,8 @@ export class BackgroundReviewer {
             t_us: vc.t_start_us,
             affected_range_us: [vc.t_start_us, vc.t_end_us],
             layer_id: vc.id,
-            description: `Video clip (${mediaWidth}x${mediaHeight} at ${scaleX.toFixed(2)}x) does not fill the screen (only ${(widthCoverage * 100).toFixed(0)}% width, ${(heightCoverage * 100).toFixed(0)}% height of ${compW}x${compH}), leaving black bars or floating in a corner.`,
-            suggested_action: `Always use calculate_video_fit with mode='cover' to fill the entire canvas, unless the user explicitly requested an inset/picture-in-picture layout.`,
+            description: `Video clip (${mediaWidth}x${mediaHeight} at ${scaleX.toFixed(2)}x) does not fill the screen under a static scale estimate (only ${(widthCoverage * 100).toFixed(0)}% width, ${(heightCoverage * 100).toFixed(0)}% height of ${compW}x${compH}), leaving black bars or floating in a corner.`,
+            suggested_action: `Inspect actual rendered frames. Insets, letterboxing and other layouts can be intentional; Hermes chooses any transform or no change.`,
           })
         }
       }
@@ -343,21 +334,13 @@ export class BackgroundReviewer {
 
     // Collect transcript word boundaries from project media pool / layers
     const wordBoundaries: Array<{ word: string; t_start_us: number; t_end_us: number }> = []
-    for (const [_, media] of Object.entries(project.media_pool)) {
-      const trans = (media as any).transcript
-      if (trans && Array.isArray(trans.segments)) {
-        for (const seg of trans.segments) {
-          if (Array.isArray(seg.words)) {
-            for (const w of seg.words) {
-              if (w.text && typeof w.t_start_us === 'number' && typeof w.t_end_us === 'number') {
-                wordBoundaries.push({
-                  word: w.text.trim(),
-                  t_start_us: w.t_start_us,
-                  t_end_us: w.t_end_us,
-                })
-              }
-            }
-          }
+    for (const track of comp.tracks) for (const layer of track.layers) {
+      if (!track.enabled || !layer.enabled || layer.params.kind !== 'Audio') continue
+      const p = layer.params, trans = (project.media_pool[p.media] as any)?.transcript
+      if (!Array.isArray(trans?.segments)) continue
+      for (const seg of trans.segments) for (const w of seg.words ?? []) {
+        if (typeof w.text === 'string' && Number.isFinite(w.t_start_us) && Number.isFinite(w.t_end_us) && w.t_end_us > p.src_in_us && w.t_start_us < p.src_out_us) {
+          wordBoundaries.push({ word: w.text.trim(), t_start_us: layer.t_start_us + w.t_start_us - p.src_in_us, t_end_us: layer.t_start_us + w.t_end_us - p.src_in_us })
         }
       }
     }
@@ -374,13 +357,13 @@ export class BackgroundReviewer {
         end_us: reviewEndUs,
       })
 
-      if (this.inFlightCommitId !== commitId) return
+      if (this.destroyed || this.controller?.signal.aborted || this.inFlightCommitId !== commitId) return
 
-      if (rendered.path) {
+      if (rendered.path && this.authorized('localPerception')) {
         const audioAnalysis = await this.visionSidecar.analyzeAudio({
           audioPath: rendered.path,
-          cutTimestampsUs,
-          wordBoundaries,
+          cutTimestampsUs: cutTimestampsUs.filter(t => t >= reviewStartUs && t < reviewEndUs).map(t => t - reviewStartUs),
+          wordBoundaries: wordBoundaries.filter(w => w.t_end_us > reviewStartUs && w.t_start_us < reviewEndUs).map(w => ({ ...w, t_start_us: w.t_start_us - reviewStartUs, t_end_us: w.t_end_us - reviewStartUs })),
         })
 
         if (audioAnalysis.ok) {
@@ -391,7 +374,7 @@ export class BackgroundReviewer {
                 id: `speech_chop_${chop.cut_t_us}`,
                 severity: 'critical',
                 category: 'audio_cutoff',
-                t_us: chop.cut_t_us,
+                t_us: reviewStartUs + chop.cut_t_us,
                 description: chop.description,
                 suggested_action: chop.suggested_action,
               })
@@ -406,7 +389,7 @@ export class BackgroundReviewer {
                 id: `pop_${pop.cut_t_us}`,
                 severity: 'warning',
                 category: 'audio_cutoff',
-                t_us: pop.cut_t_us,
+                t_us: reviewStartUs + pop.cut_t_us,
                 description: pop.description,
                 suggested_action: pop.suggested_action,
               })
@@ -420,10 +403,10 @@ export class BackgroundReviewer {
                 id: `silence_${sil.start_us}`,
                 severity: 'warning',
                 category: 'pacing',
-                t_us: sil.start_us,
-                affected_range_us: [sil.start_us, sil.end_us],
+                t_us: reviewStartUs + sil.start_us,
+                affected_range_us: [reviewStartUs + sil.start_us, reviewStartUs + sil.end_us],
                 description: `Detected ${sil.duration_s}s of dead air/silence at ${(sil.start_us / 1e6).toFixed(1)}s.`,
-                suggested_action: `Use remove_pauses or trim clip to maintain dialogue rhythm.`,
+                suggested_action: `Inspect the audible pause in context; Hermes decides whether it is useful or needs repair.`,
               })
             }
           }
@@ -437,7 +420,7 @@ export class BackgroundReviewer {
                 category: 'music_sync',
                 t_us: cutTimestampsUs[0],
                 description: `Only ${Math.round(anyAnalysis.beat_sync_rate * 100)}% of cuts align with detected ${anyAnalysis.tempo_bpm} BPM musical beats.`,
-                suggested_action: `Snap cut points closer to musical beat intervals for higher kinetic energy.`,
+                suggested_action: `Inspect the relevant sound and timing; musical alignment need not be intentional.`,
               })
             }
           }
@@ -445,13 +428,14 @@ export class BackgroundReviewer {
           // ── Cross-Modal 1: Audio Energy vs Visual Action Mismatch ─────────
           if (Array.isArray(anyAnalysis.crowd_cheers) && anyAnalysis.crowd_cheers.length > 0 && typeof this.visionSidecar.inspectSequence === 'function') {
             for (const cheer of anyAnalysis.crowd_cheers) {
-              const relSec = Math.max(0, (cheer.start_us - reviewStartUs) / 1e6)
+              const relSec = Math.max(0, cheer.start_us / 1e6)
               const tmp1 = path.join(os.tmpdir(), `av_sync_1_${Date.now()}.jpg`)
               const tmp2 = path.join(os.tmpdir(), `av_sync_2_${Date.now()}.jpg`)
               try {
                 const ok1 = await this.frameExtractor(rendered.path, relSec, tmp1)
                 const ok2 = await this.frameExtractor(rendered.path, relSec + 0.4, tmp2)
                 if (ok1 && ok2) {
+                  if (this.destroyed || this.controller?.signal.aborted || !this.authorized('localPerception')) return
                   const seqRes = await this.visionSidecar.inspectSequence({
                     imagePaths: [tmp1, tmp2],
                     focus: 'motion',
@@ -463,10 +447,10 @@ export class BackgroundReviewer {
                         id: `energy_mismatch_${cheer.start_us}`,
                         severity: 'warning',
                         category: 'energy_mismatch',
-                        t_us: cheer.start_us,
-                        affected_range_us: [cheer.start_us, cheer.end_us],
+                        t_us: reviewStartUs + cheer.start_us,
+                        affected_range_us: [reviewStartUs + cheer.start_us, reviewStartUs + cheer.end_us],
                         description: `Stadium crowd roar detected at ${(cheer.start_us / 1e6).toFixed(1)}s, but visual frames appear static with low action.`,
-                        suggested_action: 'Cut to dynamic action B-roll or player celebration to match audio energy.',
+                        suggested_action: 'Inspect this potentially contrasting interval; Hermes decides whether the contrast is intentional.',
                       })
                     }
                   }
@@ -490,6 +474,7 @@ export class BackgroundReviewer {
               try {
                 const ok = await this.frameExtractor(rendered.path, relSec, tmpF)
                 if (ok) {
+                  if (this.destroyed || this.controller?.signal.aborted || !this.authorized('localPerception')) return
                   const visRes = await this.visionSidecar.analyze({
                     imagePath: tmpF,
                     question: `The spoken audio says: "${firstWords}". Does this visual frame match or depict what is being spoken? Answer yes or no, and describe what is visible.`,
@@ -503,7 +488,7 @@ export class BackgroundReviewer {
                         category: 'visual_mismatch',
                         t_us: speechMidpointUs,
                         description: `Audio speaks about "${firstWords.slice(0, 40)}...", but on-screen visual does not appear to match.`,
-                        suggested_action: 'Ensure B-roll visually reinforces the spoken topic.',
+                        suggested_action: 'Inspect the spoken context and representative visuals; Hermes decides whether a change is justified.',
                       })
                     }
                   }
@@ -593,14 +578,14 @@ export class BackgroundReviewer {
         const wordsB = mediaIdB ? (mediaWords.get(mediaIdB) ?? []) : []
 
         // Words in clip A's used range (source offset via in_point_us)
-        const inA = (clipA.params as any).in_point_us ?? 0
-        const outA = inA + (clipA.t_end_us - clipA.t_start_us)
+        const inA = (clipA.params as any).src_in_us ?? (clipA.params as any).in_point_us ?? 0
+        const outA = (clipA.params as any).src_out_us ?? inA + (clipA.t_end_us - clipA.t_start_us)
         const tailWordsA = wordsA
           .filter((w) => w.t_start_us >= inA && w.t_end_us <= outA)
           .slice(-WINDOW_WORDS)
 
-        const inB = (clipB.params as any).in_point_us ?? 0
-        const outB = inB + (clipB.t_end_us - clipB.t_start_us)
+        const inB = (clipB.params as any).src_in_us ?? (clipB.params as any).in_point_us ?? 0
+        const outB = (clipB.params as any).src_out_us ?? inB + (clipB.t_end_us - clipB.t_start_us)
         const headWordsB = wordsB
           .filter((w) => w.t_start_us >= inB && w.t_end_us <= outB)
           .slice(0, WINDOW_WORDS)
@@ -653,11 +638,12 @@ export class BackgroundReviewer {
         }
       }
 
-      if (this.inFlightCommitId !== commitId) return
+      if (this.destroyed || this.controller?.signal.aborted || this.inFlightCommitId !== commitId) return
 
-      const result = await this.jevDecide(stateTrimmed, questions)
+      if (this.destroyed || this.controller?.signal.aborted || !this.authorized('jev')) return
+      const result = await this.jevDecide(stateTrimmed, questions, this.controller?.signal)
 
-      if (this.inFlightCommitId !== commitId) return
+      if (this.destroyed || this.controller?.signal.aborted || this.inFlightCommitId !== commitId) return
 
       const BROKEN_THRESHOLD = 0.72
       const WHIPLASH_THRESHOLD = 0.72
@@ -674,8 +660,8 @@ export class BackgroundReviewer {
             category: 'audio_cutoff',
             t_us: b.cutTimeUs,
             affected_range_us: [b.cutTimeUs, b.cutTimeUs],
-            description: `Possible Frankenbite/broken thought at cut ${(b.cutTimeUs / 1e6).toFixed(2)}s (Jev confidence ${(brokenScore * 100).toFixed(0)}%): clip A ends mid-sentence ("…${b.beforeText.slice(-60)}"), leaving dialogue incomplete.`,
-            suggested_action: `Extend clip A to a natural sentence end, or trim the leading fragment from clip B to avoid a dangling thought.`,
+            description: `Possible Frankenbite/broken thought at cut ${(b.cutTimeUs / 1e6).toFixed(2)}s (uncalibrated Jev score ${brokenScore.toFixed(2)}): clip A ends mid-sentence ("…${b.beforeText.slice(-60)}"), leaving dialogue incomplete.`,
+            suggested_action: `Inspect actual rendered speech and source context; choose a repair only if the boundary damages meaning.`,
           })
         }
 
@@ -686,8 +672,8 @@ export class BackgroundReviewer {
             category: 'pacing',
             t_us: b.cutTimeUs,
             affected_range_us: [b.cutTimeUs, b.cutTimeUs],
-            description: `Possible narrative whiplash at cut ${(b.cutTimeUs / 1e6).toFixed(2)}s (Jev confidence ${(whiplashScore * 100).toFixed(0)}%): clip B topic appears to abruptly abandon clip A ("${b.beforeText.slice(0, 40)}…" → "${b.afterText.slice(0, 40)}…").`,
-            suggested_action: `Add a transitional B-roll moment between clips, reorder segments to restore story flow, or bridge with a cutaway.`,
+            description: `Possible narrative whiplash at cut ${(b.cutTimeUs / 1e6).toFixed(2)}s (uncalibrated Jev score ${whiplashScore.toFixed(2)}): clip B topic appears to abruptly abandon clip A ("${b.beforeText.slice(0, 40)}…" → "${b.afterText.slice(0, 40)}…").`,
+            suggested_action: `Inspect surrounding rendered context; Hermes decides whether the transition serves the intended story.`,
           })
         }
       }
@@ -700,6 +686,10 @@ export class BackgroundReviewer {
 
   public dispose(): void {
     this.destroyed = true
+    this.generation++
+    this.inFlightCommitId = null
+    this.controller?.abort()
+    this.unsubscribe?.()
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer)
       this.debounceTimer = null

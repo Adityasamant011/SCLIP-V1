@@ -25,10 +25,24 @@ export interface TimelineCritiqueIssue {
   layer_id?: string
   description: string
   suggested_action: string
+  project_id?: string
+  composition_id?: string
+  state_version?: string
+  coordinate_space?: 'timeline'
+  evidence_class?: 'DETERMINISTIC_MEASUREMENT' | 'MODEL_OBSERVATION'
+  requires_inspection?: boolean
+  uncertainty?: string
+  evidence_basis?: string
 }
 
 export interface TimelineReviewSummary {
   commit_id: string
+  project_id?: string
+  composition_id?: string
+  state_version?: string
+  availability?: 'available' | 'unavailable' | 'stale'
+  coverage?: string
+  optional_observations?: 'canceled' | 'timed_out'
   status: 'clean' | 'has_issues' | 'in_progress'
   updated_at: number
   total_issues: number
