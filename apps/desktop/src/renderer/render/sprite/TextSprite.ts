@@ -1,3 +1,4 @@
+import { captionFontFallback } from '../../../shared/fonts';
 // Text layer rendered via PixiJS native `Text` (canvas-backed glyphs).
 // Owns three things Pixi does not do for us: the wrap width (from the layer's
 // box), the placement of the measured block inside that box, and the size the
@@ -137,7 +138,7 @@ function textStyleFor(i: StyleInput, px: number): TextStyle {
   const f = v.font_size_px > 0 ? px / v.font_size_px : 1;
   const offX = (sh?.offset_x ?? 0) * f, offY = (sh?.offset_y ?? 0) * f;
   return new TextStyle({
-    fontFamily: v.font_family || DEFAULT_CAPTION_FONT_FAMILY,
+    fontFamily: captionFontFallback(v.font_family || DEFAULT_CAPTION_FONT_FAMILY),
     fontSize: px,
     fontWeight: String(v.weight || 400) as TextStyleFontWeight,
     fontStyle: v.italic ? "italic" : "normal",

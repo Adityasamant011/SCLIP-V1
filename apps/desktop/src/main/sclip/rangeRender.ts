@@ -3,6 +3,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { createHash, randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
+import { renderedFileHasAudio } from './renderedMediaProbe.js'
 import type { Composition, Layer, Project } from '../state/model.js'
 
 /** Resource bound, never a requested output duration or genre assumption. */
@@ -70,15 +71,17 @@ export async function renderComposedTimelineRange(
   options.signal?.throwIfAborted()
   const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sclip-composed-qa-'))
   const outputPath = path.join(outputDir, `${randomUUID()}.${options.audioOnly ? 'm4a' : 'mp4'}`)
+  let hasAudio: boolean
   try {
     await exportThroughLiveCompositor(project, options.getActiveWindow(), { outputPath, startUs: start_us, endUs: end_us, audioOnly: options.audioOnly })
+    hasAudio = await renderedFileHasAudio(outputPath, resolveFfmpegPath(options.resourcesPath).replace(/ffmpeg(\.exe)?$/, 'ffprobe$1'), options.signal)
     options.signal?.throwIfAborted()
   } catch (error) {
     fs.rmSync(outputDir, { recursive: true, force: true })
     throw error
   }
   return { path: outputPath, duration_us: end_us - start_us,
-    has_audio: project.compositions[compId].tracks.some(t => t.layers.some(l => l.params.kind === 'Audio' && l.t_end_us > start_us && l.t_start_us < end_us)),
+    has_audio: hasAudio,
     cached: false }
 }
 
@@ -86,6 +89,8 @@ export function resolveFfmpegPath(resourcesPath?: string): string {
   const platform = process.platform === 'win32' ? 'win' : process.platform === 'darwin' ? 'mac' : 'linux'
   const binary = process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg'
   if (resourcesPath) {
+    const packaged = path.join(resourcesPath, 'ffmpeg', binary)
+    if (fs.existsSync(packaged)) return packaged
     const candidate = path.join(resourcesPath, 'ffmpeg', platform, binary)
     if (fs.existsSync(candidate)) return candidate
   }

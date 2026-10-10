@@ -27,6 +27,12 @@ const FONT_DIRS: Record<string, string[]> = {
 
 let familyMap: Map<string, string> | null = null;
 
+export function fontAvailability(family: string) {
+  if (!familyMap) familyMap = buildFamilyMap();
+  const requested = family.split(',').map(s => s.trim()).filter(Boolean);
+  const available = requested.filter(s => ['Liberation Sans', 'Noto Sans SC'].includes(s) || !!familyMap?.get(s.toLowerCase()));
+  return { requested, available, unavailable: requested.filter(s => !available.includes(s)), fallback: ['Liberation Sans', 'Noto Sans SC'], limitation: 'Family availability, not a guarantee of every glyph or weight.' };
+}
 export async function resolveSystemFont(family: string): Promise<Buffer | null> {
   if (!familyMap) familyMap = buildFamilyMap();
   const hit = familyMap.get(family.toLowerCase());

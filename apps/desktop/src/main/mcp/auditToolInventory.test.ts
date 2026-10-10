@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { buildMcpServer } from './server'
@@ -12,6 +12,13 @@ import { initEval } from '../../renderer/eval/index.js'
 import path from 'node:path'
 import os from 'node:os'
 import fs from 'node:fs'
+
+// Catalog/handler fixture audit must not load weights or consult a configured runtime.
+// Actual local compositor/audio integration is exercised by isolated Electron tests.
+vi.mock('../sclip/visionRuntime.js',()=>({getVisionRuntime:()=>({
+  analyze:async()=>({ok:false,error:'Perception unavailable in deterministic catalog fixture',description:'',visibleContent:[],confidence:null,latencyMs:0,model:'offline-fixture'}),
+  status:async()=>({ready:false,model:'offline-fixture'}),
+})}))
 
 interface ToolAuditRecord {
   name: string
@@ -218,6 +225,15 @@ describe('Legacy MCP handler fixture audit', () => {
         }
       }
 
+      // This legacy fixture has no decoded media or perception model. Calling
+      // external compute here exercised the user's runtime, not this fixture.
+      // Keep its catalog/invalid-input checks; real local execution has dedicated E2E coverage.
+      if (classification === 'external_compute') {
+        record.executionTest = {status:'BLOCKED',mutatesState:false,detail:'No real media/runtime in deterministic fixture; exercised by focused local integration gates'}
+        auditRecords[name] = record
+        return
+      }
+
       // 2. Test valid execution
       const snapBefore = JSON.stringify(actor.snapshot())
       try {
@@ -228,7 +244,7 @@ describe('Legacy MCP handler fixture audit', () => {
 
         if (res.isError) {
           const detail = Array.isArray(res.content) && res.content[0]?.type === 'text' ? res.content[0].text : 'Returned isError: true'
-          const isBlocked = classification === 'external_compute' || detail.includes('offline') || detail.includes('not configured') || detail.includes('No such file')
+          const isBlocked = detail.includes('offline') || detail.includes('not configured') || detail.includes('No such file')
           record.executionTest = {
             status: isBlocked ? 'BLOCKED' : 'FAIL',
             mutatesState: mutated,
@@ -242,7 +258,7 @@ describe('Legacy MCP handler fixture audit', () => {
           }
         }
       } catch (e: any) {
-        const isBlocked = classification === 'external_compute' || e.message.includes('not configured') || e.message.includes('No such file')
+        const isBlocked = e.message.includes('not configured') || e.message.includes('No such file')
         record.executionTest = {
           status: isBlocked ? 'BLOCKED' : 'FAIL',
           detail: e.message

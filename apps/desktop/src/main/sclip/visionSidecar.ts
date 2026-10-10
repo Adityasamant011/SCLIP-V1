@@ -63,6 +63,8 @@ export interface AnalyzeResult {
   subjectPosition?: string | null
   resolutionUsed?:  string
   inputFrames?:     number
+  outputTokens?: number
+  outputLimitReached?: boolean | null
   cached?:          boolean
   error?:           string
 }
@@ -263,6 +265,8 @@ export class VisionSidecarManager {
         subjectPosition:  response.subject_position as string | null | undefined,
         resolutionUsed:   response.resolution_used as string | undefined,
         inputFrames:      Number(response.input_frames ?? 1),
+        outputTokens: typeof response.output_tokens === 'number' ? response.output_tokens : undefined,
+        outputLimitReached: typeof response.output_limit_reached === 'boolean' ? response.output_limit_reached : null,
         cached:           false,
       }
 

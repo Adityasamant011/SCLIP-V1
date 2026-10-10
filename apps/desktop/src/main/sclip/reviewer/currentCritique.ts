@@ -18,5 +18,6 @@ export function currentCritique(project: Project, read?: (immediate?: boolean) =
     omitted_issues: valid ? Math.max(0, summary!.total_issues - issues.length) : 0,
     optional_observations: summary?.optional_observations,
     coverage: valid ? summary!.coverage : 'No current reviewer evidence available',
+    readiness: 'not_certified',
     scope: 'Fallible diagnostics, not certified defects or editorial readiness. Obtain relevant rendered evidence; Hermes decides repair, intentional choice, or unresolved limitation.' }
 }

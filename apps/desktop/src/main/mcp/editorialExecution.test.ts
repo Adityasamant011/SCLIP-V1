@@ -24,7 +24,7 @@ describe('Phase 4B MCP schemas and revision agency',()=>{
   }
  })
  it('routes bad coordinates to rejection before any expensive evidence work',async()=>{const f=fixture(),compute=vi.fn();const r:any=await handleCallTool({...backend,mcpCallTool:compute},()=>f.host,'inspect_rendered_audio',{start_us:0,end_us:200000000});expect(r.isError).toBe(true);expect(compute).not.toHaveBeenCalled()})
- it('exposes clean critique as limited diagnostic scope, not editorial readiness',async()=>{const f=fixture(),r:any=await handleCallTool(backend,()=>f.host,'get_timeline_critique',{});const data=JSON.parse(r.content[0].text);expect(data.status).toBe('clean');expect(data.availability).toBe('not_generated');expect(data.scope).toContain('no editorial readiness verdict')})
+ it('exposes clean critique as limited diagnostic scope, not editorial readiness',async()=>{const f=fixture(),r:any=await handleCallTool(backend,()=>f.host,'get_timeline_critique',{});const data=JSON.parse(r.content[0].text);expect(data.status).toBe('not_reviewed');expect(data.availability).toBe('not_generated');expect(data.readiness).toBe('not_certified');expect(data.scope).toContain('not certified defects or editorial readiness')})
  for(const choice of ['one','two'])it(`permits different Hermes-selected issues/repairs and requires fresh relevant modalities (${choice})`,()=>{
   const f=fixture(),g=new RevisionLoopGuard(true),before=reviewState(f.actor.snapshot()),id=f.actor.snapshot().compositions[f.actor.snapshot().root_id].tracks[0].layers[0].id
   const evidence=g.recordEvidence('inspect_rendered_audio','timeline',[0,10000000],before,['audio','speech'])

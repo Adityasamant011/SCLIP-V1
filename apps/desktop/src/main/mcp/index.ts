@@ -25,6 +25,7 @@ export interface McpInfoView {
 }
 
 export interface McpHost {
+  reviewDisposition(): ReturnType<typeof completionDisposition> | {status:string}
   getInfo(): McpInfoView
   connectionSnapshot(): AgentConnectionSnapshot
   resetToken(): string
@@ -243,6 +244,7 @@ export async function startMcpHost(backend: Backend, opts: McpHostOptions = {}):
     connectionSnapshot(): AgentConnectionSnapshot {
       return { available, url, connections: [...connections.values()] }
     },
+    reviewDisposition() { const project=opts.getTsHost?.()?.actor.snapshot(); return project ? completionDisposition(project,completionReviews) : {status:"not_considered_in_this_state"} },
     getInfo(): McpInfoView {
       return { bind: `127.0.0.1:${port}`, url, bearer_token: auth.token }
     },

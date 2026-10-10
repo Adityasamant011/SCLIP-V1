@@ -15,7 +15,7 @@ export function currentVisualIndex(project: Project) {
 }
 export const VISUAL_EVIDENCE_SEMANTICS = 'Canvas coverage is geometric only, not a subject/composition verdict. Wall, light or signage can cover the canvas. Describe visible content, approximate subject/face position and boundary intersections as observations, with uncertainty. Do not prescribe a crop or repair. One frame establishes only that instant; sampled frames do not certify unsampled moments.'
 export function subjectObservations(result: AnalyzeResult) {
-  return { availability: result.ok ? 'model_observation' : 'unavailable', subject_visible: result.subjectVisible ?? null, approximate_subject_position: result.subjectPosition ?? null,
+  return { output_limit_reached: result.outputLimitReached ?? null, output_tokens: result.outputTokens ?? null, completion_status: result.outputLimitReached ? 'possibly_truncated' : 'unverified', availability: result.ok ? 'model_observation' : 'unavailable', subject_visible: result.subjectVisible ?? null, approximate_subject_position: result.subjectPosition ?? null,
     visible_content: result.visibleContent, confidence: result.confidence, bounding_regions: null,
     limitations: 'Model-derived, possibly incorrect. No calibrated face detector or face bounding box is available here. No aesthetic verdict or tracking is inferred.' }
 }

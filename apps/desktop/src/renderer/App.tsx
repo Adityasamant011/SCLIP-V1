@@ -558,7 +558,7 @@ export function App({ onCloseProject }: AppProps) {
         includeVideo: request.audioOnly ? false : DEFAULT_EXPORT_SETTINGS.includeVideo,
         resolutionHeight: request.resolutionHeight ?? null,
         fps: request.fps ?? null,
-      }, request.outputPath, { startUs: request.startUs, endUs: request.endUs });
+      }, request.outputPath, { startUs: request.startUs, endUs: request.endUs }, "inspection");
     };
     return () => { delete target.__sclipExportRange; };
   }, [runExportWithSettings, exportState]);

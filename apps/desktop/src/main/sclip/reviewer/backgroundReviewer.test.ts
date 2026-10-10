@@ -20,6 +20,7 @@ function makeMockProject(overrides?: any): any {
     ...overrides,
   }
 
+  rootComp.tracks.push({id:'synthetic-backdrop',enabled:true,layers:[{id:'synthetic-background',enabled:true,t_start_us:0,t_end_us:rootComp.duration_us,params:{kind:'Color',width:rootComp.width,height:rootComp.height}}]})
   return {
     project_id: 'test-proj',
     root_id: 'root-comp-id',

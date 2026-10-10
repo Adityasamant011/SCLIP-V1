@@ -922,14 +922,14 @@ export const PixiPreview = forwardRef<PixiPreviewHandle, Props>(function PixiPre
             }
             const current = useProjectStore.getState().summary;
             const composition = current && compositionOrRoot(current, previewRenderTargetId());
-            const activeVideos = composition?.tracks.flatMap((track) => track.layers)
-              .filter((layer) => layer.params.kind === 'VideoClip' && layer.t_start_us <= targetUs && targetUs < layer.t_end_us) ?? [];
+            const activeVideos = composition?.tracks.filter(track=>track.enabled!==false).flatMap((track) => track.layers)
+              .filter((layer) => layer.enabled && layer.params.kind === 'VideoClip' && layer.t_start_us <= targetUs && targetUs < layer.t_end_us) ?? [];
 
-            if (!isAtPlayhead) {
+            {
               // Route through the existing seek path so the playback tick and
               // decoder agree on one target during asynchronous frame arrival.
               // Restore the user's prior playhead in finally below.
-              engine.seek(targetUs);
+              if (!isAtPlayhead) engine.seek(targetUs);
               compositor.compositeFrame(targetUs);
               // A seek can paint before the decoder binds its target frame.
               // Wait on the compositor's actual bound-frame identity.
@@ -938,7 +938,7 @@ export const PixiPreview = forwardRef<PixiPreviewHandle, Props>(function PixiPre
                 const ready = activeVideos.every((layer) => {
                   if (layer.params.kind !== 'VideoClip') return true;
                   const probe = compositor.activeClipProbe(layer.id);
-                  const clipTargetUs = layer.params.src_in_us + targetUs - layer.t_start_us;
+                  const clipTargetUs = layer.params.src_in_us + (targetUs - layer.t_start_us) * layer.params.speed;
                   return probe?.spriteBound === true
                     && probe.boundFramePtsUs !== null
                     && probe.boundFrameDurationUs !== null
@@ -947,8 +947,8 @@ export const PixiPreview = forwardRef<PixiPreviewHandle, Props>(function PixiPre
                 });
                 if (ready) break;
                 if (performance.now() >= deadline) {
-                  // Fall back gracefully to current composition frame rather than aborting inspection
-                  break;
+                  // Never present a stale/failed decode as pixels at the requested time.
+                  throw new Error('Inspection frame unavailable: decoder did not bind the requested timeline frame');
                 }
                 await new Promise<void>((resolve) => setTimeout(resolve, 30));
                 compositor.compositeFrame(targetUs);
@@ -968,6 +968,18 @@ export const PixiPreview = forwardRef<PixiPreviewHandle, Props>(function PixiPre
               0,
               0,
             );
+            const factualEvidence = inspectionEvidence(composition?.tracks.filter(track=>track.enabled!==false).flatMap(track => track.layers) ?? [], targetUs, out.width, out.height, out.pixels, compositor);
+            const textCrops: Array<{layerId:string;bounds:{left:number;top:number;right:number;bottom:number};pngBase64:string}> = [];
+            for (const text of factualEvidence.layer_bounds.filter(l=>l.kind==='Text' && l.aabb).slice(0,2)) {
+              const b=text.aabb!;
+              const left=Math.max(0,Math.floor(b.left)-12),top=Math.max(0,Math.floor(b.top)-12),right=Math.min(out.width,Math.ceil(b.right)+12),bottom=Math.min(out.height,Math.ceil(b.bottom)+12);
+              if(right<=left || bottom<=top) continue;
+              const scale=Math.min(1,640/(right-left),360/(bottom-top)),crop=new OffscreenCanvas(Math.max(1,Math.round((right-left)*scale)),Math.max(1,Math.round((bottom-top)*scale)));
+              crop.getContext('2d')!.drawImage(canvas,left,top,right-left,bottom-top,0,0,crop.width,crop.height);
+              const bytes=new Uint8Array(await (await crop.convertToBlob({type:'image/png'})).arrayBuffer());
+              let binary='';for(const byte of bytes)binary+=String.fromCharCode(byte);
+              textCrops.push({layerId:text.layer_id,bounds:{left,top,right,bottom},pngBase64:btoa(binary)});
+            }
             const blob = await canvas.convertToBlob({ type: "image/png" });
             const buf = await blob.arrayBuffer();
             const bytes = new Uint8Array(buf);
@@ -980,7 +992,7 @@ export const PixiPreview = forwardRef<PixiPreviewHandle, Props>(function PixiPre
               tUs: targetUs,
               width: out.width,
               height: out.height,
-              factualEvidence: inspectionEvidence(composition?.tracks.flatMap(track => track.layers) ?? [], targetUs, out.width, out.height, out.pixels, compositor),
+              factualEvidence, textCrops,
             };
           } finally {
             if (!isAtPlayhead) {

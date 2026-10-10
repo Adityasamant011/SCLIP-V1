@@ -26,7 +26,7 @@ export function timelineTime(args: Record<string, unknown>): number | undefined 
 /** Ignore background proxy/cache bookkeeping; preserve every editorial state change. */
 export function reviewState(project: Project | undefined): string {
   return JSON.stringify(project && { project_id: project.project_id, root_id: project.root_id,
-    compositions: project.compositions, settings: project.settings, media: Object.values(project.media_pool).map(m => ({ id: m.id, file_hash: m.file_hash_blake3, duration_us: m.metadata.duration_us })) })
+    compositions: project.compositions, audio_roles: project.audio_roles, settings: project.settings, media: Object.values(project.media_pool).map(m => ({ id: m.id, file_hash: m.file_hash_blake3, duration_us: m.metadata.duration_us })) })
 }
 
 export function validateTimelineRange(start: unknown, end: unknown, duration: number, compositionId: string) {

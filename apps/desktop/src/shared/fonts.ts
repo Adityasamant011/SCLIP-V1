@@ -15,4 +15,7 @@
 /// Liberation lacks. Both faces ship with the app, which is what makes the
 /// cross-OS determinism guarantee true on the DEFAULT authoring path and not
 /// only on imported captions (ADR 0049).
+export function captionFontFallback(requested: string): string[] {
+  return [...new Set([...requested.split(','), 'Liberation Sans', 'Noto Sans SC'].map(s => s.trim()).filter(Boolean))];
+}
 export const DEFAULT_CAPTION_FONT_FAMILY = "Liberation Sans, Noto Sans SC";

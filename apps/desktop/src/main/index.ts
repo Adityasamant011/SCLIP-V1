@@ -1446,6 +1446,7 @@ app.whenReady().then(async () => {
       const keys = loadAllKeys()
       return testHermesConnection(profile, tag => keys[tag], app.isPackaged ? {} : process.env)
     }
+    if (channel === 'sclip_get_review_disposition') return mcpHost.reviewDisposition()
     if (channel === 'sclip_get_hermes_status') return getHermesStatus()
     if (channel === 'sclip_open_terminal') {
       const { projectId, sessionId, cols, rows } = args as { projectId: string; sessionId: string; cols?: number; rows?: number }

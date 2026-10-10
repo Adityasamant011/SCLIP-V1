@@ -11,6 +11,7 @@ import { remove, writeFile } from "@/bridge/fs";
 import { reveal as revealInShell } from "@/bridge/shell";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { createRenderPresentation } from "./renderPresentation";
 import { createExportLogMirror } from "./exportLog";
 import {
   ensureExportAudioConform,
@@ -124,7 +125,7 @@ export function useExportFlow(deps: {
   closeConfirmOpen: boolean;
   setCloseConfirmOpen: React.Dispatch<React.SetStateAction<boolean>>;
   runExportWithSettings: (settings: ExportSettings, path: string,
-    range?: { startUs: number; endUs: number }) => Promise<void>;
+    range?: { startUs: number; endUs: number }, origin?: "user" | "inspection") => Promise<void>;
   openRenderPlayPopup: (path: string) => Promise<void>;
   revealExportedFile: (path: string) => void;
 } {
@@ -305,15 +306,22 @@ export function useExportFlow(deps: {
   // a finally block. If cleanup itself fails the user's output is
   // still good — we just leave the temps for the next reboot to
   // clear.
+  const renderInFlight = useRef(false);
   const runExportWithSettings = useCallback(
-    async (settings: ExportSettings, path: string, range?: { startUs: number; endUs: number }) => {
+    async (settings: ExportSettings, path: string, range?: { startUs: number; endUs: number }, origin: "user" | "inspection" = "user") => {
+    if (renderInFlight.current) throw new Error("A render is already running");
+    renderInFlight.current = true;
+    const presentation = createRenderPresentation(origin, setExportState);
+    const setRunState = presentation.update;
+    let failed = false;
+    try {
     // Name the run for the log mirror before any state can transition.
-    exportLog.begin({ output: path, codec: settings.codec });
+    if (origin === "user") exportLog.begin({ output: path, codec: settings.codec });
     // ---- Attribution safety gate -----------------------------------------
     try {
       const attributionSafety = await checkExportAttributionSafety();
       if (attributionSafety && !attributionSafety.can_export) {
-        setExportState({
+        setRunState({
           kind: "error",
           detail: `Export blocked: ${attributionSafety.warnings.join("; ")}`,
         });
@@ -339,7 +347,7 @@ export function useExportFlow(deps: {
         // Export renders the ROOT, whatever composition is open (compositionAnchorStore.ts).
         const eUs = range?.endUs ?? rootCompositionOf(proj).duration_us;
         if (!hasVisibleContent(proj, sUs, eUs)) {
-          setExportState({ kind: "error", detail: t("export.no_video_material") });
+          setRunState({ kind: "error", detail: t("export.no_video_material") });
           return;
         }
       }
@@ -359,19 +367,19 @@ export function useExportFlow(deps: {
       // "no audio material".
       const proj = await projectSummary().catch(() => store.summary);
       if (!proj) {
-        setExportState({ kind: "error", detail: "No project loaded." });
+        setRunState({ kind: "error", detail: "No project loaded." });
         return;
       }
       const startUs = range?.startUs ?? 0;
       const endUs = range?.endUs ?? rootCompositionOf(proj).duration_us;
-      setExportState({ kind: "starting" });
+      setRunState({ kind: "starting" });
       const tracker = createConformTracker(listen);
       try {
         await tracker.ready; // listeners first — a fast job must not slip by
         const conformWaiting = await ensureExportAudioConform({ startUs, endUs });
         if (conformWaiting.length > 0) {
           const ctrl = new AbortController();
-          setExportState({
+          setRunState({
             kind: "preparing",
             labels: conformWaiting.map(
               (id) => store.mediaById.get(id)?.label ?? id,
@@ -382,10 +390,10 @@ export function useExportFlow(deps: {
         }
       } catch (e) {
         if (e instanceof ExportCancelled) {
-          setExportState(null);
+          setRunState(null);
           return;
         }
-        setExportState({
+        setRunState({
           kind: "error",
           detail: gateFailureDetail(e, (id) =>
             t("export.failed_prepare", { labels: store.mediaById.get(id)?.label ?? id }),
@@ -399,15 +407,15 @@ export function useExportFlow(deps: {
       // conform gate above is only half the audio wait.
       const fx = await audioFxGate(proj, { startUs, endUs });
       if (fx.kind === "cancelled") {
-        setExportState(null);
+        setRunState(null);
         return;
       }
       if (fx.kind === "error") {
-        setExportState({ kind: "error", detail: fx.detail });
+        setRunState({ kind: "error", detail: fx.detail });
         return;
       }
       try {
-        setExportState({ kind: "starting" });
+        setRunState({ kind: "starting" });
         const produced = await exportProjectAudioOnly(
           path,
           {
@@ -421,7 +429,7 @@ export function useExportFlow(deps: {
         if (!produced) {
           // No audio layers in range → Rust wrote nothing. Surface it rather
           // than reporting a "complete" export with no file on disk.
-          setExportState({
+          setRunState({
             kind: "error",
             detail: t("export.no_audio_material"),
           });
@@ -430,10 +438,10 @@ export function useExportFlow(deps: {
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         console.error("[weftcut/pixi] audio-only export failed:", e);
-        setExportState({ kind: "error", detail: `Audio export failed: ${msg}` });
+        setRunState({ kind: "error", detail: `Audio export failed: ${msg}` });
         return;
       }
-      setExportState({
+      setRunState({
         kind: "complete",
         payload: { outputPath: path, durationUs: endUs - startUs },
       });
@@ -449,7 +457,7 @@ export function useExportFlow(deps: {
       const store = useProjectStore.getState();
       const proj = store.summary; // block-scoped; avoids shadowing the later `summary` local
       if (!proj) {
-        setExportState({ kind: "error", detail: "No project loaded." });
+        setRunState({ kind: "error", detail: "No project loaded." });
         return;
       }
       const startUs = range?.startUs ?? 0;
@@ -471,7 +479,7 @@ export function useExportFlow(deps: {
         media: referencedMedia,
       });
 
-      setExportState({ kind: "starting" });
+      setRunState({ kind: "starting" });
       const prep = await prepareExportMedia(proxyWaitScope(referencedMedia, decodeRouting), {
         probe: (url) => classifyWebcodecsDecodability(url),
         ensureFullProxy: (id) => ensureFullProxy(id),
@@ -484,7 +492,7 @@ export function useExportFlow(deps: {
         const labels = prep.failed
           .map((id) => store.mediaById.get(id)?.label ?? id)
           .join(", ");
-        setExportState({
+        setRunState({
           kind: "error",
           detail: t("export.failed_prepare", { labels }),
         });
@@ -496,7 +504,7 @@ export function useExportFlow(deps: {
         const labels = prep.waiting.map(
           (id) => store.mediaById.get(id)?.label ?? id,
         );
-        setExportState({
+        setRunState({
           kind: "preparing",
           labels,
           onCancel: () => ctrl.abort(),
@@ -528,10 +536,10 @@ export function useExportFlow(deps: {
           });
         } catch (e) {
           if (e instanceof ExportCancelled) {
-            setExportState(null);
+            setRunState(null);
             return;
           }
-          setExportState({
+          setRunState({
             kind: "error",
             detail: gateFailureDetail(e, (id) =>
               t("export.failed_prepare", { labels: store.mediaById.get(id)?.label ?? id }),
@@ -558,7 +566,7 @@ export function useExportFlow(deps: {
           });
           if (conformWaiting.length > 0) {
             const ctrl = new AbortController();
-            setExportState({
+            setRunState({
               kind: "preparing",
               labels: conformWaiting.map(
                 (id) => store.mediaById.get(id)?.label ?? id,
@@ -569,10 +577,10 @@ export function useExportFlow(deps: {
           }
         } catch (e) {
           if (e instanceof ExportCancelled) {
-            setExportState(null);
+            setRunState(null);
             return;
           }
-          setExportState({
+          setRunState({
             kind: "error",
             detail: gateFailureDetail(e, (id) =>
               t("export.failed_prepare", { labels: store.mediaById.get(id)?.label ?? id }),
@@ -587,11 +595,11 @@ export function useExportFlow(deps: {
         // the bakes that read it.
         const fx = await audioFxGate(proj, { startUs, endUs });
         if (fx.kind === "cancelled") {
-          setExportState(null);
+          setRunState(null);
           return;
         }
         if (fx.kind === "error") {
-          setExportState({ kind: "error", detail: fx.detail });
+          setRunState({ kind: "error", detail: fx.detail });
           return;
         }
       }
@@ -640,7 +648,7 @@ export function useExportFlow(deps: {
         );
         // No cancellable step in the bake loop, so omit onCancel — the panel
         // hides the Cancel button rather than offering a dead one.
-        setExportState({ kind: "preparing", labels });
+        setRunState({ kind: "preparing", labels });
       }
       motifFrames = await exportBakeMotifs(
         summary,
@@ -652,7 +660,7 @@ export function useExportFlow(deps: {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.error("[weftcut/pixi] motif bake failed:", e);
-      setExportState({ kind: "error", detail: `Motif render failed: ${msg}` });
+      setRunState({ kind: "error", detail: `Motif render failed: ${msg}` });
       return;
     }
     // ---- end bake --------------------------------------------------------
@@ -687,7 +695,7 @@ export function useExportFlow(deps: {
     // ever starts, instead of letting resolveEncodeTarget silently proceed
     // with an encoder that just proved it can't run.
     if (needsProbe && !smokeOk) {
-      setExportState({
+      setRunState({
         kind: "error",
         detail: t("export_dialog.codec_unsupported", {
           codec: settings.codec.toUpperCase(),
@@ -762,7 +770,7 @@ export function useExportFlow(deps: {
             outFps,
           );
           if (!fallbackOk) {
-            setExportState({
+            setRunState({
               kind: "error",
               detail: t("export_dialog.native_unavailable_no_fallback"),
             });
@@ -775,7 +783,7 @@ export function useExportFlow(deps: {
           nativeSink = false;
           sinkTarget = null;
         } else {
-          setExportState({ kind: "error", detail: `Failed to start the native encoder: ${msg}` });
+          setRunState({ kind: "error", detail: `Failed to start the native encoder: ${msg}` });
           return;
         }
       }
@@ -817,7 +825,7 @@ export function useExportFlow(deps: {
       // is invisible.
       const currentTimeUs = encoded * approxFrameDurUs(fpsNum, fpsDen);
       const speed = elapsedSec > 0 ? currentTimeUs / 1e6 / elapsedSec : 0;
-      setExportState({
+      setRunState({
         kind: "progress",
         progress: {
           progress: encoded / total,
@@ -845,7 +853,7 @@ export function useExportFlow(deps: {
           await writeFile(tempVideoPath, new Uint8Array(data), { append: true });
         };
 
-    setExportState({ kind: "starting" });
+    setRunState({ kind: "starting" });
     let result;
     try {
       result = await previewRef.current?.runPixiExport({
@@ -865,12 +873,12 @@ export function useExportFlow(deps: {
       const msg = e instanceof Error ? e.message : String(e);
       console.error("[weftcut/pixi] export failed:", e);
       if (nativeSink) await exportVideoSinkCancel().catch(() => {});
-      setExportState({ kind: "error", detail: msg });
+      setRunState({ kind: "error", detail: msg });
       return;
     }
     if (!result) {
       if (nativeSink) await exportVideoSinkCancel().catch(() => {});
-      setExportState({
+      setRunState({
         kind: "error",
         detail: "Preview not initialized.",
       });
@@ -881,13 +889,13 @@ export function useExportFlow(deps: {
     // sent. The sink flushes its encoder + muxer and writes the final
     // tempVideoPath. Must run BEFORE the audio export + mux.
     if (nativeSink) {
-      setExportState({ kind: "finalizing", step: "sink" });
+      setRunState({ kind: "finalizing", step: "sink" });
       try {
         await exportVideoSinkFinish();
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         console.error("[weftcut/pixi] sink finish failed:", e);
-        setExportState({ kind: "error", detail: `Finalize failed: ${msg}` });
+        setRunState({ kind: "error", detail: `Finalize failed: ${msg}` });
         void remove(tempVideoPath).catch(() => {});
         void remove(tempAudioPath).catch(() => {});
         return;
@@ -898,7 +906,7 @@ export function useExportFlow(deps: {
       // (1) Video is already written to tempVideoPath (streamed above).
       // Audio-only Rust export -> temp audio file (.m4a/.mka).
       if (settings.audio.include) {
-        setExportState({ kind: "finalizing", step: "audio" });
+        setRunState({ kind: "finalizing", step: "audio" });
         await exportProjectAudioOnly(
           tempAudioPath,
           {
@@ -914,13 +922,13 @@ export function useExportFlow(deps: {
       // (3) Mux → user-chosen path. Every path already wrote the final codec
       // to tempVideoPath (WebCodecs direct-encode, or the native-encode video
       // sink) — the mux step is always a stream-copy into the chosen container.
-      setExportState({ kind: "finalizing", step: "mux" });
+      setRunState({ kind: "finalizing", step: "mux" });
       await muxExport(tempVideoPath, tempAudioPath, path);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.error("[weftcut/pixi] finalize failed:", e);
       // nativeSink sink-finish already ran (above); mux failure doesn't need cancel.
-      setExportState({
+      setRunState({
         kind: "error",
         detail: `Finalize failed: ${msg}`,
       });
@@ -935,10 +943,17 @@ export function useExportFlow(deps: {
     const durationUs = Math.round(
       (result.totalFrames * 1_000_000 * result.fpsDen) / result.fpsNum,
     );
-    setExportState({
+    setRunState({
       kind: "complete",
       payload: { outputPath: path, durationUs },
     });
+    } catch (error) {
+      failed = true;
+      throw error;
+    } finally {
+      renderInFlight.current = false;
+      if (!failed) presentation.finish();
+    }
     },
     [t, audioFxGate, previewRef, proxyStateRef, decodeProbeMemo, exportLog],
   );

@@ -1,3 +1,6 @@
+import { textLayoutBox, textHorizontalBounds } from '../textLayoutFacts.js'
+import { timelineCoverage } from '../audioAudibility.js'
+import { fontAvailability } from '../../fonts/resolveSystemFont.js'
 import { createHash } from 'node:crypto'
 import { reviewState } from '../evidenceCoordinates.js'
 import * as fs from 'node:fs'
@@ -101,6 +104,7 @@ export class BackgroundReviewer {
       critical_count: unique.filter(i => i.severity === 'critical').length,
       warning_count: unique.filter(i => i.severity === 'warning').length,
       suggestion_count: unique.filter(i => i.severity === 'suggestion').length,
+      readiness: 'not_certified',
       coverage: deep ? 'Authorized optional observations where available; partial, not comprehensive' : 'Deterministic layout estimates only; rendered audio, meaning, story and export uninspected',
       issues: unique.map(i => ({ ...i, coordinate_space: 'timeline', ...identity,
         evidence_class: /^(speech_chop|pop_|silence_|beat_|energy_|visual_mismatch|broken_thought|narrative_whiplash)/.test(i.id) ? 'MODEL_OBSERVATION' : 'DETERMINISTIC_MEASUREMENT',
@@ -188,7 +192,7 @@ export class BackgroundReviewer {
 
     for (const track of comp.tracks) {
       for (const layer of track.layers) {
-        if (!layer.enabled) continue
+        if (track.enabled === false || !layer.enabled) continue
         const kind = layer.params.kind
         if (kind === 'Text') textLayers.push(layer)
         else if (kind === 'Motif') motifLayers.push(layer)
@@ -248,6 +252,33 @@ export class BackgroundReviewer {
         })
       }
     }
+
+    // Facts identify potential concerns, never choose an edit or disallow intentional overlap.
+    for (const text of textLayers) {
+      const box = textLayoutBox(text), horizontal=textHorizontalBounds(text)
+      const p = text.params as any
+      if ((box && (box.left < 0 || box.top < 0 || box.right > compW || box.bottom > compH)) || (horizontal && (horizontal.left<0 || horizontal.right>compW))) issues.push({
+        id: `text_box_bounds_${text.id}`, severity: 'warning', category: 'caption_placement', layer_id: text.id,
+        t_us: text.t_start_us, affected_range_us: [text.t_start_us,text.t_end_us],
+        description: `Authored text layout box extends outside canvas: ${JSON.stringify(box ?? horizontal)} on ${compW}x${compH}. Position is the transform anchor, not a left margin. Glyph occupancy is unknown.`,
+        suggested_action: 'Inspect composed text bounds and pixels; decide whether a repair is justified.' })
+      const fonts = p.font?.family ? fontAvailability(p.font.family) : null
+      if (fonts?.unavailable.length) issues.push({id:`text_font_unavailable_${text.id}`,severity:'warning',category:'caption_placement',layer_id:text.id,t_us:text.t_start_us,
+        description:`Requested font families unavailable: ${fonts.unavailable.join(', ')}. Explicit bundled fallback is Liberation Sans / Noto Sans SC; verify the actual rendered typography.`,
+        suggested_action:'Choose an available family only if appropriate; no font substitution is authored automatically.'})
+    }
+    const boxed=textLayers.map(l=>({l,b:textLayoutBox(l)})).filter(v=>v.b!==null).slice(0,64)
+    for(let i=0;i<boxed.length;i++) for(let j=i+1;j<boxed.length;j++) {
+      const a=boxed[i],b=boxed[j],start=Math.max(a.l.t_start_us,b.l.t_start_us),end=Math.min(a.l.t_end_us,b.l.t_end_us)
+      if(end>start && Math.min(a.b!.right,b.b!.right)>Math.max(a.b!.left,b.b!.left) && Math.min(a.b!.bottom,b.b!.bottom)>Math.max(a.b!.top,b.b!.top)) issues.push({
+        id:`text_collision_${a.l.id}_${b.l.id}`,severity:'warning',category:'caption_placement',t_us:start,affected_range_us:[start,end],
+        description:`Text layout boxes ${a.l.id} and ${b.l.id} intersect during this range. Boxes may contain empty space and overlap may be intentional.`,
+        suggested_action:'Inspect the actual composed interval; Hermes judges readability and any repair.'})
+    }
+    const coverage=timelineCoverage(project,comp.id)
+    if(coverage.trailing_range_without_visual_layers_us) issues.push({id:'trailing_visual_coverage',severity:'warning',category:'continuity',t_us:coverage.trailing_range_without_visual_layers_us[0],
+      affected_range_us:coverage.trailing_range_without_visual_layers_us as [number,number],description:'Composition extends beyond its last enabled visual layer. Background-only ending may be intentional; inspect the actual ending and audio.',
+      suggested_action:'Inspect the ending; Hermes decides whether any change is justified.'})
 
     // Audit Motifs (Detect time and spatial collision)
     for (let i = 0; i < motifLayers.length; i++) {

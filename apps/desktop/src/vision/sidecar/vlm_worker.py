@@ -87,6 +87,8 @@ class AnalyzeResponse(BaseModel):
     raw_response:     str
     resolution_used:  str
     input_frames:     int
+    output_tokens:    Optional[int] = None
+    output_limit_reached: Optional[bool] = None
 
 
 class HealthResponse(BaseModel):
@@ -212,7 +214,7 @@ def _run_inference(
     question: str,
     context: Optional[str],
     max_tokens: int,
-) -> tuple[str, float]:
+) -> tuple[str, float, Optional[int]]:
     """Run inference on 1 or more images. Returns (raw_response, latency_s)."""
     from mlx_vlm import generate
     from mlx_vlm.prompt_utils import apply_chat_template
@@ -254,7 +256,7 @@ def _run_inference(
     else:
         raw = str(response)
 
-    return raw, latency
+    return raw, latency, getattr(response, "generation_tokens", None)
 
 
 def _parse_response(raw: str, question: str) -> dict:
@@ -415,7 +417,7 @@ def analyze(req: AnalyzeRequest):
                 raise HTTPException(status_code=503, detail=f"Model load failed: {e}")
 
             try:
-                raw, latency = _run_inference(processed_paths, req.question, req.context, max_tokens)
+                raw, latency, output_tokens = _run_inference(processed_paths, req.question, req.context, max_tokens)
                 _last_used = time.time()
             except Exception as e:
                 log.error(f"Inference failed: {e}\n{traceback.format_exc()}")
@@ -438,6 +440,8 @@ def analyze(req: AnalyzeRequest):
         model=MODEL_HF_ID,
         resolution_used=actual_res_desc,
         input_frames=len(raw_paths),
+        output_tokens=output_tokens,
+        output_limit_reached=output_tokens >= max_tokens if isinstance(output_tokens, int) else None,
         **parsed,
     )
 
@@ -502,7 +506,7 @@ def inspect_sequence_endpoint(req: SequenceInspectRequest):
             global _last_used
             _last_used = time.time()
             _ensure_model_loaded(MODEL_HF_ID)
-            raw, latency = _run_inference(processed_paths, prompt, None, req.max_tokens or 128)
+            raw, latency, output_tokens = _run_inference(processed_paths, prompt, None, req.max_tokens or 128)
             _last_used = time.time()
     except Exception as e:
         log.error(f"Sequence inference failed: {e}\n{traceback.format_exc()}")

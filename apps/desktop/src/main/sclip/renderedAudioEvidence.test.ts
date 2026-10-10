@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import {spawnSync} from 'node:child_process'
 import {blankProject} from '../state/model'
+import {audioParams} from '../state/mutations/media'
 import {uuidV7Gen} from '../state/ids'
 import {measureRenderedPcm,inspectRenderedAudio,decodeRenderedPcm} from './renderedAudioEvidence'
 import {resolveFfmpegPath} from './rangeRender'
@@ -11,7 +12,9 @@ import {toolDimensions} from './evidenceModalities'
 function pcm(values:number[]){const b=Buffer.alloc(values.length*4);values.forEach((v,i)=>b.writeFloatLE(v,i*4));return b}
 function fixture() {
  const project=blankProject(uuidV7Gen(),'synthetic'),paths:string[]=[],content={value:'synthetic-render-a'}
+ project.audio_roles.music={muted:false,solo:false,gain_db:0}
  project.compositions[project.root_id].duration_us=60000000
+ project.compositions[project.root_id].tracks[0].layers.push({id:'audio',label:null,t_start_us:0,t_end_us:60000000,enabled:true,locked:false,metadata:{},effects:[],params:audioParams('synthetic',0,60000000)})
  const render=vi.fn(async()=>{const dir=fs.mkdtempSync(path.join(os.tmpdir(),'sclip-audio-test-')),file=path.join(dir,'render.mp4');fs.writeFileSync(file,content.value);paths.push(dir);return {path:file,duration_us:2000000,has_audio:true,cached:false}})
  const decode=vi.fn(async()=>pcm(Array.from({length:32000},(_,i)=>i<16000?.2:0)))
  const transcribe=vi.fn(async(args:any)=>({backend:'whisper_cpp',word_timing:'word',segments:[{text:'Synthetic speech.',t_start_us:args.layer.t_start_us,t_end_us:args.layer.t_start_us+500000,words:[{word:'Synthetic',t_start_us:args.layer.t_start_us,t_end_us:args.layer.t_start_us+300000}]}]}))
@@ -27,6 +30,7 @@ describe('actual rendered audio facts, never editorial judgments',()=>{
   expect(JSON.stringify(r)).not.toMatch(/bad pacing|awkward pause|suggested_action|editorial_score/)
  })
  it('reports no audio without inventing transcript or speech coverage',async()=>{const f=fixture();f.decode.mockResolvedValue(null as any);const r=await f.run();expect(r.has_audio).toBe(false);expect(r.observed_dimensions).toEqual([]);expect(f.transcribe).not.toHaveBeenCalled()})
+ it('muted role yields structured state evidence without rendering or speech verification; unmute reacquires',async()=>{const f=fixture();f.project.audio_roles.music.muted=true;const r=await f.run();expect(r.status).toBe('no_audible_material');expect(r.audibility.layers[0].excluded_by).toContain('role_muted');expect(r.observed_dimensions).toEqual([]);expect(f.render).not.toHaveBeenCalled();expect(f.transcribe).not.toHaveBeenCalled();f.project.audio_roles.music.muted=false;const fresh=await f.run();expect(fresh.status).toBe('measured');expect(fresh.state_version).not.toBe(r.state_version)})
  it('recognition failure leaves signal facts but no speech verification',async()=>{const f=fixture();f.transcribe.mockRejectedValue(Error('local model missing'));const r=await f.run();expect(r.transcript.status).toBe('unavailable');expect(r.observed_dimensions).toEqual(['audio'])})
  it('keys measurement cache by current state, rendered bytes and range; never caches a transcript across config changes',async()=>{
   const f=fixture(),first=await f.run(),again=await f.run();expect(first.cached).toBe(false);expect(again.cached).toBe(true);expect(f.render).toHaveBeenCalledTimes(2);expect(f.transcribe).toHaveBeenCalledTimes(2)

@@ -39,4 +39,11 @@ describe('read-only composed frame facts', () => {
     expect(JSON.stringify(facts)).not.toContain('subject_visible')
   })
 
+  it('preserves box-edge and collision facts even if a model might claim framing is good',()=>{
+    const layer={id:'a',t_start_us:0,t_end_us:1000,params:{kind:'Text',x:{mode:'Static',value:-2},y:{mode:'Static',value:-2}}} as any
+    const facts=inspectionEvidence([layer,{...layer,id:'b'}],10,8,8,new Uint8Array(256).fill(255),{naturalSizeOf:()=>({w:8,h:8}),textFitOf:()=>null})
+    expect(facts.layer_bounds[0]!.outside_canvas_edges).toEqual(['left','top']);expect(facts.text_intersections).toHaveLength(1)
+    expect(facts.layer_bounds[0]!.text_region_pixels?.near_white_fraction).toBe(1);expect(facts.observation_authority).toContain('cannot overrule geometry')
+  })
+
 })

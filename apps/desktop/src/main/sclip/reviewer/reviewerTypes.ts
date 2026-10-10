@@ -41,6 +41,7 @@ export interface TimelineReviewSummary {
   composition_id?: string
   state_version?: string
   availability?: 'available' | 'unavailable' | 'stale'
+  readiness?: 'not_certified'
   coverage?: string
   optional_observations?: 'canceled' | 'timed_out'
   status: 'clean' | 'has_issues' | 'in_progress'

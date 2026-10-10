@@ -603,9 +603,11 @@ export async function handleCallTool(
                 width: res.width,
                 height: res.height,
                 source: res.source,
+                composed_frame_facts: res.factualEvidence,
                 note: 'Raw image bytes returned. To ask questions and receive natural language visual evidence about what is visible in this frame, use vision_inspect.',
               }),
             },
+            ...(res.textCrops??[]).slice(0,2).flatMap(c=>[{type:'text',text:JSON.stringify({text_crop_layer_id:c.layerId,bounds:c.bounds,coordinate_space:'timeline',timeline_t_us:res.t_us})},{type:'image',data:c.pngBase64,mimeType:'image/png'}]),
           ],
         } as unknown as ServerResult
       } catch (e) {

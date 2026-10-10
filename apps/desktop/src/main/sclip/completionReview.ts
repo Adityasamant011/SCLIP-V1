@@ -29,14 +29,14 @@ export function hasAuthoredOutput(project: Project) {
   return !!comp && comp.duration_us > 0 && comp.tracks.some(t => t.enabled !== false && t.layers.some(l => l.enabled && l.t_end_us > l.t_start_us))
 }
 
-/** Imports, locks and labels alone do not change authored output. Guard freshness still uses full reviewState. */
+/** Imports and labels alone do not change authored output. Locks affect native audio gates. Guard freshness still uses full reviewState. */
 export function outputState(project: Project): string {
   const used = new Set(Object.values(project.compositions).flatMap(c => c.tracks.flatMap(t => t.layers.flatMap(l => 'media' in l.params ? [l.params.media] : []))))
-  return JSON.stringify({ compositions: project.compositions, settings: project.settings,
+  return JSON.stringify({ compositions: project.compositions, audio_roles: project.audio_roles, settings: project.settings,
     media: Object.values(project.media_pool).filter(m => used.has(m.id)).map(m => ({id:m.id,hash:m.file_hash_blake3,metadata:m.metadata})) },
-    (key, value) => ['label', 'locked', 'markers'].includes(key) ? undefined : value)
+    (key, value) => ['label', 'markers'].includes(key) ? undefined : value)
 }
 export function completionDisposition(project: Project, sessions: Map<string, CompletionReview>) {
   const entry = sessions.get(project.project_id)
-  return entry?.reviewedState === reviewState(project) ? { status:'considered_in_completed_review',decision:entry.decision,outcomes:entry.guard.status.outcomes } : {status:'not_considered_in_this_state'}
+  return entry?.reviewedState === reviewState(project) ? { status:'considered_in_completed_review',decision:entry.decision,outcomes:entry.guard.status.outcomes } : {status: entry?.started ? 'review_incomplete_in_this_state' : 'not_considered_in_this_state', phase:entry?.guard.status.phase ?? 'not_started', readiness:'unverified', reason:'No completed Hermes review of the current state. Interruption, provider failure or pending work must not be reported as ready.'}
 }

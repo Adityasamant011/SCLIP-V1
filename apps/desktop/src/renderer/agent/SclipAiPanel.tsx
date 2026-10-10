@@ -1,3 +1,4 @@
+import { ReviewStatus } from './ReviewStatus'
 import { useEffect, useRef, useState } from 'react'
 import { useProjectStore } from '../state/projectStore'
 import {
@@ -90,6 +91,7 @@ export function SclipAiPanel() {
         onClearTerminal={terminal.kind === 'ready' && projectId ? handleClear : undefined}
         isRestarting={isRestarting}
       />
+      {projectId && <ReviewStatus projectId={projectId} />}
       <div className="sclip-dock-content">
         {terminal.kind === 'ready' && projectId ? (
           <HermesTerminal

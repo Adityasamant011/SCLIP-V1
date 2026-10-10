@@ -6,6 +6,7 @@ import type { Project } from '../state/model'
 import { audioParams, mediaItemTemplate } from '../state/mutations/media'
 import { renderComposedTimelineRange, resolveFfmpegPath, MAX_RANGE_RENDER_DURATION_US } from './rangeRender'
 import { reviewState, validateTimelineRange } from './evidenceCoordinates'
+import { audioAudibility } from './audioAudibility'
 
 const SAMPLE_RATE = 16000
 export function measureRenderedPcm(pcm: Buffer, timelineStartUs: number) {
@@ -57,8 +58,13 @@ export async function inspectRenderedAudio(project:Project,args:Record<string,un
   validateTimelineRange(args.start_us,args.end_us,comp.duration_us,compId)
   signal?.throwIfAborted()
   const state=createHash('sha256').update(reviewState(project)).digest('hex')
+  const audibility=audioAudibility(project,compId,Number(args.start_us),Number(args.end_us))
+  if (audibility.selected_count === 0) return { coordinate_space:'timeline',evidence_origin:'CURRENT_TIMELINE',state_version:state,
+    composition_id:compId,timeline_range_us:[Number(args.start_us),Number(args.end_us)],has_audio:false,
+    status:'no_audible_material',render_content_sha256:null,audibility,signal:null,transcript:{status:'no_audio',evidence_class:'MODEL_OBSERVATION',segments:[]},
+    observed_dimensions:[],cached:false,semantics:'Authoritative mix gates select no audio. No rendered signal or speech was inspected. Hermes chooses whether the silence is intentional or a repair is justified.' }
   const rendered=await deps.render(project,{start_us:Number(args.start_us),end_us:Number(args.end_us),composition_id:args.composition_id as string|undefined,getActiveWindow,signal,
-    audioOnly:comp.tracks.some(t=>t.layers.some(l=>l.params.kind==='Audio' && l.t_end_us>Number(args.start_us) && l.t_start_us<Number(args.end_us)))})
+    audioOnly:true})
   try {
     signal?.throwIfAborted()
     const hash=createHash('sha256').update(fs.readFileSync(rendered.path)).digest('hex')
@@ -82,7 +88,7 @@ export async function inspectRenderedAudio(project:Project,args:Record<string,un
     signal?.throwIfAborted()
     const evidence={coordinate_space:'timeline',evidence_origin:'CURRENT_TIMELINE',state_version:state,composition_id:args.composition_id??project.root_id,
       timeline_range_us:[start,Number(args.end_us)],render_content_sha256:hash,has_audio:hasAudio,
-      signal:facts,transcript,cached:!!hit,observed_dimensions:hasAudio?['audio',...(transcript.status==='available'?['speech']:[])]:[],
+      signal:facts,transcript,audibility,status:hasAudio?'measured':'no_audio_stream',cached:!!hit,observed_dimensions:hasAudio?['audio',...(transcript.status==='available'?['speech']:[])]:[],
       semantics:'Actual production audio mix. Signal facts are measurements; local transcript/words are fallible recognition, not source projections or an editorial verdict.'}
     // Failed recognition is not cached as permanent unavailability.
     if(facts){cache.set(key,facts);if(cache.size>8)cache.delete(cache.keys().next().value!)}

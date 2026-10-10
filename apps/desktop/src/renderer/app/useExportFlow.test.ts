@@ -385,4 +385,14 @@ describe("useExportFlow audio-effect gate", () => {
     });
     expect(bridge.log).toContain("invoke check_export_attribution_safety");
   });
+  it('internal audio QA error propagates without opening Export UI, then a user export still works', async()=>{
+    bridge.answers.set('project_summary',()=>summaryFixture());
+    bridge.answers.set('export_project_audio_only',()=>false);
+    const {result}=renderHook(()=>useExportFlow({previewRef:createRef(),proxyStateRef:{current:new Map()},decodeProbeMemo:new Map()} as any));
+    await act(async()=>{await expect(result.current.runExportWithSettings({...DEFAULT_EXPORT_SETTINGS,includeVideo:false},'/tmp/inspection.wav',undefined,'inspection')).rejects.toThrow();});
+    expect(result.current.exportState).toBeNull();
+    await act(async()=>{await result.current.runExportWithSettings({...DEFAULT_EXPORT_SETTINGS,includeVideo:false},'/tmp/user.wav')});
+    expect(result.current.exportState?.kind).toBe('error');
+  });
+
 });

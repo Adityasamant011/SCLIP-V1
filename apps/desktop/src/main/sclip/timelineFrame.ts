@@ -24,6 +24,7 @@ export interface TimelineFrameResult {
   width: number
   height: number
   source: 'live_compositor' | 'headless_compositor'
+  textCrops?: Array<{layerId:string;bounds:unknown;pngBase64:string}>
   factualEvidence?: unknown
 }
 
@@ -86,6 +87,7 @@ export async function inspectTimelineFrame(
           source: 'live_compositor',
           coordinate_space: 'timeline', timeline_t_us: t_us!,
           factualEvidence: capture.factualEvidence,
+          textCrops: capture.textCrops,
         }
       }
     } catch (error) {
