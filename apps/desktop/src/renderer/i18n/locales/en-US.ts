@@ -1270,6 +1270,7 @@ const enUS = {
     "get_source_speech_context": "Read source speech context",
     "evaluate_source_passages": "Search source passages",
     "ripple_cut_range": "Cut and close range",
+    "creator_style_memory": "Creator style memory",
     "apply_repair_transaction": "Apply repair transaction",
     "inspect_timeline_frame": "Inspect timeline frame",
     "render_timeline_range": "Render timeline range preview",

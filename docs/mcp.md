@@ -805,3 +805,7 @@ filters by category (`Mcp`) and source (`Agent { client }`).
 - `video_search_external_media { query, ... }`: external media discovery only when explicitly enabled.
 - `resolve_visual_intents { intents, ... }`: optional external visual discovery for editor-authored intent; no automatic placement.
 - `import_external_media { candidate_id, ... }`: import an explicitly selected cached candidate; no automatic cut or timeline placement.
+
+### Creator memory
+
+- `creator_style_memory { action, creator_id?, expected_revision?, ... }`: canonical local creator-style context and evidence. `context` returns the same compact selection and IDs supplied to Hermes; `preference`, `evidence`, and version-checked `preferences` pagination provide omitted detail. Foreground `maintenance` atomically applies 1–8 Hermes-authored hypotheses, links, counterexamples, exceptions, consolidations or supersessions. Writes require current creator/revision, target versions and scoped evidence. Creator approval/disable/forget controls cannot be overridden; the current brief takes priority. No timeline edit, background model call, or mirroring into generic Hermes memory occurs.

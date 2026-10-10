@@ -1081,6 +1081,7 @@ const zhCN: Resources = {
     "get_source_speech_context": "读取素材语音上下文",
     "evaluate_source_passages": "搜索素材片段",
     "ripple_cut_range": "剪除并闭合区间",
+    "creator_style_memory": "创作者风格记忆",
     "apply_repair_transaction": "应用修复事务",
     "inspect_timeline_frame": "检查时间线画面",
     "render_timeline_range": "渲染时间线区间预览",

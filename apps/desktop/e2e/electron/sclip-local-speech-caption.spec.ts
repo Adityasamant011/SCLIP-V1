@@ -17,21 +17,16 @@ test('local Whisper speech becomes editable captions in a real export', async ()
   const binary = speech.local?.whisper_cpp?.binary
   const model = speech.local?.whisper_cpp?.model
   test.skip(!binary || !model || !fs.existsSync(binary) || !fs.existsSync(model), 'Local Whisper binary/model is unavailable')
-  const source = path.join(os.homedir(), 'Documents/1/Mega test/Media/Raw Talking head tutorial video for editing practice.mp4')
+  const source = process.env.SCLIP_TEST_SPEECH_SOURCE ?? path.join(os.homedir(), 'Documents/1/Mega test/Media/Raw Talking head tutorial video for editing practice.mp4')
   expect(fs.existsSync(source)).toBe(true)
 
   const userDataDir = tmpDir('sclip-local-speech-profile-')
+  fs.writeFileSync(path.join(userDataDir, 'speech_config.json'), JSON.stringify({preferred_engine:'whisper_cpp',local:{whisper_cpp:{binary,model}}}))
   const { app, page } = await launchApp({ userDataDir, env: { SCLIP_USER_DATA_DIR: userDataDir, SCLIP_JEV_ENABLED: '0' } })
   let client: Client | undefined
   try {
     await newProject(page, { parentFolder: tmpDir('sclip-local-speech-workspace-'), name: 'local-speech',
       canvas: { width: 1080, height: 1920, fpsNum: 30, fpsDen: 1 } })
-    await invokeCmd(page, 'models_use', { id: 'whisper-base', name: 'Local Whisper', local: { binary, model } })
-    await expect.poll(async () => {
-      const view = await invokeCmd<{ active: { speech: string | null } }>(page, 'models_list')
-      return view.active.speech
-    }, { timeout: 60_000 }).toBeTruthy()
-
     const mediaId = await invokeCmd<string>(page, 'import_media', { path: source })
     const project = await summary(page)
     const info = await page.evaluate(() => (window as any).api.mcp.getInfo())
@@ -61,7 +56,7 @@ test('local Whisper speech becomes editable captions in a real export', async ()
     await invokeCmd(page, 'project_save')
     const saved = await summary(page)
     expect(saved.tracks.flatMap(track => track.layers).some(layer => layer.params.kind === 'Text')).toBe(true)
-    const output = path.join(repoRoot, '.scratch/sclip-v1-completion/local-speech-captions.mp4')
+    const output = process.env.SCLIP_TEST_SPEECH_OUTPUT ?? path.join(repoRoot, '.scratch/sclip-v1-completion/local-speech-captions.mp4')
     fs.mkdirSync(path.dirname(output), { recursive: true })
     await page.evaluate(request => (window as any).__sclipExportRange(request), {
       projectId: project.project_id, outputPath: output, startUs: 0, endUs: 10_000_000,

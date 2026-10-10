@@ -540,7 +540,7 @@ describe('Legacy MCP handler fixture audit', () => {
     }, {}))
     // New evidence/transaction handlers have focused real-transport and
     // state tests; this older fixture intentionally lacks their prerequisites.
-    const focused = new Set(['apply_repair_transaction','ripple_cut_range','get_editorial_evidence_packet',
+    const focused = new Set(['creator_style_memory','apply_repair_transaction','ripple_cut_range','get_editorial_evidence_packet',
       'get_source_observations','get_source_speech_context','get_source_understanding',
       'inspect_rendered_audio','inspect_timeline_range_visuals','inspect_timeline_temporal_window','record_issue','withdraw_issue'])
     expect(unaudited.filter(name => !focused.has(name))).toEqual([])
