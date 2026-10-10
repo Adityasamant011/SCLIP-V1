@@ -153,6 +153,7 @@ describe('Legacy MCP handler fixture audit', () => {
       actor,
       mcpCall: (name: string, argsJson: string) => actor.mcpCall(name, argsJson),
       hybridDeps,
+      mcpHybridDeps: hybridDeps,
       motifTool: motifTool as any,
       agent: agentSession as any,
     } as unknown as TsActorHost
