@@ -18,7 +18,13 @@ should go.
 2. Call `checkpoint` before your first edit, so the user has a one-step
    restore point.
 3. A small change (a handful of tool calls) needs no more ceremony than that:
-   edit, verify, report.
+   edit, verify, report. When you change a nonempty video, call
+   `end_agent_session` before reporting completion, even without a batch session.
+   If it returns `review_required`, the session remains open: inspect the actual
+   current rendered result, judge the supplied fallible findings, and use the
+   existing revision lifecycle to repair/verify or justify no repair. Then end
+   again. Report `review_unavailable_reason` if inspection cannot finish; never
+   present an unreviewed result as verified. No repair quota.
 4. A batch job (rough-cutting a video, a pause pass, building a caption
    track) uses a work session: ASK whether to begin the batch and enter the
    lightweight agent view unless already authorized, then call

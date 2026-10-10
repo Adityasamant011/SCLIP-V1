@@ -132,3 +132,15 @@ describe('Phase 2E session guard', () => {
     expect(guard.status.phase).toBe('done')
   })
 })
+
+it('completion cannot certify an unavailable or geometry-only rendered observation',()=>{
+ const g=new RevisionLoopGuard(true)
+ g.recordEvidence('get_timeline_critique','timeline',[0,1000],'state',['timeline'])
+ g.recordEvidence('inspect_timeline_range_visuals','timeline',[0,1000],'state',['visual','geometry'],undefined,{visual:[],geometry:[[0,0]]})
+ expect(g.hasCurrentRenderedEvidence('state')).toBe(false)
+ g.recordEvidence('inspect_rendered_audio','timeline',[0,1000],'state',[])
+ expect(g.hasCurrentRenderedEvidence('state')).toBe(false)
+ g.recordEvidence('vision_inspect','timeline',[500,500],'state',['visual'])
+ expect(g.hasCurrentRenderedEvidence('state')).toBe(true)
+ expect(g.hasCurrentRenderedEvidence('changed')).toBe(false)
+})

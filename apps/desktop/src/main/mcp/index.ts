@@ -1,3 +1,5 @@
+import { currentCritique } from '../sclip/reviewer/currentCritique.js'
+import { completionDisposition, type CompletionReview } from '../sclip/completionReview.js'
 import {evidenceCoverage} from '../sclip/evidenceModalities.js'
 import { buildEditorialEvidencePacket } from '../sclip/editorialEvidencePacket.js'
 import { reviewState } from '../sclip/evidenceCoordinates.js'
@@ -39,6 +41,7 @@ export async function startMcpHost(backend: Backend, opts: McpHostOptions = {}):
   const servers = new Set<Server>()
   const reviews = new Map<string, { projectId: string; guard: RevisionLoopGuard }>()
   const connections = new Map<string, AgentConnection>()
+  const completionReviews = new Map<string, CompletionReview>()
   let available = true
   const log = opts.log ?? NO_MCP_LOG
 
@@ -107,7 +110,7 @@ export async function startMcpHost(backend: Backend, opts: McpHostOptions = {}):
     if (!snap || snap.project_id!==req.body?.project_id) {res.status(409).json({error:'Evidence requires current project'});return}
     const maps=await sourceMaps(snap,true)
     if(reviewState(snap)!==reviewState(opts.getTsHost?.()?.actor.snapshot())){res.status(409).json({error:'Project changed during source evidence acquisition; reacquire'});return}
-    res.json(buildEditorialEvidencePacket(snap,{transcriptsDir:req.body?.transcripts_dir},undefined,maps))
+    res.json({...buildEditorialEvidencePacket(snap,{transcriptsDir:req.body?.transcripts_dir},undefined,maps), background_review:{...currentCritique(snap,opts.getReviewerSummary),review_disposition:completionDisposition(snap,completionReviews)}})
   })
   appExpress.post('/mcp/reviews', async (req, res) => {
     const projectId = req.body?.project_id
@@ -125,7 +128,7 @@ export async function startMcpHost(backend: Backend, opts: McpHostOptions = {}):
     if(reviewState(snap)!==reviewState(opts.getTsHost?.()?.actor.snapshot())) {reviews.delete(id);res.status(409).json({error:'Project changed during source evidence acquisition; reacquire'});return}
     const packet=buildEditorialEvidencePacket(snap,{transcriptsDir:req.body?.transcripts_dir},undefined,maps)
     const receipt=guard.recordEvidence('get_editorial_evidence_packet','timeline',[0,snap.compositions[snap.root_id].duration_us],reviewState(snap),packet.observed_dimensions,'p0',evidenceCoverage('get_editorial_evidence_packet',packet,[0,snap.compositions[snap.root_id].duration_us]))
-    res.json({ editorial_evidence_packet:{...packet,evidence_receipt:receipt}, review_id: id, url: `http://127.0.0.1:${port}/mcp?review_session=${id}`, review_session: guard.status })
+    res.json({ editorial_evidence_packet:{...packet,background_review:{...currentCritique(snap,opts.getReviewerSummary),review_disposition:completionDisposition(snap,completionReviews)},evidence_receipt:receipt}, review_id: id, url: `http://127.0.0.1:${port}/mcp?review_session=${id}`, review_session: guard.status })
   })
 
   appExpress.all('/mcp', async (req, res) => {
@@ -193,7 +196,7 @@ export async function startMcpHost(backend: Backend, opts: McpHostOptions = {}):
       const reviewId = typeof req.query.review_session === 'string' ? req.query.review_session : undefined
       const review = reviewId ? reviews.get(reviewId) : undefined
       if (reviewId && !review) { res.status(404).json({ error: 'Unknown review session' }); return }
-      newServer = buildMcpServer(backend, { ...opts, connectionId, ...(review ? { revisionGuard: review.guard, reviewProjectId: review.projectId } : {}) })
+      newServer = buildMcpServer(backend, { ...opts, completionReviews, connectionId, ...(review ? { revisionGuard: review.guard, reviewProjectId: review.projectId } : {}) })
       servers.add(newServer)
       // `getClientVersion()` is populated while the `initialize` REQUEST is
       // handled, which precedes the `notifications/initialized` that fires this

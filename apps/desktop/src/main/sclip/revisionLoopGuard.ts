@@ -230,6 +230,12 @@ export class RevisionLoopGuard {
     return { ...observable, state_version: createHash('sha256').update(state).digest('hex'), freshness: 'current_at_acquisition' }
   }
 
+  hasCurrentRenderedEvidence(state: string): boolean {
+    return [...this.evidence.values()].some(r => r.state === state && r.coordinate_space === 'timeline' &&
+      ['vision_inspect', 'inspect_timeline_frame', 'inspect_timeline_range_visuals', 'inspect_timeline_temporal_window', 'inspect_rendered_audio', 'render_timeline_range'].includes(r.tool) &&
+      r.modalities.some(d => ['visual', 'audio', 'speech'].includes(d) && r.coverage[d]?.length))
+  }
+
   private currentReceipts(ids: unknown, state: string, range?: [number, number]) {
     if (!Array.isArray(ids) || !ids.length || ids.some(id => typeof id !== 'string')) reject('INVALID_ISSUE', 'Supply evidence_receipt_ids: ["e1"] using observed receipt IDs, not evidence_id inside a nested issue.', ['evidence_receipt_ids'])
     const receipts = (ids as string[]).map(id => this.evidence.get(id))

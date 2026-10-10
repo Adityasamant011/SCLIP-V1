@@ -77,7 +77,8 @@ describe('BackgroundReviewer Audit', () => {
     expect(summary.status).toBe('has_issues')
     expect(summary.critical_count).toBe(1)
     expect(summary.issues[0].category).toBe('caption_placement')
-    expect(summary.issues[0].description).toContain('sits at Y=1500')
+    expect(summary.issues[0].description).toContain('estimated Y=1500')
+    expect(summary.issues[0].description).toContain('actual rendered bounds are uninspected')
   })
 
   it('flags overlapping motifs with same vertical alignment', async () => {

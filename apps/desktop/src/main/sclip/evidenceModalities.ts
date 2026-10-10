@@ -7,7 +7,7 @@ export function evidenceDimensions(value: unknown): EvidenceDimension[] {
 }
 export function toolDimensions(tool: string, data: any = {}): EvidenceDimension[] {
   if (tool === 'inspect_rendered_audio') return data.observed_dimensions ?? []
-  if (tool === 'inspect_timeline_range_visuals' || tool === 'inspect_timeline_temporal_window') return ['visual', 'geometry']
+  if (tool === 'inspect_timeline_range_visuals' || tool === 'inspect_timeline_temporal_window') return Array.isArray(data.frame_observations) && !data.frame_observations.some((f:any)=>f.inference_ok) ? ['geometry'] : ['visual', 'geometry']
   if (['vision_inspect','inspect_timeline_frame'].includes(tool)) return data.composed_frame_facts ? ['visual','geometry'] : ['visual']
   if (tool === 'render_timeline_range') return ['visual', 'audio']
   if (tool === 'get_editorial_evidence_packet') return data.observed_dimensions ?? ['timeline', 'text']
@@ -30,6 +30,6 @@ export function evidenceCoverage(tool:string,data:any,range:[number,number]): Pa
     speech:(data.speech??[]).filter((s:any)=>s.kind==='Audio'&&s.word_timing_available).map((s:any)=>s.selected_timeline_range_us),
     visual:(data.visuals?.frame_observations??[]).filter((f:any)=>f.inference_ok).map((f:any)=>[f.timeline_t_us,f.timeline_t_us]),
   }
-  if(tool==='inspect_timeline_range_visuals'||tool==='inspect_timeline_temporal_window')return {visual:(data.representative_samples??[]).map((f:any)=>[f.timeline_t_us,f.timeline_t_us]),geometry:(data.representative_samples??[]).map((f:any)=>[f.timeline_t_us,f.timeline_t_us])}
+  if(tool==='inspect_timeline_range_visuals'||tool==='inspect_timeline_temporal_window')return {visual:(data.representative_samples??[]).filter((f:any)=>!Array.isArray(data.frame_observations)||data.frame_observations.some((o:any)=>o.timeline_t_us===f.timeline_t_us&&o.inference_ok)).map((f:any)=>[f.timeline_t_us,f.timeline_t_us]),geometry:(data.representative_samples??[]).map((f:any)=>[f.timeline_t_us,f.timeline_t_us])}
   return Object.fromEntries(toolDimensions(tool,data).map(d=>[d,[range]]))
 }

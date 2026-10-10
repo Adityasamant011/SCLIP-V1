@@ -1,3 +1,5 @@
+import { completionReview, completionDisposition, outputState, hasAuthoredOutput, type CompletionReview } from '../sclip/completionReview.js'
+import { currentCritique } from '../sclip/reviewer/currentCritique.js'
 import { inspectRenderedAudio, decodeRenderedPcm } from '../sclip/renderedAudioEvidence'
 import { inspectTimelineTemporalWindow } from '../sclip/timelineTemporalEvidence'
 import { beginModelUse } from "../model-usage";
@@ -427,17 +429,9 @@ export async function handleCallTool(
   // cached catalog. Short temporary QA rendering remains available below.
   if (name === 'export_timeline') return revisionToolError('Final export is user-only. Use the Sclip Export UI; render_timeline_range remains available for temporary QA.')
   if (name === 'get_timeline_critique') {
-    const summary = getReviewerSummary ? getReviewerSummary() : {
-      commit_id: '',
-      status: 'clean',
-      updated_at: Date.now(),
-      total_issues: 0,
-      critical_count: 0,
-      warning_count: 0,
-      suggestion_count: 0,
-      issues: [],
-    }
-    return { content: [{ type: 'text', text: JSON.stringify({ ...summary, coordinate_space: 'timeline', evidence_origin: 'CURRENT_TIMELINE', availability: getReviewerSummary ? 'available' : 'not_generated', scope: 'Technical/structural diagnostics and available fallible observations only; no editorial readiness verdict. clean does not establish story, pacing, natural speech or visual progression.' }, null, 2) }] } as ServerResult
+    const snap = getTsHost()?.actor.snapshot()
+    if (!snap) return revisionToolError('Current project required for critique')
+    return { content: [{ type: 'text', text: JSON.stringify(currentCritique(snap, getReviewerSummary)) }] } as ServerResult
   }
   if (name === 'get_source_understanding' || name === 'get_source_speech_context') {
     try {
@@ -474,18 +468,6 @@ export async function handleCallTool(
         if (typeof args.reason !== 'string') throw new Error('reason must be a string')
         result = tsHost.agent.begin(args.reason)
       } else if (name === 'end_agent_session') {
-        if (getReviewerSummary) {
-          const summary = getReviewerSummary()
-          if (summary && summary.critical_count > 0 && args.force !== true) {
-            const issuesText = summary.issues
-              .filter((i) => i.severity === 'critical')
-              .map((i) => `- [${i.category}] at ${(i.t_us / 1e6).toFixed(1)}s: ${i.description} -> Suggested action: ${i.suggested_action}`)
-              .join('\n')
-            throw new Error(
-              `Background AI Reviewer detected ${summary.critical_count} critical issue(s) that should be resolved before ending session:\n${issuesText}\n\nFix these issues or call end_agent_session with force: true if intentionally keeping this state.`,
-            )
-          }
-        }
         tsHost.agent.end('agent')
       } else if (name === 'lock_history') {
         if (typeof args.reason !== 'string') throw new Error('reason must be a string')
@@ -550,7 +532,7 @@ export async function handleCallTool(
       const sourceMaps=[]
       if(sourceObservationIndex) for(const media of Object.values(snapshot.media_pool).slice(0,1)) {try{sourceMaps.push(await sourceObservationIndex.cachedUnderstanding(media))}catch{}}
       const packet = buildEditorialEvidencePacket(snapshot, { compositionId:args.composition_id as string | undefined, transcriptsDir:args.transcripts_dir as string | undefined, range:args.start_us!==undefined||args.end_us!==undefined ? {start_us:Number(args.start_us??0),end_us:Number(args.end_us??tsHost.actor.snapshot().compositions[String(args.composition_id??tsHost.actor.snapshot().root_id)].duration_us)} : undefined }, undefined, {sources:sourceMaps,source_limit:1,sources_total:Object.keys(snapshot.media_pool).length})
-      return { content:[{type:'text',text:JSON.stringify(packet)}] } as ServerResult
+      return { content:[{type:'text',text:JSON.stringify({...packet,background_review:currentCritique(snapshot,getReviewerSummary)})}] } as ServerResult
     }
     if (name === 'get_timeline_context') {
       const snap = tsHost.actor.snapshot()
@@ -1257,6 +1239,9 @@ export interface McpServerOptions {
   /** Shared across connections of one deliberately started autonomous review. */
   revisionGuard?: RevisionLoopGuard
   reviewProjectId?: string
+  /** Shared normal-completion lifecycle; explicit review uses its existing guard. */
+  completionReviews?: Map<string, CompletionReview>
+  reviewAtCompletion?: (signal?: AbortSignal) => Promise<import('../sclip/reviewer/reviewerTypes.js').TimelineReviewSummary>
   /** Real-time summary from background audio/visual reviewer. */
   getReviewerSummary?: (immediate?: boolean) => import('../sclip/reviewer/reviewerTypes.js').TimelineReviewSummary
   sourceObservationIndex?: SourceObservationIndex
@@ -1303,7 +1288,12 @@ export async function registeredMcpTools(backend: Backend, opts: McpServerOption
 }
 
 export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): Server {
-  const revisionGuard = opts.revisionGuard ?? new RevisionLoopGuard(opts.revisionLoop === true)
+  let revisionGuard = opts.revisionGuard ?? new RevisionLoopGuard(opts.revisionLoop === true)
+  const completionSessions = opts.completionReviews ?? new Map<string, CompletionReview>()
+  const ordinaryCompletion = !opts.revisionGuard && opts.revisionLoop !== true
+  if (ordinaryCompletion && opts.getTsHost?.()) {
+    revisionGuard = completionReview(opts.getTsHost()!.actor.snapshot(), completionSessions).guard
+  }
   const getTsHost = opts.getTsHost ?? (() => null)
   // A disconnected/stopping old Hermes connection must not read a newly bound creator.
   const initialProjectId = getTsHost()?.actor.snapshot().project_id
@@ -1349,6 +1339,49 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
     try {
       const name = req.params.name
       const args = (req.params.arguments ?? {}) as Record<string, unknown>
+      const snapshot = getTsHost()?.actor.snapshot()
+      if (initialProjectId && snapshot?.project_id !== initialProjectId) return revisionToolError('Project changed; reconnect for current project evidence.')
+      const completion = ordinaryCompletion && snapshot ? completionReview(snapshot, completionSessions) : undefined
+      if (completion) revisionGuard = completion.guard
+      const restartCompletion = name === 'begin_agent_session' && completion && (revisionGuard.status.phase === 'done' || completion.limitation)
+      if (name === 'end_agent_session' && snapshot && completion) {
+        const state = reviewState(snapshot)
+        if (completion.started && completion.reviewedState && completion.reviewedState !== state) return revisionToolError('Timeline changed after completion review. Start a deliberate current-state review; no success is recorded.')
+        if (!completion.started && revisionGuard.status.phase === 'done' && revisionGuard.hasCurrentRenderedEvidence(state)) { completion.started = true; completion.reviewedState = state }
+        if (!completion.started && completion.baseline !== outputState(snapshot) && hasAuthoredOutput(snapshot)) {
+          if (revisionGuard.status.phase === 'idle') revisionGuard.begin()
+          completion.started = true
+          let completionSummary: import('../sclip/reviewer/reviewerTypes.js').TimelineReviewSummary | undefined
+          try { completionSummary = await opts.reviewAtCompletion?.((extra as { signal?: AbortSignal }).signal) } catch { /* Unavailable is reported by currentCritique, not certified clean. */ }
+          if (state !== reviewState(getTsHost()?.actor.snapshot())) return revisionToolError('Timeline changed during completion review. Reacquire current evidence before deciding.')
+          const packet = buildEditorialEvidencePacket(snapshot)
+          const range: [number, number] = [0, snapshot.compositions[snapshot.root_id].duration_us]
+          const receipt = revisionGuard.recordEvidence('get_editorial_evidence_packet', 'timeline', range, state, packet.observed_dimensions, undefined, evidenceCoverage('get_editorial_evidence_packet', packet, range))
+          emitReviewState(name)
+          return { content: [{ type: 'text', text: JSON.stringify({ completion: 'review_required',
+            editorial_evidence_packet: packet, background_review: currentCritique(snapshot, completionSummary ? () => completionSummary! : opts.getReviewerSummary), evidence_receipt: receipt,
+            review_session: revisionGuard.status,
+            instruction: 'Session remains open. Inspect actual current rendered output using relevant senses. Judge these potential findings for the brief. Choose a justified issue/repair or no repair. Use existing revision_control, then call end_agent_session again. If inspection is unavailable, report review_unavailable_reason; that records an unreviewed limitation, never success.' }) }] } as ServerResult
+        }
+        if (completion.started && revisionGuard.status.phase !== 'done') {
+          if (typeof args.review_unavailable_reason === 'string' && args.review_unavailable_reason.trim()) {
+            const limitation = args.review_unavailable_reason.trim().slice(0, 1000)
+            getTsHost()?.agent?.end('agent')
+            completion.limitation = limitation
+            emitReviewState(name)
+            return { content: [{ type: 'text', text: JSON.stringify({ completion: 'unreviewed', limitation: completion.limitation, review_session: revisionGuard.status }) }] } as ServerResult
+          }
+          return revisionToolError('Completion review is pending. Inspect relevant current rendered evidence, decide/repair/verify, and conclude with revision_control. force does not bypass review. Report review_unavailable_reason if inspection cannot finish.')
+        }
+        if (completion.started) {
+          getTsHost()?.agent?.end('agent')
+          completion.baseline = outputState(snapshot)
+          return { content: [{ type: 'text', text: JSON.stringify({ completion: 'reviewed', review_session: revisionGuard.status }) }] } as ServerResult
+        }
+      }
+      if (name === 'end_agent_session' && !completion?.started && !['idle', 'done'].includes(revisionGuard.status.phase)) {
+        return revisionToolError('The active explicit review is unfinished. Finish/verify or report an unresolved review before closing.')
+      }
       if (name === 'creator_style_memory') {
         const projectId = getTsHost()?.actor.snapshot().project_id
         if (!projectId || !opts.creatorStyleStore) throw new Error('Creator memory unavailable in this environment')
@@ -1383,6 +1416,9 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
         return { content: [{ type: 'text', text: JSON.stringify(result) }] } as ServerResult
       }
       if (name === 'revision_control') {
+        if (completion?.started && ['complete', 'conclude_no_repair', 'finalize'].includes(String(args.action)) && !revisionGuard.hasCurrentRenderedEvidence(reviewState(snapshot))) {
+          return revisionToolError('Completion requires current rendered evidence, not layout/state alone. Inspect the actual result; if unavailable, report review_unavailable_reason at end_agent_session without claiming success.')
+        }
         let status: ReturnType<RevisionLoopGuard['begin']>
         switch (args.action) {
           case 'begin': status = revisionGuard.status.phase === 'idle' ? revisionGuard.begin() : revisionGuard.status; break
@@ -1398,6 +1434,10 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
         }
         const auditDir = process.env.SCLIP_REVIEW_EVIDENCE_DIR
         if (auditDir) { try { fs.mkdirSync(auditDir, { recursive: true }); fs.writeFileSync(path.join(auditDir, `${Date.now()}-${randomUUID()}.json`), JSON.stringify({ tool: name, args, review_session: status })) } catch {} }
+        if (completion?.started && status.phase === 'done') {
+          completion.reviewedState = reviewState(getTsHost()?.actor.snapshot())
+          completion.decision = { action:String(args.action), ...(typeof args.reason === 'string' ? {reason:args.reason.slice(0,1000)} : {}) }
+        }
         emitReviewState(name)
         return { content: [{ type: 'text', text: JSON.stringify(status) }] } as ServerResult
       }
@@ -1419,6 +1459,17 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
       const auditBefore = mutation ? getTsHost()?.actor.snapshot() : undefined
       const before = mutation ? reviewState(getTsHost()?.actor.snapshot()) : null
       const result = await handleCallTool(backend, getTsHost, name, args, getPreferredEngine, getVlm, peaksPathFor, opts.getActiveWindow, opts.getReviewerSummary, opts.sourceObservationIndex, opts.externalMediaService, externalEnabled, (extra as {signal?:AbortSignal}).signal)
+      if (restartCompletion && completion && !('isError' in result && result.isError)) {
+        completion.baseline = outputState(getTsHost()!.actor.snapshot())
+        completion.guard = revisionGuard = new RevisionLoopGuard()
+        completion.started = false
+        delete completion.reviewedState
+        delete completion.limitation
+        delete completion.decision
+      }
+      if (['get_timeline_critique','get_editorial_evidence_packet'].includes(name) && getTsHost()) {
+        (result as any).content.push({type:'text',text:JSON.stringify({review_disposition:completionDisposition(getTsHost()!.actor.snapshot(),completionSessions)})})
+      }
       if (mutation && before !== reviewState(getTsHost()?.actor.snapshot())) {
         const auditDir = process.env.SCLIP_MCP_AUDIT_DIR
         if (auditDir && auditBefore) {
@@ -1465,6 +1516,7 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
         const auditDir = process.env.SCLIP_REVIEW_EVIDENCE_DIR
         if (auditDir) { try { fs.mkdirSync(auditDir, { recursive: true }); fs.writeFileSync(path.join(auditDir, `${Date.now()}-${randomUUID()}.json`), JSON.stringify({ tool: name, review, review_session: revisionGuard.status })) } catch {} }
       }
+      if (completion?.started && revisionGuard.status.phase === 'done' && !completion.reviewedState) completion.reviewedState = reviewState(getTsHost()?.actor.snapshot())
       if (revisionGuard.status.phase !== 'idle' && Array.isArray((result as any).content)) {
         emitReviewState(name)
         ;(result as any).content.push({ type: 'text', text: `Revision execution state: ${JSON.stringify(revisionGuard.status)}` })

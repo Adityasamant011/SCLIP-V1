@@ -122,9 +122,12 @@ export class BackgroundReviewer {
   }
 
   /** Full optional pass is a completion/explicit-review request, never per mutation. */
-  public async runReview(): Promise<TimelineReviewSummary> {
+  public async runReview(signal?: AbortSignal): Promise<TimelineReviewSummary> {
+    if (signal?.aborted) return { ...this.getSummary(), optional_observations: 'canceled' }
     const work = this.performReview()
     const controller = this.controller
+    const cancel = () => controller?.abort()
+    signal?.addEventListener('abort', cancel, { once: true })
     let timer: NodeJS.Timeout | undefined
     let onAbort: (() => void) | undefined
     try {
@@ -138,6 +141,7 @@ export class BackgroundReviewer {
         }, this.authorization.deadlineMs ?? 30_000)
       })])
     } finally {
+      signal?.removeEventListener('abort', cancel)
       if (timer) clearTimeout(timer)
       if (onAbort) controller?.signal.removeEventListener('abort', onAbort)
     }
@@ -192,7 +196,7 @@ export class BackgroundReviewer {
       }
     }
 
-    // Audit Captions (Detect off-screen text & typography taste)
+    // Estimate caption geometry; rendering and editorial judgment remain separate.
     function extractNumeric(val: unknown): number | null {
       if (typeof val === 'number' && !Number.isNaN(val)) return val
       if (val && typeof val === 'object') {
@@ -203,7 +207,7 @@ export class BackgroundReviewer {
       return null
     }
 
-    // Audit Captions (Detect off-screen text & typography taste)
+    // Estimate caption geometry; rendering and editorial judgment remain separate.
     for (const text of textLayers) {
       const p = text.params as any
       const transform = (text as any).transform ?? p?.transform
@@ -223,13 +227,13 @@ export class BackgroundReviewer {
               t_us: text.t_start_us,
               affected_range_us: [text.t_start_us, text.t_end_us],
               layer_id: text.id,
-              description: `Caption '${p.content?.slice(0, 30) ?? p.text?.slice(0, 30) ?? ''}' sits at Y=${posY}, rendering it below the bottom edge of the ${compW}x${compH} frame.`,
+              description: `Caption '${p.content?.slice(0, 30) ?? p.text?.slice(0, 30) ?? ''}' has estimated Y=${posY}, possibly below the bottom edge of the ${compW}x${compH} frame; actual rendered bounds are uninspected.`,
               suggested_action: `Inspect the actual caption bounds; Hermes chooses whether placement is appropriate and any repair.`,
             })
           }
         }
       }
-      // Taste & Readability Check
+      // Font-size estimate, never a required typography treatment.
       const rawFontSize = p.font?.size_px ?? p.font_size_px ?? p.font_size ?? p.fontSize ?? 48
       const fontSize = extractNumeric(rawFontSize) ?? 48
       if (compW === 1080 && compH === 1920 && fontSize < 36) {
@@ -275,7 +279,7 @@ export class BackgroundReviewer {
       }
     }
 
-    // Audit Video Screen Coverage (Prevent partial screen, corner floating, and black pillarboxes)
+    // Estimate screen coverage; margins or inset video may be intentional.
     for (const vc of videoLayers) {
       const p = vc.params as any
       const media = (project.media_pool?.[p.media] ?? (comp as any)?.media_pool?.[p.media]) as any
@@ -290,8 +294,7 @@ export class BackgroundReviewer {
         const displayW = mediaWidth * scaleX
         const displayH = mediaHeight * scaleY
 
-        // Full screen rule: Video must cover the full composition canvas (both width and height)
-        // unless the user explicitly requested an inset or picture-in-picture layout.
+        // Coverage measurement is advisory; incomplete coverage can be intentional.
         const widthCoverage = displayW / compW
         const heightCoverage = displayH / compH
 
@@ -303,7 +306,7 @@ export class BackgroundReviewer {
             t_us: vc.t_start_us,
             affected_range_us: [vc.t_start_us, vc.t_end_us],
             layer_id: vc.id,
-            description: `Video clip (${mediaWidth}x${mediaHeight} at ${scaleX.toFixed(2)}x) does not fill the screen under a static scale estimate (only ${(widthCoverage * 100).toFixed(0)}% width, ${(heightCoverage * 100).toFixed(0)}% height of ${compW}x${compH}), leaving black bars or floating in a corner.`,
+            description: `Video clip (${mediaWidth}x${mediaHeight} at ${scaleX.toFixed(2)}x) does not fill the screen under a static scale estimate (only ${(widthCoverage * 100).toFixed(0)}% width, ${(heightCoverage * 100).toFixed(0)}% height of ${compW}x${compH}); actual rendered framing is uninspected.`,
             suggested_action: `Inspect actual rendered frames. Insets, letterboxing and other layouts can be intentional; Hermes chooses any transform or no change.`,
           })
         }
@@ -355,6 +358,7 @@ export class BackgroundReviewer {
       const rendered = await this.rangeRenderer(project, {
         start_us: reviewStartUs,
         end_us: reviewEndUs,
+        signal: this.controller?.signal,
       })
 
       if (this.destroyed || this.controller?.signal.aborted || this.inFlightCommitId !== commitId) return

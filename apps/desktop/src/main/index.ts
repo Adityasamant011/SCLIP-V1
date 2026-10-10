@@ -1001,10 +1001,12 @@ app.whenReady().then(async () => {
   const { startMcpHost } = await import('./mcp/index.js')
   const { handleReadResource } = await import('./mcp/server.js')
   const sourceBackend = backend
-  const jevDecide = createJevClient(() => {
+  const { backgroundJevAuthorized } = await import('./sclip/reviewer/backgroundAuthorization.js')
+  const jevCredential = () => {
     const keys = loadAllKeys()
     return resolveHermesProviderEnvironment({ provider: 'openrouter', model: JEV_MODEL, maxIterations: 60 }, tag => keys[tag], app.isPackaged ? {} : process.env).OPENROUTER_API_KEY
-  }, fetch, receipt => emitLogEntry({ level: 'debug', category: { kind: 'Mcp' }, source: { kind: 'System' },
+  }
+  const jevDecide = createJevClient(jevCredential, fetch, receipt => emitLogEntry({ level: 'debug', category: { kind: 'Mcp' }, source: { kind: 'System' },
     message: 'Jev inference usage', details: { provider: 'openrouter', ...receipt } }))
   const evaluateSourcePassages = createSourcePassageEvaluator(async id => {
     if (!tsHost?.actor.snapshot().media_pool[id]) throw new Error('Imported source media not found.')
@@ -1016,6 +1018,7 @@ app.whenReady().then(async () => {
   }, jevDecide)
   const jevEnabled = process.env.SCLIP_JEV_ENABLED === '1'
   const { BackgroundReviewer } = await import('./sclip/reviewer/backgroundReviewer.js')
+  const { renderComposedTimelineRange } = await import('./sclip/rangeRender.js')
   const { getVisionSidecar } = await import('./sclip/visionSidecar.js')
   const { SourceObservationIndex } = await import('./sclip/sourceObservationIndex.js')
   const sourceObservationIndex = process.platform === 'darwin' && process.arch === 'arm64'
@@ -1038,17 +1041,22 @@ app.whenReady().then(async () => {
     tsHost,
     process.platform === 'darwin' && process.arch === 'arm64' ? getVisionSidecar() : undefined,
     undefined, // debounceMs — use default 1500ms
-    undefined, // rangeRenderer — use default
+    (project, range) => renderComposedTimelineRange(project, { ...range, getActiveWindow: () => mainWindow && !mainWindow.isDestroyed() ? mainWindow : null }),
     undefined, // frameExtractor — use default
-    jevDecide, // narrative coherence guard (gracefully degraded if offline)
+    jevDecide,
+    { jev: () => backgroundJevAuthorized(process.env, jevCredential),
+      localPerception: () => process.env.SCLIP_BACKGROUND_PERCEPTION_AUTHORIZED === '1' },
   )
+
+  app.once('before-quit', () => backgroundReviewer.dispose())
 
   const mcpHost = await startMcpHost(backend, {
     getTsHost: () => tsHost,
     getActiveWindow: () => mainWindow && !mainWindow.isDestroyed() ? mainWindow : null,
     getPreferredEngine,
     getVlm,
-    getReviewerSummary: (immediate?: boolean) => (immediate ? backgroundReviewer.auditSynchronous() : backgroundReviewer.getSummary()),
+    getReviewerSummary: () => backgroundReviewer.getSummary(),
+    reviewAtCompletion: signal => backgroundReviewer.runReview(signal),
     sourceObservationIndex,
     creatorStyleStore: creatorStyleStore ?? undefined,
     // Optional helper, no new profile/settings store or model fallback.
