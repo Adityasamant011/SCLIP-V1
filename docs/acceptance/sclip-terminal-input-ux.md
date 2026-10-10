@@ -23,3 +23,9 @@ The Electron test requires the installed Hermes source/runtime and explicitly sk
 Installation receipts and checksums: `.scratch/terminal-input-ux/` (local, ignored). The prior app is backed up; existing profile data and Hermes launcher are preserved.
 
 Provider cost: **$0.00**.
+
+## Installed bundle
+
+Installed fix commit: `3f290599`. All 61 compiled assets, 14 external CLI/skill files, and three vision workers match the tested production build. Signature verification passes. All 27,089 protected profile files and the native Hermes launcher remained unchanged. Backup: `/Users/adityasamant/SCLIP V1/backups/installed-apps/Sclip-backup-20261010-221841.app`.
+
+The additional installed-bundle automation check was **inconclusive**: Playwright connected to the packaged process and reported backend initialization, but its launch handshake stalled. Only that disposable offline process was terminated. Two native computer-use observation attempts also timed out. The normal app was requested to reopen, but its visible launch could not be confirmed. These automation failures are not counted as passing installed UI verification; the production-build Electron input regression above did pass.
