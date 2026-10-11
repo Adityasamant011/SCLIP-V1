@@ -393,7 +393,15 @@ External B-roll remains disabled. No helper chooses a visual treatment for you.
 `render_timeline_range` (default resource ceiling 120s, configurable up to 300s)
 for coherent review; use localized ranges when adequate. For actual resulting
 speech and audio, `inspect_rendered_audio` measures the rendered mix and returns
-local Whisper transcript/word timing or explicit unavailable evidence. Quiet
+local Whisper transcript/word timing or explicit unavailable evidence. When audio
+character matters, optionally set `include_understanding: true` for a range of at
+most 30 seconds. SenseVoiceSmall INT8 runs locally on CPU in 10-second windows;
+`get_audio_understanding_status` checks installation without loading it. Keep
+individual language/emotion/event observations, including contradictory or unknown
+labels. They are coarse model observations, not proof of confident delivery,
+whisperiness, pleasantness, word boundaries or editorial readiness. Missing/busy
+models are explicit; no cloud fallback. Choose whether this evidence is useful;
+do not repeatedly request identical analysis or mistake recognition for listening. Quiet
 spans are signal thresholds, not bad pauses. Recognition is fallible; these facts
 do not mean you personally listened. `inspect_timeline_temporal_window` exposes
 chronological composed samples with independent local vision observations,
