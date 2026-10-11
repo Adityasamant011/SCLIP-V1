@@ -75,3 +75,20 @@ Local test artifacts: `.scratch/audio-understanding/{focused.log,typecheck.log,
 electron-result.json,electron-trace.json,native-benchmark.json,native-resources.log,
 setup-result.json,build-production.log,package.log,installed-audio-result.json}`.
 Provider cost: **$0.00**. No allowances/settings/credentials changed.
+
+### Completed installation evidence
+
+`/Applications/Sclip.app` production launch **PASS**. Live catalog: 118 tools;
+new status tool ready, schema discoverable, actual two-window rendered-mix
+SenseVoice and Whisper observations available. Project identity unchanged after
+inspection. Existing compositor/frame/font-fallback checks also passed. The
+launch used a disposable profile and fake Hermes launcher; no editorial model
+request occurred. It confirmed mechanical integration, not Hermes's future
+choice to use the sense or improved taste judgments.
+
+Installer compared 62 compiled files, 14 CLI/skill files and 3 vision workers;
+ad-hoc signature verification PASS; 27,146 protected profile files unchanged.
+Backup: `/Users/adityasamant/SCLIP V1/backups/installed-apps/Sclip-backup-20261011-142348.app`.
+Implementation commit `e159cdfe`; Hermes skill guidance commit `f298e6c1`.
+The build manifest is refreshed to the final tested checkout identity; report-only
+changes do not require recompiling unchanged assets.
