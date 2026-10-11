@@ -1,5 +1,5 @@
 import { textLayoutBox, textHorizontalBounds } from '../textLayoutFacts.js'
-import { timelineCoverage } from '../audioAudibility.js'
+import { timelineCoverage, audioAudibility } from '../audioAudibility.js'
 import { fontAvailability } from '../../fonts/resolveSystemFont.js'
 import { createHash } from 'node:crypto'
 import { reviewState } from '../evidenceCoordinates.js'
@@ -105,10 +105,10 @@ export class BackgroundReviewer {
       warning_count: unique.filter(i => i.severity === 'warning').length,
       suggestion_count: unique.filter(i => i.severity === 'suggestion').length,
       readiness: 'not_certified',
-      coverage: deep ? 'Authorized optional observations where available; partial, not comprehensive' : 'Deterministic layout estimates only; rendered audio, meaning, story and export uninspected',
+      coverage: deep ? 'Authorized optional observations where available; partial, not comprehensive. Vocal delivery quality unassessed.' : 'Deterministic layout estimates only; rendered audio, vocal delivery, meaning, story and export uninspected',
       issues: unique.map(i => ({ ...i, coordinate_space: 'timeline', ...identity,
-        evidence_class: /^(speech_chop|pop_|silence_|beat_|energy_|visual_mismatch|broken_thought|narrative_whiplash)/.test(i.id) ? 'MODEL_OBSERVATION' : 'DETERMINISTIC_MEASUREMENT',
-        evidence_basis: /^(broken_thought|narrative_whiplash)/.test(i.id) ? 'Legacy inline VIDEO source transcript windows mapped to the cut; not proof of the audible mixed speech. Normal cached transcript availability is separate.' : /^(speech_chop|pop_|silence_|beat_|energy_|visual_mismatch)/.test(i.id) ? 'Optional bounded rendered-range sidecar observation; partial coverage and fallible interpretation.' : 'Authoritative layer/media metadata, deterministic layout estimate; not rendered pixels.',
+        evidence_class: /^(visual_mismatch|broken_thought|narrative_whiplash)/.test(i.id) ? 'MODEL_OBSERVATION' : 'DETERMINISTIC_MEASUREMENT',
+        evidence_basis: /^(broken_thought|narrative_whiplash)/.test(i.id) ? 'Legacy inline VIDEO source transcript windows mapped to the cut; not proof of the audible mixed speech. Normal cached transcript availability is separate.' : /^(speech_chop|pop_|silence_|beat_|energy_)/.test(i.id) ? 'Optional bounded rendered-range waveform/spectral measurements, estimated beats or provided source word timings; not a semantic delivery judgment.' : /^visual_mismatch/.test(i.id) ? 'Optional cross-modal perception observation; partial coverage and fallible interpretation.' : 'Authoritative layer/media metadata, deterministic layout estimate; not rendered pixels.',
         requires_inspection: true, uncertainty: 'Potential concern; Hermes must inspect relevant rendered evidence and decide whether intentional or actionable.' })),
     }
     return this.currentSummary
@@ -366,10 +366,12 @@ export class BackgroundReviewer {
       cutTimestampsUs.push(sortedClips[i].t_end_us)
     }
 
-    // Collect transcript word boundaries from project media pool / layers
+    const selectedAudio = new Set(audioAudibility(project, comp.id).layers.filter(l => l.selected_by_mix_gates && !l.instance_path).map(l => l.layer_id))
+    // Provided source timing is only supporting evidence, never proof that a
+    // visual cut chopped an independently continuous voiceover.
     const wordBoundaries: Array<{ word: string; t_start_us: number; t_end_us: number }> = []
     for (const track of comp.tracks) for (const layer of track.layers) {
-      if (!track.enabled || !layer.enabled || layer.params.kind !== 'Audio') continue
+      if (!track.enabled || !layer.enabled || layer.params.kind !== 'Audio' || !selectedAudio.has(layer.id)) continue
       const p = layer.params, trans = (project.media_pool[p.media] as any)?.transcript
       if (!Array.isArray(trans?.segments)) continue
       for (const seg of trans.segments) for (const w of seg.words ?? []) {
@@ -379,7 +381,8 @@ export class BackgroundReviewer {
       }
     }
 
-    if (cutTimestampsUs.length === 0) return
+    // Word timing is evaluated only at an actual audible Audio boundary.
+    const audioEdges = new Set(comp.tracks.flatMap(t => t.layers.filter(l => selectedAudio.has(l.id)).flatMap(l => [l.t_start_us, l.t_end_us])))
 
     // Render a representative 15-second range around the first major cuts
     const reviewStartUs = Math.max(0, cutTimestampsUs[0] - 2_000_000)
@@ -398,7 +401,7 @@ export class BackgroundReviewer {
         const audioAnalysis = await this.visionSidecar.analyzeAudio({
           audioPath: rendered.path,
           cutTimestampsUs: cutTimestampsUs.filter(t => t >= reviewStartUs && t < reviewEndUs).map(t => t - reviewStartUs),
-          wordBoundaries: wordBoundaries.filter(w => w.t_end_us > reviewStartUs && w.t_start_us < reviewEndUs).map(w => ({ ...w, t_start_us: w.t_start_us - reviewStartUs, t_end_us: w.t_end_us - reviewStartUs })),
+          wordBoundaries: wordBoundaries.filter(w => [...audioEdges].some(t => cutTimestampsUs.includes(t) && t > w.t_start_us && t < w.t_end_us) && w.t_end_us > reviewStartUs && w.t_start_us < reviewEndUs).map(w => ({ ...w, t_start_us: w.t_start_us - reviewStartUs, t_end_us: w.t_end_us - reviewStartUs })),
         })
 
         if (audioAnalysis.ok) {
@@ -440,7 +443,7 @@ export class BackgroundReviewer {
                 category: 'pacing',
                 t_us: reviewStartUs + sil.start_us,
                 affected_range_us: [reviewStartUs + sil.start_us, reviewStartUs + sil.end_us],
-                description: `Detected ${sil.duration_s}s of dead air/silence at ${(sil.start_us / 1e6).toFixed(1)}s.`,
+                description: `Measured ${sil.duration_s}s of low signal energy at ${(sil.start_us / 1e6).toFixed(1)}s.`,
                 suggested_action: `Inspect the audible pause in context; Hermes decides whether it is useful or needs repair.`,
               })
             }
@@ -461,7 +464,7 @@ export class BackgroundReviewer {
           }
 
           // ── Cross-Modal 1: Audio Energy vs Visual Action Mismatch ─────────
-          if (Array.isArray(anyAnalysis.crowd_cheers) && anyAnalysis.crowd_cheers.length > 0 && typeof this.visionSidecar.inspectSequence === 'function') {
+          if (anyAnalysis.semantic_inferences === true && Array.isArray(anyAnalysis.crowd_cheers) && anyAnalysis.crowd_cheers.length > 0 && typeof this.visionSidecar.inspectSequence === 'function') {
             for (const cheer of anyAnalysis.crowd_cheers) {
               const relSec = Math.max(0, cheer.start_us / 1e6)
               const tmp1 = path.join(os.tmpdir(), `av_sync_1_${Date.now()}.jpg`)

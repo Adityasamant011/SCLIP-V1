@@ -15,7 +15,8 @@ import { createSourcePassageEvaluator, type Transcript } from './sclip/sourcePas
 import { redactHermesSecrets } from './sclip/hermesSecrets.js'
 import { CreatorStyleStore } from './sclip/creatorStyle.js'
 import { rememberCreatorReference } from './sclip/creatorReference.js'
-import { synthesizeSpeechLocally } from './sclip/localTts.js'
+import { createToolFailureRecovery } from './sclip/toolFailureRecovery.js'
+import { synthesizeSpeechLocally, listLocalSpeechVoices } from './sclip/localTts.js'
 import electronUpdater from 'electron-updater'
 import { createUpdates } from './updates.js'
 import { trashRecentProject } from './projectTrash.js'
@@ -780,22 +781,15 @@ app.whenReady().then(async () => {
     hashMediaSource: (p: string) => backend!.hashMediaSource(p),
     parseSubtitles: (body: string, format: string | null) => backend!.parseSubtitles(body, format),
     synthesizeSpeechCompute: async (argsJson: string) => {
-      try {
-        return await backend!.synthesizeSpeechCompute(argsJson)
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err)
-        console.log(`[synthesizeSpeechCompute] Cloud synthesizer unavailable (${msg}), falling back to local TTS engine`)
-        const args = JSON.parse(argsJson) as { text: string; voice?: string; speed?: number }
-        const { filePath, cached } = await synthesizeSpeechLocally(args, dataRoot.cacheDir)
-        const probedStr = await backend!.probeMedia(filePath)
-        const mediaItem = JSON.parse(probedStr)
-        const duration_us = mediaItem.metadata?.duration_us ?? 0
-        return JSON.stringify({
-          media_item: mediaItem,
-          duration_us,
-          cached,
-        })
+      const args = JSON.parse(argsJson) as import('./sclip/localTts.js').LocalTtsArgs
+      // Cloud TTS is explicit, never an accidental paid first attempt.
+      if (args.engine === 'openai') {
+        const result = JSON.parse(await backend!.synthesizeSpeechCompute(argsJson))
+        return JSON.stringify({...result, synthesis: {engine: 'openai-tts', requested_voice: args.voice, resolved_voice: args.voice, model: 'tts-1', speed: args.speed ?? 1}})
       }
+      const {filePath, cached, synthesis} = await synthesizeSpeechLocally(args, dataRoot.cacheDir)
+      const mediaItem = JSON.parse(await backend!.probeMedia(filePath))
+      return JSON.stringify({media_item: mediaItem, duration_us: mediaItem.metadata?.duration_us ?? 0, cached, synthesis})
     },
 
     reduceShotReport: (reportJson: string, sensitivity: number, minShotUs: number, inUs: number, outUs: number) =>
@@ -1051,6 +1045,8 @@ app.whenReady().then(async () => {
   app.once('before-quit', () => backgroundReviewer.dispose())
 
   const mcpHost = await startMcpHost(backend, {
+    listSpeechVoices: listLocalSpeechVoices,
+    triageToolFailure: createToolFailureRecovery(jevDecide, () => process.env.SCLIP_FAILURE_JEV_AUTHORIZED === '1' && !!jevCredential()),
     getTsHost: () => tsHost,
     getActiveWindow: () => mainWindow && !mainWindow.isDestroyed() ? mainWindow : null,
     getPreferredEngine,

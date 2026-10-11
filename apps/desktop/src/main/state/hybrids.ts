@@ -1082,40 +1082,33 @@ export async function runHybrid(tool: string, args: Record<string, unknown>, dep
       return applyTranscriptsHybrid(args, deps)
     }
     case 'synthesize_speech': {
-      // The TS host applies the WRITES: add_media_item + enqueueDerivatives +
-      // resolve track + add Audio layer (voiceover role, single commit).
-      const { media_item, duration_us, cached } = JSON.parse(
-        await deps.compute.synthesizeSpeechCompute(JSON.stringify(args)),
-      ) as { media_item: { id: string }; duration_us: number; cached: boolean }
-
-      const addR = deps.actor.dispatch('add_media_item', { media: media_item })
-      if (!addR.ok) throw new Error(JSON.stringify(addR.error))
-
-      await deps.enqueueDerivatives([media_item])
-
+      if (args.engine !== undefined && !['kokoro','auto','openai'].includes(String(args.engine))) throw new Error('Invalid engine; choose kokoro, auto or openai.')
+      if (args.preview_only !== undefined && typeof args.preview_only !== 'boolean') throw new Error('preview_only must be boolean')
+      // Validate obvious placement mistakes before expensive synthesis.
+      const startingProjectId = deps.actor.snapshot().project_id
+      const requestedTrack = args.target_track_id as string | undefined
+      if (requestedTrack && !Object.values(deps.actor.snapshot().compositions).some(c => c.tracks.some(t => t.id === requestedTrack)))
+        throw new Error('TrackNotFound: target_track_id must name a current track. Read the current timeline IDs before retrying.')
+      const computed = JSON.parse(await deps.compute.synthesizeSpeechCompute(JSON.stringify(args))) as {
+        media_item: MediaItem; duration_us: number; cached: boolean; synthesis?: unknown
+      }
+      const {media_item, duration_us, cached, synthesis} = computed
+      if (deps.actor.snapshot().project_id !== startingProjectId) throw new Error('SPEECH_PROJECT_CHANGED: project changed during synthesis; cached audio preserved, no project writes committed.')
+      if (!Number.isSafeInteger(duration_us) || duration_us <= 0) throw new Error('Synthesis returned no valid audio duration; no project mutation committed.')
+      if (args.preview_only === true) return JSON.stringify({file_path: media_item.path_abs, duration_us, cached, synthesis, placed: false})
       const tStart = (args.t_start_us as number | undefined) ?? deps.snapshotComposition().duration_us
       const tEnd = tStart + duration_us
-
-      const trackId = (args.target_track_id as string | undefined) ?? ensureAudioTrack(deps)
-
-      // ONE add_layer carrying role:'voiceover' — the 'audio' arm accepts the
-      // optional `role` override (actor.ts), so no separate update_layer_params
-      // commit and the whole synthesis is a single history entry.
-      const layerR = deps.actor.dispatch('add_layer', {
-        kind: 'audio',
-        track: trackId,
-        media: media_item.id,
-        src_in_us: 0,
-        src_out_us: duration_us,
-        role: 'voiceover',
-        t_start_us: tStart,
-        t_end_us: tEnd,
-      })
-      if (!layerR.ok) throw new Error(JSON.stringify(layerR.error))
-      const layerId = layerR.value as string
-
-      // Return a JSON STRING, never the object — runHybrid's result contract.
-      return JSON.stringify({ layer_id: layerId, media_id: media_item.id, t_start_us: tStart, t_end_us: tEnd, cached })
+      const trackId = requestedTrack ?? ensureAudioTrack(deps)
+      const placed = deps.actor.dispatch('place_synthesized_speech', {media: media_item, track: trackId, duration_us, t_start_us: tStart, t_end_us: tEnd})
+      if (!placed.ok) throw new Error(JSON.stringify({code: 'SPEECH_PLACEMENT_REJECTED', error: placed.error,
+        project_changed: false, generated_audio: {file_path: media_item.path_abs, duration_us, cached, synthesis},
+        recovery: 'Audio is cached; choose a valid track/time and retry the same text/voice/speed. No pool import or layer was committed.'}))
+      const receipt = placed.value as {layer_id: string; media_id: string; imported: boolean}
+      // Jobs are derived work. A job enqueue failure must not misreport a
+      // successful authoritative placement as a failed editing command.
+      let derivativeStatus = 'queued'
+      try { if (receipt.imported) await deps.enqueueDerivatives([media_item]) } catch { derivativeStatus = 'enqueue_failed' }
+      return JSON.stringify({...receipt, t_start_us: tStart, t_end_us: tEnd, cached, synthesis, derivative_status: derivativeStatus, placed: true})
     }
     case 'auto_split_by_shot': {
       // Convenience composite (reproducible with analyze_clip + split_layer):

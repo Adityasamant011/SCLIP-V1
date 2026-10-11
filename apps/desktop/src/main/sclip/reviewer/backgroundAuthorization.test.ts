@@ -6,7 +6,7 @@ import { currentCritique } from './currentCritique'
 function fixture() {
   let listener = () => {}
   const unsubscribe = vi.fn()
-  const project: any = { project_id:'offline',root_id:'root',settings:{},media_pool:{ m:{id:'m',metadata:{duration_us:10000000,video:{width:10,height:10}},transcript:{segments:[{words:[{text:'context',t_start_us:0,t_end_us:100000}]}]}} },compositions:{root:{id:'root',width:100,height:100,duration_us:2000000,tracks:[{id:'t',role:'ARoll',enabled:true,layers:[0,1].map(n=>({id:`l${n}`,enabled:true,t_start_us:n*1000000,t_end_us:(n+1)*1000000,params:{kind:'VideoClip',media:'m',src_in_us:0,src_out_us:1000000}}))}]}} }
+  const project: any = { audio_roles:{},project_id:'offline',root_id:'root',settings:{},media_pool:{ m:{id:'m',metadata:{duration_us:10000000,video:{width:10,height:10}},transcript:{segments:[{words:[{text:'context',t_start_us:0,t_end_us:100000}]}]}} },compositions:{root:{id:'root',width:100,height:100,duration_us:2000000,tracks:[{id:'t',role:'ARoll',enabled:true,layers:[0,1].map(n=>({id:`l${n}`,enabled:true,t_start_us:n*1000000,t_end_us:(n+1)*1000000,params:{kind:'VideoClip',media:'m',src_in_us:0,src_out_us:1000000}}))}]}} }
   return { project, unsubscribe, notify:()=>listener(), host:{actor:{snapshot:()=>project,subscribe:(l:()=>void)=>{listener=l;return unsubscribe}}} as any }
 }
 describe('Background authorization and freshness',()=>{

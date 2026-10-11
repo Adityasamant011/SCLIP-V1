@@ -1213,6 +1213,8 @@ export function mcpCommitObserver(getTsHost: () => TsActorHost | null): (tool: s
  *  positionals: `log` is the fourth and every one of them is optional, and each
  *  omitted seam must keep the behaviour it had before it existed. */
 export interface McpServerOptions {
+  listSpeechVoices?: () => Promise<unknown>
+  triageToolFailure?: (name: string, args: Record<string, unknown>, result: ServerResult, state: string) => Promise<unknown>
   creatorStyleStore?: CreatorStyleStore
   connectionId?: string
   getTsHost?: () => TsActorHost | null
@@ -1253,6 +1255,17 @@ export interface McpServerOptions {
   enableExternalMedia?: boolean
 }
 
+export const SPEECH_VOICES_TOOL = {name: 'list_speech_voices', description: 'List actual locally installed Kokoro voice IDs and legacy aliases. No audio generation, model provider request, editing or delivery-quality judgment. Use explicit IDs to avoid an unexpected alias; Hermes/user chooses the delivery.', inputSchema: {type: 'object', properties: {}, additionalProperties: false}} as const
+export function speechToolCatalog(tool: CatalogTool): CatalogTool {
+  if (tool.name !== 'synthesize_speech') return tool
+  const schema = tool.inputSchema as any
+  return {...tool, description: 'Generate speech with local Kokoro by default. engine=kokoro is strict; engine=auto explicitly permits Edge/macOS substitutes; engine=openai explicitly requests configured paid OpenAI TTS. list_speech_voices lists installed IDs/aliases. Preview_only generates cached audio without timeline/pool changes. Otherwise place on YOUR target_track_id/time (omitted track is the last existing track; time appends). Placement is atomic: failure leaves no imported pool item/layer, generated audio remains cached. Returns actual engine/voice/model provenance and duration. Voice style is a creative choice, not guaranteed by gain or a voice name.', inputSchema: {...schema, properties: {...schema.properties,
+    voice: {type: 'string', description: 'Explicit installed Kokoro ID or reported alias. Unknown local voices reject, never silently substitute. For OpenAI use its supported voice IDs.'},
+    engine: {type: 'string', enum: ['kokoro','auto','openai'], description: 'Default kokoro: local only. auto permits free network Edge/OS fallback. openai is an explicit cloud request.'},
+    preview_only: {type: 'boolean', description: 'Generate a local preview/cache asset only; no pool or timeline writes.'},
+  }}}
+}
+
 /** The same merged catalog advertised to Hermes by tools/list. */
 export async function registeredMcpTools(backend: Backend, opts: McpServerOptions = {}): Promise<CatalogTool[]> {
   const rust = (JSON.parse(await backend.mcpCatalog()) as { tools: Array<{ name: string }> }).tools
@@ -1270,6 +1283,7 @@ export async function registeredMcpTools(backend: Backend, opts: McpServerOption
   const all = mergeMcpCatalog(rust, [
     ...MCP_TOOL_DEFS,
     ...MOTIF_TOOL_DEFS,
+    ...(opts.listSpeechVoices ? [SPEECH_VOICES_TOOL] : []),
     CREATOR_STYLE_TOOL,
     EDITORIAL_PACKET_TOOL,
     REVISION_CONTROL_TOOL,
@@ -1285,7 +1299,7 @@ export async function registeredMcpTools(backend: Backend, opts: McpServerOption
     ...externalTools,
     ...(opts.sourceObservationIndex ? [GET_SOURCE_OBSERVATIONS_TOOL,...SOURCE_UNDERSTANDING_TOOLS] : []),
     ...(opts.evaluateSourcePassages ? [SOURCE_PASSAGE_TOOL] : []),
-  ]).filter(t => t.name !== 'export_timeline')
+  ]).filter(t => t.name !== 'export_timeline').map(speechToolCatalog)
   return opts.toolFilter ? all.filter(t => opts.toolFilter!(t.name)) : all
 }
 
@@ -1447,7 +1461,9 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
         const refusal = revisionGuard.beforeInspection(name, args)
         if (refusal) return { isError: true, content: [{ type: 'text', text: JSON.stringify({ error: refusal, review_session: revisionGuard.status }) }] } as ServerResult
       }
-      const mutation = isRevisionMutation(name)
+      // A speech audition creates a cache asset, not a project mutation. It
+      // must remain available while Hermes is considering/verifying a repair.
+      const mutation = isRevisionMutation(name) && !(name === 'synthesize_speech' && args.preview_only === true)
       if (mutation) {
         const refusal = revisionGuard.beforeMutation(reviewState(getTsHost()?.actor.snapshot()))
         if (refusal) return { isError: true, content: [{ type: 'text', text: JSON.stringify({ error: refusal, review_session: revisionGuard.status }) }] } as ServerResult
@@ -1456,6 +1472,11 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
         const review = typeof args.review === 'string' ? JSON.parse(args.review) : args.review
         const refusal = revisionGuard.validateEvidence(review, reviewState(getTsHost()?.actor.snapshot()))
         if (refusal) return { content: [{ type: 'text', text: JSON.stringify({ valid: false, code: 'INVALID_REVIEW_RECORD', errors: [refusal], correction: 'Use record_issue with flat description, severity, repairable, evidence_receipt_ids and affected_range_us or layer_ids; do not build nested inspections.', review_session: revisionGuard.status }) }] } as ServerResult
+      }
+      if (name === 'list_speech_voices') {
+        if (Object.keys(args).length) return revisionToolError('list_speech_voices accepts no arguments')
+        if (!opts.listSpeechVoices) return revisionToolError('Local voice catalog unavailable')
+        return {content: [{type: 'text', text: JSON.stringify(await opts.listSpeechVoices())}]} as ServerResult
       }
       const evidenceState = reviewState(getTsHost()?.actor.snapshot())
       const auditBefore = mutation ? getTsHost()?.actor.snapshot() : undefined
@@ -1523,9 +1544,22 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
         emitReviewState(name)
         ;(result as any).content.push({ type: 'text', text: `Revision execution state: ${JSON.stringify(revisionGuard.status)}` })
       }
+      if ('isError' in result && result.isError && opts.triageToolFailure) {
+        try {
+          const triage = await opts.triageToolFailure(name, args, result, reviewState(getTsHost()?.actor.snapshot()))
+          ;(result as any).content.push({type: 'text', text: JSON.stringify({failure_recovery: triage})})
+        } catch { /* Auxiliary recovery must never replace the original error. */ }
+      }
       return result
     } catch (e) {
-      return { isError: true, content: [{ type: 'text', text: e instanceof ReviewProtocolError ? JSON.stringify({ ...e.details, review_session: revisionGuard.status }) : e instanceof EvidenceCoordinateError ? e.message : `Tool '${req.params.name}' error: ${e instanceof Error ? e.message : String(e)}` }] } as unknown as ServerResult
+      const failed = { isError: true, content: [{ type: 'text', text: e instanceof ReviewProtocolError ? JSON.stringify({ ...e.details, review_session: revisionGuard.status }) : e instanceof EvidenceCoordinateError ? e.message : `Tool '${req.params.name}' error: ${e instanceof Error ? e.message : String(e)}` }] } as unknown as ServerResult
+      if (opts.triageToolFailure) {
+        try {
+          const triage = await opts.triageToolFailure(req.params.name, req.params.arguments ?? {}, failed, reviewState(getTsHost()?.actor.snapshot()))
+          ;(failed as any).content.push({type: 'text', text: JSON.stringify({failure_recovery: triage})})
+        } catch { /* Auxiliary recovery must never replace the original error. */ }
+      }
+      return failed
     }
   }, log, clientInfo))
   server.setRequestHandler(ListResourcesRequestSchema, track('resources/list', async () => {

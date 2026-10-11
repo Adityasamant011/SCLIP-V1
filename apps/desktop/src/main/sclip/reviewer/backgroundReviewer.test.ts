@@ -23,6 +23,7 @@ function makeMockProject(overrides?: any): any {
   rootComp.tracks.push({id:'synthetic-backdrop',enabled:true,layers:[{id:'synthetic-background',enabled:true,t_start_us:0,t_end_us:rootComp.duration_us,params:{kind:'Color',width:rootComp.width,height:rootComp.height}}]})
   return {
     project_id: 'test-proj',
+    audio_roles: {},
     root_id: 'root-comp-id',
     active_composition_id: 'root-comp-id',
     compositions: { 'root-comp-id': rootComp },
@@ -335,9 +336,10 @@ describe('BackgroundReviewer Audit', () => {
     expect(summary.issues.some((i) => i.category === 'audio_cutoff' && i.severity === 'critical')).toBe(true)
     expect(summary.issues.some((i) => i.id.startsWith('pop_'))).toBe(true)
     expect(summary.issues.some((i) => i.id === 'beat_misaligned')).toBe(true)
+    expect(summary.issues.filter(i => /^(speech_chop|pop_|beat_)/.test(i.id)).every(i => i.evidence_class === 'DETERMINISTIC_MEASUREMENT')).toBe(true)
   })
 
-  it('detects cross-modal energy mismatch when audio roar meets static visuals', async () => {
+  it('does not infer a crowd/visual mismatch from spectral energy', async () => {
     const proj = makeMockProject({
       tracks: [
         {
@@ -388,10 +390,10 @@ describe('BackgroundReviewer Audit', () => {
     const reviewer = new BackgroundReviewer(mockHost, mockVisionSidecar, 50, mockRangeRenderer, mockFrameExtractor, undefined, { localPerception: () => true })
     const summary = await reviewer.runReview()
 
-    expect(summary.issues.some((i) => i.category === 'energy_mismatch')).toBe(true)
+    // Spectral energy is not proof of a stadium crowd or an editorial mismatch.
+    expect(summary.issues.some((i) => i.category === 'energy_mismatch')).toBe(false)
     const mismatch = summary.issues.find((i) => i.category === 'energy_mismatch')
-    expect(mismatch?.description).toContain('Stadium crowd roar detected')
-    expect(mismatch?.suggested_action).toContain('intentional')
+    expect(mismatch).toBeUndefined()
   })
 })
 

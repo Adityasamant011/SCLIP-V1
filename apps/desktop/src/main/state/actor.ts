@@ -809,6 +809,22 @@ export function createActor(opts: ActorOptions): ActorHandle {
   function dispatch(channel: string, a: Record<string, unknown>): DispatchResult {
     try {
       switch (channel) {
+        // One draft and one publication: failed placement cannot leave an
+        // orphan pool import. The caller chooses the track, time and audio.
+        case 'place_synthesized_speech': {
+          const item = a.media as MediaItem
+          const existing = Object.values(current().media_pool).find(m => m.path_abs === item.path_abs && m.file_size === item.file_size && m.file_hash_blake3 === item.file_hash_blake3)
+          const mediaId = existing?.id ?? item.id
+          const result = commit(HISTORY_SUMMARY.layerAdd, (r: {layer_id: Uuid}) => layerRef(r.layer_id), {kind: 'Coarse'}, draft => {
+            if (!existing) draft.media_pool[item.id] = item
+            const trackId = a.track as Uuid
+            const layerId = applyAddLayer(draft, idGen, trackId,
+              {...audioParams(mediaId, 0, parseNum(a.duration_us, 'duration_us')), role: 'voiceover'},
+              parseNum(a.t_start_us, 't_start_us'), parseNum(a.t_end_us, 't_end_us'))
+            return {layer_id: layerId, media_id: mediaId, imported: !existing}
+          })
+          return {ok: true, value: result}
+        }
         case 'add_layer': {
           const kind = a.kind as string
           let params: LayerParams

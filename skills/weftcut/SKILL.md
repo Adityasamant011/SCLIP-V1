@@ -293,14 +293,21 @@ Tool choices below are options, not stages or creative recipes:
   `revision_control` protocol is not a mandatory general editing workflow.
 - `remove_pauses`, `detect_pauses`, `synthesize_speech` and the normal Hermes
   tools remain available when they serve your chosen strategy.
-- Speech synthesis (Voiceover TTS): `synthesize_speech` generates voiceover audio
-  and places it directly on an Audio track with role='voiceover'. It supports cloud
-  OpenAI TTS and automatically falls back to local high-quality TTS (edge-tts / macOS say)
-  with zero API keys required. Pass text, optional `voice` (e.g. 'alloy', 'echo',
-  'fable', 'onyx', 'nova', 'shimmer'), and optional `speed`. ALWAYS call
-  `synthesize_speech` to create an actual voiceover audio track when the user asks
-  for their own script or review audio — never leave the timeline silent with only
-  text captions when voiceover is requested.
+- Speech synthesis: `synthesize_speech` defaults to local Kokoro; `engine="kokoro"`
+  never silently uses a cloud/OS voice. Cloud OpenAI synthesis is an explicit
+  `engine="openai"` choice. `list_speech_voices` reports installed IDs and aliases;
+  choose the voice/delivery to fit the creator's request. Legacy `nova` maps to
+  `af_nicole`, not to an OpenAI voice. Voice names and gain do not prove delivery
+  quality. Use `preview_only=true` for a cached local sample without timeline
+  writes when a delivery choice is uncertain. Report the actual engine and voice.
+  For a requested strong/assertive delivery, assess whether the selected voice
+  fits; do not assume a soft voice becomes assertive merely by raising gain.
+  Placement accepts your target track/time and is atomic; on rejection the audio
+  is cached but no layer/pool import commits. Read the recovery receipt and fix
+  the placement rather than rewriting/regenerating the script unnecessarily.
+  Rendered audio measurements/Whisper can establish audibility, levels and words;
+  they cannot establish confidence, emotion, whisperiness or performance quality.
+  Never claim to have heard delivery without actual audio perception.
 - Creator Footage & Visual Sourcing:
   - Check creator/user footage first: always inspect local project media (`get_source_observations`, transcripts, visual observations) to find relevant visual coverage, reaction shots, or cutaways.
   - Editorial purpose: visual cutaways must have an editorial reason (visual proof, cutaway, explanation, atmosphere). No B-roll is always a valid editorial decision when the primary footage is compelling.
@@ -411,3 +418,17 @@ endless polish and no forced change. A grounded no-repair conclusion is valid.
 - If a complete repair requires several changes, choose every operation/parameter yourself and use the existing atomic transaction where supported. For independent changes use only operations advertised by the current catalog; never invent a batch wrapper. Avoid repeated trial positioning; calculate the authored geometry, then verify actual pixels. Transactions never infer partner edits.
 - Review the actual ending, speech boundaries and layer coverage, including composition duration beyond visual content. Never assume technical validity proves an intentional ending.
 - A clean background status is not editorial certification. A completed current-state review requires relevant fresh evidence and `end_agent_session`. If a tool/provider fails or you cannot finish verification, report the edit as incomplete/unverified rather than ready. Do not claim success from a failed inspection.
+
+### Efficient technical recovery
+
+Reuse known schemas and current IDs. Read structured failure recovery before retrying;
+an unchanged request on unchanged state will fail again. Technical errors do not
+authorize creative values or partner edits. Optional Jev failure triage provides a
+read-only technical score, not a replacement command/editor. Hermes still chooses
+whether and how to retry, use another approach, ask the user or stop.
+For web research, extract relevant bounded text and source links instead of reading
+entire HTML documents into context. Inspect evidence to answer a specific unresolved
+question; do not repeatedly rediscover unchanged schemas or observations.
+A normal duration request may allow roughly five seconds of variation; an explicit
+exact duration, upper limit or platform constraint takes priority. Decide fit from
+the current brief; do not compromise phrase completeness to chase a vague target.

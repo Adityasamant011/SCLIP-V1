@@ -23,7 +23,7 @@ function fixture() {
 }
 describe('actual rendered audio facts, never editorial judgments',()=>{
  it('exposes timeline transcript/words, measurable quiet and signal facts via explicit local Whisper slice',async()=>{
-  const f=fixture(),r=await f.run();expect(r.transcript.status).toBe('available');expect(r.transcript.segments[0].words[0].t_start_us).toBe(4000000)
+  const f=fixture(),r=await f.run();expect(r.delivery_assessment.status).toBe('not_assessed');expect(r.transcript.status).toBe('available');expect(r.transcript.segments[0].words[0].t_start_us).toBe(4000000)
   expect(r.signal!.silence_spans_us).toEqual([[5000000,6000000]]);expect(r.signal!.peak).toBeCloseTo(.2);expect(r.signal!.rms).toBeCloseTo(Math.sqrt(.02))
   const input=f.transcribe.mock.calls[0][0];expect(input.backend).toBe('whisper_cpp');expect(input.layer.params.src_in_us).toBe(0);expect(input.media.path_abs).toContain('render.mp4')
   expect(toolDimensions('inspect_rendered_audio',r)).toEqual(['audio','speech']);expect(f.project.media_pool).toEqual({});expect(f.paths.every(p=>!fs.existsSync(p))).toBe(true)

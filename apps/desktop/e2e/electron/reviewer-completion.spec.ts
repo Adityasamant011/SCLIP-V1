@@ -38,6 +38,8 @@ test('ordinary completion delivers critique, commits a chosen repair and require
   const pending=await call('end_agent_session')
   expect(pending.data.completion).toBe('review_required')
   expect(pending.data.background_review.issues.some((i:any)=>i.layer_id===id&&i.category==='visual_framing')).toBe(true)
+  // Preview capture mounts asynchronously after fonts/media initialization.
+  await page.waitForFunction(()=>typeof (window as any).__weftcutPreview?.captureFrameAt==='function')
   const before=await call('inspect_timeline_frame',{timeline_t_us:500000})
   fs.writeFileSync(path.join(out,'before.png'),Buffer.from(before.image,'base64'))
   const issue=await call('record_issue',{description:'Fake editor judges small image unsuitable for this synthetic request',severity:'moderate',repairable:true,evidence_dimensions:['visual'],evidence_receipt_ids:[before.receipt.id],layer_ids:[id]})

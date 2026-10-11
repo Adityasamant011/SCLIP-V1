@@ -145,7 +145,7 @@ def analyze_audio(
                         "start_us": int(round(crowd_start * 1e6)),
                         "end_us": int(round(t * 1e6)),
                         "duration_s": round(dur, 2),
-                        "type": "crowd_cheering_or_applause",
+                        "type": "high_spectral_flatness_and_energy",
                     })
                 crowd_start = None
 
@@ -184,6 +184,9 @@ def analyze_audio(
     has_clipping = clipping_count > 50
 
     return {
+        "measurement_basis": "RMS, spectral statistics, estimated beats and provided word timings; not a semantic emotion/crowd/voice model",
+        "semantic_inferences": False,
+        "vocal_delivery_assessed": False,
         "ok": True,
         "duration_s": round(duration_s, 2),
         "duration_us": duration_us,

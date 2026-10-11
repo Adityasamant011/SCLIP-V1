@@ -10,6 +10,7 @@
  *   - Process isolation and supervisor auto-restart
  */
 
+import { audioPerceptionFacts } from './audioPerceptionFacts.js'
 import { spawn, type ChildProcess } from 'child_process'
 import * as crypto from 'crypto'
 import * as fs from 'fs'
@@ -324,6 +325,11 @@ export class VisionSidecarManager {
       duration_s: number
     }>
     has_clipping?: boolean
+    audio_pops?: unknown[]
+    beat_sync_rate?: number
+    measurement_basis?: string
+    semantic_inferences?: false
+    vocal_delivery_assessed?: false
     error?: string
   }> {
     try {
@@ -336,16 +342,7 @@ export class VisionSidecarManager {
         word_boundaries: req.wordBoundaries,
       }
       const response = (await httpPost(url, payload)) as Record<string, unknown>
-      return {
-        ok: true,
-        duration_s: Number(response.duration_s ?? 0),
-        duration_us: Number(response.duration_us ?? 0),
-        tempo_bpm: Number(response.tempo_bpm ?? 0),
-        beats_us: Array.isArray(response.beats_us) ? (response.beats_us as number[]) : [],
-        speech_chops: Array.isArray(response.speech_chops) ? (response.speech_chops as any[]) : [],
-        awkward_silences: Array.isArray(response.awkward_silences) ? (response.awkward_silences as any[]) : [],
-        has_clipping: Boolean(response.has_clipping),
-      }
+      return audioPerceptionFacts(response)
     } catch (e) {
       const err = e instanceof Error ? e.message : String(e)
       console.error('[vision-sidecar] audio analyze failed:', err)

@@ -1,5 +1,26 @@
 # Audio
 
+## Local generated speech
+
+`synthesize_speech` uses local Kokoro by default. It returns the actual engine,
+resolved voice, model, language, speed and sample rate. `list_speech_voices`
+reports installed English voice IDs and legacy alias mappings; aliases are
+compatibility names, not delivery recommendations. Explicit unknown local
+voices reject rather than silently substituting a different voice.
+
+`preview_only: true` produces a cached audition without changing the media pool,
+timeline or review state. Normal placement imports the generated asset and adds
+the Audio layer in one ProjectActor commit. Failed placement publishes neither;
+the generated audio remains cached for a corrected request. No partner edits,
+lane moves, trims or voice choices are inferred. `engine: auto` explicitly
+permits Edge/macOS fallback; `engine: openai` explicitly requests configured
+cloud TTS. Kokoro does not silently attempt either route.
+
+Rendered-audio inspection measures signal and transcribes speech. Neither that
+tool nor spectrum-based background measurements certify confidence, emotional
+delivery or whether a voice fits the creator's request. Hermes/user chooses
+delivery; reviewer responses make this unassessed dimension explicit.
+
 One model, two paths. The project's audio model — per-layer trim,
 placement, `gain_db`, `pan`, fades, mute — is evaluated **once** into
 sampled envelopes, and two thin renderers consume the same control

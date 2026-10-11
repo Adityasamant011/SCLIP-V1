@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { createActor, type ActorHandle } from '../actor'
-import { seededGen } from '../ids'
+import { seededGen, uuidV7Gen } from '../ids'
 import { blankProject, type MediaItem } from '../model'
 import { audioParams, mediaItemTemplate, videoClipParams } from '../mutations/media'
 import { applyAddLayer } from '../mutations/add'
@@ -307,6 +307,39 @@ function fakeSpeechComputePayload(cached = false) {
 }
 
 describe('runHybrid: synthesize_speech (MCP hybrid)', () => {
+  it('occupied placement is atomic and corrected retry reuses cached media identity', async () => {
+    const actor=freshActor(),deps=makeDeps(actor),track=root(actor.snapshot()).tracks.at(-1)!.id
+    deps.compute.synthesizeSpeechCompute=vi.fn(async()=>fakeSpeechComputePayload(true))
+    await runHybrid('synthesize_speech',{text:'Synthetic',target_track_id:track,t_start_us:0},deps)
+    const before=actor.snapshot(),history=actor.historyStatus().len,payload=JSON.parse(fakeSpeechComputePayload(true))
+    payload.media_item.id='11111111-1111-4111-8111-111111111111'
+    deps.compute.synthesizeSpeechCompute=vi.fn(async()=>JSON.stringify(payload))
+    await expect(runHybrid('synthesize_speech',{text:'Synthetic',target_track_id:track,t_start_us:0},deps)).rejects.toThrow('SPEECH_PLACEMENT_REJECTED')
+    expect(actor.snapshot()).toBe(before);expect(actor.historyStatus().len).toBe(history)
+    const result=JSON.parse(await runHybrid('synthesize_speech',{text:'Synthetic',target_track_id:track,t_start_us:DURATION_US},deps) as string)
+    expect(result.media_id).toBe(AUDIO_MID);expect(Object.keys(actor.snapshot().media_pool)).toHaveLength(1)
+  })
+  it('does not place delayed speech into a newly opened project',async()=>{
+    const actor=freshActor(),deps=makeDeps(actor)
+    deps.compute.synthesizeSpeechCompute=vi.fn(async()=>{actor.replaceState(blankProject(uuidV7Gen(),'other synthetic project'));return fakeSpeechComputePayload()})
+    await expect(runHybrid('synthesize_speech',{text:'Synthetic'},deps)).rejects.toThrow('SPEECH_PROJECT_CHANGED')
+    expect(Object.keys(actor.snapshot().media_pool)).toHaveLength(0)
+  })
+  it('preview returns synthesis provenance without actor writes',async()=>{
+    const actor=freshActor(),deps=makeDeps(actor),before=actor.snapshot()
+    deps.compute.synthesizeSpeechCompute=vi.fn(async()=>JSON.stringify({...JSON.parse(fakeSpeechComputePayload()),synthesis:{engine:'kokoro-tts',resolved_voice:'af_heart'}}))
+    const result=JSON.parse(await runHybrid('synthesize_speech',{text:'Synthetic',preview_only:true},deps) as string)
+    expect(result.placed).toBe(false);expect(result.synthesis.resolved_voice).toBe('af_heart');expect(actor.snapshot()).toBe(before);expect(deps._enqueueDerivatives).not.toHaveBeenCalled()
+  })
+  it('rejects missing tracks before compute and reports derivative failure separately from committed placement',async()=>{
+    const actor=freshActor(),deps=makeDeps(actor)
+    deps.compute.synthesizeSpeechCompute=vi.fn(async()=>fakeSpeechComputePayload())
+    await expect(runHybrid('synthesize_speech',{text:'Synthetic',target_track_id:'missing'},deps)).rejects.toThrow('TrackNotFound')
+    expect(deps.compute.synthesizeSpeechCompute).not.toHaveBeenCalled()
+    deps._enqueueDerivatives.mockRejectedValue(Error('jobs offline'))
+    const result=JSON.parse(await runHybrid('synthesize_speech',{text:'Synthetic'},deps) as string)
+    expect(result.placed).toBe(true);expect(result.derivative_status).toBe('enqueue_failed')
+  })
   it('inserts the audio media item into the pool', async () => {
     const actor = freshActor()
     // Give the project an Audio track so ensureAudioTrack returns it.

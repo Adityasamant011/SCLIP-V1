@@ -20,6 +20,14 @@ vi.mock('../sclip/visionRuntime.js',()=>({getVisionRuntime:()=>({
   status:async()=>({ready:false,model:'offline-fixture'}),
 })}))
 
+// Also block direct sidecar access: a catalog fixture must remain independent
+// of a warm shared runtime or ordering with another test file.
+vi.mock('../sclip/visionSidecar.js',()=>({getVisionSidecar:()=>({
+  analyze:async()=>({ok:false,error:'Local perception deliberately unavailable in catalog fixture'}),
+  analyzeAudio:async()=>({ok:false,error:'Local audio deliberately unavailable in catalog fixture'}),
+  status:async()=>({running:false,modelLoaded:false}),clearCache:()=>{},dispose:async()=>{},
+})}))
+
 interface ToolAuditRecord {
   name: string
   purpose: string

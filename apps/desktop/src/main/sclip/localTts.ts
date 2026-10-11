@@ -4,222 +4,93 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 
-export interface LocalTtsArgs {
-  text: string
-  voice?: string
-  speed?: number
-}
-
-export interface LocalTtsResult {
-  filePath: string
-  cached: boolean
+export interface LocalTtsArgs { text: string; voice?: string; speed?: number; engine?: 'kokoro' | 'auto' | 'openai' }
+export interface SpeechProvenance {
   engine: 'kokoro-tts' | 'edge-tts' | 'macos-say'
+  requested_voice: string; resolved_voice: string; speed: number; model?: string; language?: string; sample_rate?: number
 }
-
-const EDGE_TTS_VOICES: Record<string, string> = {
-  alloy: 'en-US-JennyNeural',
-  echo: 'en-US-GuyNeural',
-  fable: 'en-US-ChristopherNeural',
-  onyx: 'en-US-BrianNeural',
-  nova: 'en-US-AriaNeural',
-  shimmer: 'en-US-AvaNeural',
-  default: 'en-US-ChristopherNeural',
+export interface LocalTtsResult { filePath: string; cached: boolean; engine: SpeechProvenance['engine']; synthesis: SpeechProvenance }
+export interface TtsRuntime {
+  python: string | null; worker: string | null; model: string; voices: string; edge: string | null
+  run(command: string, args: string[]): Promise<string>
 }
-
-const MACOS_SAY_VOICES: Record<string, string> = {
-  alloy: 'Samantha',
-  echo: 'Daniel',
-  fable: 'Alex',
-  onyx: 'Fred',
-  nova: 'Victoria',
-  shimmer: 'Karen',
-  default: 'Samantha',
-}
-
-function resolvePythonBin(): string | null {
-  const candidates = [
-    path.join(process.env.HOME ?? '', 'Library', 'Application Support', 'Sclip', 'vision-sidecar', 'venv', 'bin', 'python'),
-    path.join(process.env.HOME ?? '', 'Library', 'Application Support', 'Sclip', 'vision-sidecar', 'venv', 'bin', 'python3'),
-  ]
-  for (const c of candidates) {
-    if (fs.existsSync(c)) return c
-  }
-  return null
-}
-
-function resolveKokoroWorkerScript(): string | null {
-  const source = path.resolve(__dirname, '..', '..', 'vision', 'sidecar', 'kokoro_tts_worker.py')
-  const built = path.resolve(__dirname, '..', '..', 'src', 'vision', 'sidecar', 'kokoro_tts_worker.py')
-  const packaged = path.join(process.resourcesPath ?? '', 'vision', 'sidecar', 'kokoro_tts_worker.py')
-  const candidates = [source, built, packaged]
-  for (const c of candidates) {
-    if (fs.existsSync(c)) return c
-  }
-  return null
-}
-
-function resolveKokoroModelFiles(): { model: string; voices: string } {
-  const home = process.env.HOME ?? ''
-  const dir = path.join(home, 'Library', 'Application Support', 'Sclip', 'models', 'kokoro')
-  const modelCandidates = [
-    path.join(dir, 'kokoro-v1.0.int8.onnx'),
-    path.join(dir, 'kokoro-v1.0.onnx'),
-    path.join(dir, 'kokoro-v0_19.onnx'),
-  ]
-  const voicesCandidates = [
-    path.join(dir, 'voices-v1.0.bin'),
-    path.join(dir, 'voices.bin'),
-  ]
-
-  const model = modelCandidates.find((p) => fs.existsSync(p)) ?? path.join(dir, 'kokoro-v1.0.int8.onnx')
-  const voices = voicesCandidates.find((p) => fs.existsSync(p)) ?? path.join(dir, 'voices-v1.0.bin')
-
-  return { model, voices }
-}
-
-function resolveEdgeTtsBin(): string | null {
-  const candidates = [
-    '/opt/homebrew/bin/edge-tts',
-    '/usr/local/bin/edge-tts',
-    path.join(process.env.HOME ?? '', '.local', 'bin', 'edge-tts'),
-  ]
-  for (const c of candidates) {
-    if (fs.existsSync(c)) return c
-  }
-  return null
-}
-
-function runCommand(command: string, args: string[]): Promise<boolean> {
-  return new Promise((resolve) => {
-    const child = spawn(command, args, { stdio: 'ignore' })
-    child.on('exit', (code) => resolve(code === 0))
-    child.on('error', () => resolve(false))
+const EDGE: Record<string,string> = {alloy:'en-US-JennyNeural',echo:'en-US-GuyNeural',fable:'en-US-ChristopherNeural',onyx:'en-US-BrianNeural',nova:'en-US-AriaNeural',shimmer:'en-US-AvaNeural',default:'en-US-ChristopherNeural'}
+const SAY: Record<string,string> = {alloy:'Samantha',echo:'Daniel',fable:'Alex',onyx:'Fred',nova:'Victoria',shimmer:'Karen',default:'Samantha'}
+const first = (paths: string[]) => paths.find(p => fs.existsSync(p)) ?? null
+/** No shell; bounded diagnostics and runtime. Timeout/failure never publishes a cache hit. */
+export function runTtsCommand(command: string, args: string[], timeoutMs = 120_000): Promise<string> {
+  return new Promise((resolve,reject) => {
+    const child = spawn(command,args,{stdio:['ignore','pipe','pipe']})
+    let stdout='',stderr='',done=false
+    const finish = (error?: Error) => {if(done)return;done=true;clearTimeout(timer);error?reject(error):resolve(stdout)}
+    child.stdout.on('data',chunk => {stdout=(stdout+String(chunk)).slice(-16_384)})
+    child.stderr.on('data',chunk => {stderr=(stderr+String(chunk)).slice(-2048)})
+    const timer=setTimeout(() => {child.kill('SIGKILL');finish(new Error(`Local TTS process timed out after ${timeoutMs}ms`))},timeoutMs)
+    child.on('error',error => finish(error))
+    child.on('close',code => finish(code===0?undefined:new Error(`Local TTS process failed (${code}): ${stderr}`)))
   })
 }
-
-/**
- * Synthesizes speech locally.
- * Tier 1: Kokoro-82M ONNX (studio-quality natural American & British accents, ultra-compact 88MB).
- * Tier 2: Neural edge-tts if installed.
- * Tier 3: 100% offline macOS `say` + ffmpeg fallback.
- */
-export async function synthesizeSpeechLocally(
-  args: LocalTtsArgs,
-  cacheDir: string,
-): Promise<LocalTtsResult> {
-  const text = args.text?.trim()
-  if (!text) {
-    throw new Error('text is empty')
-  }
-
-  const voiceArg = (args.voice ?? 'default').toLowerCase()
-  const speed = typeof args.speed === 'number' && Number.isFinite(args.speed) ? args.speed : 1.0
-
-  // Deterministic cache key across engines and voices
-  const hash = crypto
-    .createHash('sha256')
-    .update(`local_tts\0${voiceArg}\0${speed}\0${text}`)
-    .digest('hex')
-
-  const voiceoverDir = path.join(cacheDir, 'voiceover')
-  fs.mkdirSync(voiceoverDir, { recursive: true })
-  const destMp3 = path.join(voiceoverDir, `${hash}.mp3`)
-
-  if (fs.existsSync(destMp3)) {
-    const stat = fs.statSync(destMp3)
-    if (stat.size > 0) {
-      return { filePath: destMp3, cached: true, engine: 'kokoro-tts' }
-    }
-  }
-
-  const pythonBin = resolvePythonBin()
-
-  // ── Tier 1: Kokoro-82M ONNX ──────────────────────────────────────────────
-  const kokoroWorker = resolveKokoroWorkerScript()
-  const kokoroFiles = resolveKokoroModelFiles()
-
-  if (pythonBin && kokoroWorker) {
-    const tmpWav = path.join(os.tmpdir(), `kokoro_tts_${Date.now()}_${Math.random().toString(36).slice(2)}.wav`)
+function runtime(): TtsRuntime {
+  const home=process.env.HOME??'', support=path.join(home,'Library','Application Support','Sclip')
+  const dir=path.join(support,'models','kokoro')
+  return {python:first(['python','python3'].map(n=>path.join(support,'vision-sidecar','venv','bin',n))),
+    worker:first([path.resolve(__dirname,'..','..','vision','sidecar','kokoro_tts_worker.py'),path.resolve(__dirname,'..','..','src','vision','sidecar','kokoro_tts_worker.py'),path.join(process.resourcesPath??'','vision','sidecar','kokoro_tts_worker.py')]),
+    model:first(['kokoro-v1.0.int8.onnx','kokoro-v1.0.onnx','kokoro-v0_19.onnx'].map(n=>path.join(dir,n)))??path.join(dir,'kokoro-v1.0.int8.onnx'),
+    voices:first(['voices-v1.0.bin','voices.bin'].map(n=>path.join(dir,n)))??path.join(dir,'voices-v1.0.bin'),
+    edge:first(['/opt/homebrew/bin/edge-tts','/usr/local/bin/edge-tts',path.join(home,'.local','bin','edge-tts')]),run:runTtsCommand}
+}
+export async function listLocalSpeechVoices(rt=runtime()) {
+  if(!rt.python||!rt.worker||!fs.existsSync(rt.model)||!fs.existsSync(rt.voices)) return {engine:'kokoro-tts',status:'unavailable',voices:[],aliases:{},reason:'Local Python, Kokoro worker or model/voices files unavailable. No download or inference attempted.'}
+  const catalog=JSON.parse(await rt.run(rt.python,[rt.worker,'--list-voices','--model',rt.model,'--voices',rt.voices]))
+  if(!Array.isArray(catalog.voices)||catalog.voices.some((v:unknown)=>typeof v!=='string'))throw new Error('Invalid installed Kokoro voice catalog')
+  return {...catalog,engine:'kokoro-tts',status:'available',selection:'Actual installed voice IDs and alias mappings, not a delivery-quality verdict. Choose a local preview for the requested delivery; Hermes/user decides which voice fits.'}
+}
+/** Kokoro is the default local engine. Other engines require explicit auto;
+ * no silent cloud/OS substitute for an explicitly requested Kokoro voice. */
+export async function synthesizeSpeechLocally(args:LocalTtsArgs,cacheDir:string,rt=runtime()):Promise<LocalTtsResult> {
+  const text=args.text?.trim();if(!text)throw new Error('text is empty')
+  const voice=(args.voice??'default').toLowerCase().trim(),speed=args.speed??1
+  if(!Number.isFinite(speed)||speed<0.25||speed>4)throw new Error('speed must be between 0.25 and 4')
+  if(args.engine && !['kokoro','auto'].includes(args.engine))throw new Error('Unsupported local speech engine')
+  const engines:SpeechProvenance['engine'][]=args.engine==='auto'?['kokoro-tts','edge-tts','macos-say']:['kokoro-tts']
+  const dir=path.join(cacheDir,'voiceover');fs.mkdirSync(dir,{recursive:true})
+  const failures:string[]=[]
+  for(const engine of engines) {
+    const modelIdentity=engine==='kokoro-tts'?[rt.model,rt.voices].map(p=>{try{const st=fs.statSync(p);return [p,st.size,st.mtimeMs]}catch{return [p,'missing']}}):engine
+    const hash=crypto.createHash('sha256').update(JSON.stringify(['local_tts_v2',engine,modelIdentity,voice,speed,text])).digest('hex')
+    const dest=path.join(dir,hash+'.mp3'),meta=path.join(dir,hash+'.json')
     try {
-      const kokoroOk = await runCommand(pythonBin, [
-        kokoroWorker,
-        '--text', text,
-        '--voice', voiceArg,
-        '--speed', String(speed),
-        '--output', tmpWav,
-        '--model', kokoroFiles.model,
-        '--voices', kokoroFiles.voices,
-      ])
-
-      if (kokoroOk && fs.existsSync(tmpWav)) {
-        const ffmpegOk = await runCommand('ffmpeg', [
-          '-y',
-          '-i', tmpWav,
-          '-c:a', 'libmp3lame',
-          '-q:a', '2',
-          destMp3,
-        ])
-
-        if (ffmpegOk && fs.existsSync(destMp3) && fs.statSync(destMp3).size > 0) {
-          return { filePath: destMp3, cached: false, engine: 'kokoro-tts' }
-        }
-      }
-    } finally {
-      try {
-        if (fs.existsSync(tmpWav)) fs.unlinkSync(tmpWav)
-      } catch {}
-    }
-  }
-
-  // ── Tier 2: Neural edge-tts ──────────────────────────────────────────────
-  const edgeTts = resolveEdgeTtsBin()
-  if (edgeTts) {
-    const edgeVoice = EDGE_TTS_VOICES[voiceArg] ?? (args.voice && args.voice.includes('-') ? args.voice : EDGE_TTS_VOICES.default)
-    const ratePercent = Math.round((speed - 1.0) * 100)
-    const rateArg = ratePercent >= 0 ? `+${ratePercent}%` : `${ratePercent}%`
-
-    const edgeArgs = ['--text', text, '--voice', edgeVoice, '--rate', rateArg, '--write-media', destMp3]
-    const ok = await runCommand(edgeTts, edgeArgs)
-    if (ok && fs.existsSync(destMp3) && fs.statSync(destMp3).size > 0) {
-      return { filePath: destMp3, cached: false, engine: 'edge-tts' }
-    }
-  }
-
-  // ── Tier 3: 100% Offline macOS `say` fallback ─────────────────────────────
-  if (process.platform === 'darwin') {
-    const sayVoice = MACOS_SAY_VOICES[voiceArg] ?? args.voice ?? MACOS_SAY_VOICES.default
-    const wpm = Math.max(80, Math.min(360, Math.round(185 * speed)))
-    const tmpWav = path.join(os.tmpdir(), `tts_${Date.now()}_${Math.random().toString(36).slice(2)}.wav`)
-
+      const saved=JSON.parse(fs.readFileSync(meta,'utf8'))
+      if(saved.synthesis?.engine===engine && saved.sha256===crypto.createHash('sha256').update(fs.readFileSync(dest)).digest('hex'))return {filePath:dest,cached:true,engine,synthesis:saved.synthesis}
+    }catch{/* Old/unverified caches are preserved, never falsely labelled Kokoro. */}
+    const temp=path.join(dir,hash+'.'+crypto.randomUUID()+'.mp3'),wav=path.join(os.tmpdir(),'sclip-tts-'+crypto.randomUUID()+'.wav')
     try {
-      const sayOk = await runCommand('/usr/bin/say', [
-        '-v', sayVoice,
-        '-r', String(wpm),
-        '-o', tmpWav,
-        '--data-format=LEI16@44100',
-        '--',
-        text,
-      ])
-
-      if (sayOk && fs.existsSync(tmpWav)) {
-        const ffmpegOk = await runCommand('ffmpeg', [
-          '-y',
-          '-i', tmpWav,
-          '-c:a', 'libmp3lame',
-          '-q:a', '2',
-          destMp3,
-        ])
-
-        if (ffmpegOk && fs.existsSync(destMp3) && fs.statSync(destMp3).size > 0) {
-          return { filePath: destMp3, cached: false, engine: 'macos-say' }
-        }
+      let synthesis:SpeechProvenance
+      if(engine==='kokoro-tts') {
+        if(!rt.python||!rt.worker||!fs.existsSync(rt.model)||!fs.existsSync(rt.voices))throw new Error('Kokoro local runtime/model unavailable; configure local models first')
+        synthesis=JSON.parse(await rt.run(rt.python,[rt.worker,'--text',text,'--voice',voice,'--speed',String(speed),'--output',wav,'--model',rt.model,'--voices',rt.voices]))
+        if(synthesis.engine!==engine||!synthesis.resolved_voice)throw new Error('Kokoro worker returned no verified voice provenance')
+      } else if(engine==='edge-tts') {
+        if(!rt.edge)throw new Error('edge-tts not installed')
+        const resolved=EDGE[voice]??voice,rate=Math.round((speed-1)*100)
+        await rt.run(rt.edge,['--text',text,'--voice',resolved,'--rate',(rate>=0?'+':'')+rate+'%','--write-media',temp])
+        synthesis={engine,requested_voice:voice,resolved_voice:resolved,speed}
+      } else {
+        if(process.platform!=='darwin')throw new Error('macOS say unavailable')
+        const resolved=SAY[voice]??voice
+        await rt.run('/usr/bin/say',['-v',resolved,'-r',String(Math.max(80,Math.min(360,Math.round(185*speed)))),'-o',wav,'--data-format=LEI16@44100','--',text])
+        synthesis={engine,requested_voice:voice,resolved_voice:resolved,speed}
       }
-    } finally {
-      try {
-        if (fs.existsSync(tmpWav)) fs.unlinkSync(tmpWav)
-      } catch {}
-    }
+      if(engine!=='edge-tts')await rt.run('ffmpeg',['-y','-i',wav,'-c:a','libmp3lame','-q:a','2',temp])
+      if(!fs.existsSync(temp)||fs.statSync(temp).size<100)throw new Error('Synthesizer produced no usable MP3')
+      const sha256=crypto.createHash('sha256').update(fs.readFileSync(temp)).digest('hex')
+      fs.renameSync(temp,dest)
+      const metaTemp = temp+'.json'
+      fs.writeFileSync(metaTemp,JSON.stringify({version:2,sha256,synthesis}))
+      fs.renameSync(metaTemp,meta)
+      return {filePath:dest,cached:false,engine,synthesis}
+    }catch(error){failures.push(`${engine}: ${error instanceof Error?error.message:String(error)}`)}
+    finally {for(const p of [wav,temp])try{fs.rmSync(p,{force:true})}catch{}}
   }
-
-  throw new Error('Local speech synthesis failed: neither Kokoro-82M, edge-tts, nor macOS say succeeded.')
+  throw new Error('Local speech synthesis failed; no fallback outside requested engines. '+failures.join('; '))
 }

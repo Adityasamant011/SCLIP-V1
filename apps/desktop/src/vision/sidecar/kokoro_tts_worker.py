@@ -7,6 +7,7 @@ Provides natural American & British accents with automatic model provisioning.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import urllib.request
@@ -48,10 +49,11 @@ def ensure_model_files(model_arg: str | None, voices_arg: str | None) -> tuple[s
 
 def main():
     parser = argparse.ArgumentParser(description="Generate speech using Kokoro-82M ONNX")
-    parser.add_argument("--text", required=True, help="Text to speak")
+    parser.add_argument("--list-voices", action="store_true", help="Return installed voice IDs and aliases without generating audio")
+    parser.add_argument("--text", default=None, help="Text to speak")
     parser.add_argument("--voice", default="alloy", help="Speaker name or alias (alloy, echo, fable, onyx, nova, shimmer, af_heart, am_michael, etc.)")
     parser.add_argument("--speed", type=float, default=1.0, help="Speech rate multiplier")
-    parser.add_argument("--output", required=True, help="Output destination WAV path")
+    parser.add_argument("--output", default=None, help="Output destination WAV path")
     parser.add_argument("--model", default=None, help="Path to kokoro ONNX model file")
     parser.add_argument("--voices", default=None, help="Path to voices.bin file")
     args = parser.parse_args()
@@ -98,9 +100,16 @@ def main():
     kokoro = kokoro_onnx.Kokoro(model_path, voices_path)
     available_voices = set(kokoro.get_voices())
 
+    if args.list_voices:
+        print(json.dumps({"voices": sorted(v for v in available_voices if v.startswith(("a", "b"))), "supported_languages": ["en-us", "en-gb"], "other_voice_count": sum(not v.startswith(("a", "b")) for v in available_voices), "aliases": {k: v for k, v in voice_alias_map.items() if v in available_voices}, "model": os.path.basename(model_path)}))
+        return
+    if not args.text or not args.output:
+        parser.error("--text and --output are required for synthesis")
     if speaker not in available_voices:
-        speaker = "af_heart"
+        parser.error(f"Unknown Kokoro voice {speaker!r}; use --list-voices. No substitute voice was generated.")
 
+    if not speaker.startswith(("a", "b")):
+        parser.error("This worker currently supports English pronunciation only; no voice/language substitution performed.")
     lang = "en-gb" if speaker.startswith("b") else "en-us"
 
     output_dir = os.path.dirname(os.path.abspath(args.output))
@@ -116,6 +125,8 @@ def main():
     sf.write(args.output, samples, sample_rate)
 
     if os.path.exists(args.output) and os.path.getsize(args.output) > 100:
+        print(json.dumps({"engine": "kokoro-tts", "resolved_voice": speaker, "requested_voice": args.voice,
+                          "model": os.path.basename(model_path), "language": lang, "speed": args.speed, "sample_rate": sample_rate}))
         sys.exit(0)
     else:
         sys.stderr.write(f"Failed to write output audio file to {args.output}\n")
