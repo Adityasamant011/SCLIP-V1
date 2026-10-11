@@ -47,8 +47,6 @@ import {
 import { useAppSettingsStore } from "../settings/appSettingsStore";
 import { Nv12Ingest } from "./nv12/Nv12Ingest";
 import { TenBitIngest } from "./tenbit/TenBitIngest";
-import { loadBundledFontBytes } from "./fonts/registry";
-import { loadFontsIntoFaceSet } from "./fonts/loadFontsIntoFaceSet";
 import { installCjkLineBreaking } from "./fonts/lineBreak";
 import type { TextFit } from "./textBox";
 import { STAGE, stageAdd, stageNow, stageRecord } from "./perf/stageTimers";
@@ -443,12 +441,7 @@ export class Compositor {
     // Preview + real DOM only — the export Worker has neither `document`
     // nor preview audio.
     if (this.mode === "preview" && typeof document !== "undefined") {
-      // Bundled fonts: same set as the export Worker, so preview matches the
-      // burned-in output. Awaited off the constructor; the first post-load
-      // redraw picks them up.
-      void loadBundledFontBytes().then((b) =>
-        loadFontsIntoFaceSet(document.fonts, b),
-      );
+      // PixiPreview and exportWorker await font registration before construction.
       this.audioGraph = new AudioGraph();
     }
   }

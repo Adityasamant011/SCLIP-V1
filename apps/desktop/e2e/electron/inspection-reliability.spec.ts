@@ -38,6 +38,11 @@ test('QA respects mix gates, preserves authored text problems, never opens Expor
   const render=await call('render_timeline_range',{start_us:0,end_us:2000000});expect(fs.existsSync(render.data.path)).toBe(true);fs.copyFileSync(render.data.path,path.join(out,'qa.mp4'))
   expect(await page.evaluate(()=>(window as any).__weftcutExportState)).toBeNull()
   const projectAfter=await summary(page);expect(projectAfter.compositions).toEqual(projectBefore.compositions);expect(projectAfter.audio_roles).toEqual(projectBefore.audio_roles) // no automatic mute, relocation, synchronization or creative repairs
+  // Actual pixels must use the bundled face even when the authored font is absent.
+  // Updating both test layers to that explicit face should change no pixels.
+  for(const id of ids) await call('update_layer_params',{layer_id:id,patch:{kind:'Text',font_family:'Liberation Sans'}})
+  const explicitFont=await call('inspect_timeline_frame',{timeline_t_us:500000})
+  expect((explicitFont.r.content as any[]).find(c=>c.type==='image').data).toBe(images[0].data)
   await page.screenshot({path:path.join(out,'ui.png')})
  }finally{fs.writeFileSync(path.join(out,'trace.json'),JSON.stringify(trace,null,2));await client?.close();await app.close()}
 })

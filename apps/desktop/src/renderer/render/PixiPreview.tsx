@@ -56,6 +56,8 @@ import {
   usePreviewViewStore,
 } from "../state/previewViewStore";
 import { quickProxyPath } from "./decodeRoute";
+import { loadBundledFontBytes } from "./fonts/registry";
+import { loadFontsIntoFaceSet } from "./fonts/loadFontsIntoFaceSet";
 import {
   setSlotFenceBackend,
   slotFenceBackendForRenderer,
@@ -327,7 +329,7 @@ export const PixiPreview = forwardRef<PixiPreviewHandle, Props>(function PixiPre
   // ready. Handed an already-initialized Application — we wire the
   // Compositor and PlaybackEngine against it.
   const handleInit = useCallback(
-    (app: Application) => {
+    async (app: Application) => {
       applicationRef.current = app;
       // The device dies one microtask after Pixi's own teardown, and not a
       // moment sooner. @pixi/react destroys the Application asynchronously
@@ -484,6 +486,11 @@ export const PixiPreview = forwardRef<PixiPreviewHandle, Props>(function PixiPre
         return p ? convertFileSrc(p) : null;
       };
 
+      // Canvas/Pixi caches the first text measurement and raster. Register the
+      // bundled fallback faces BEFORE any Text sprite can be measured, as the
+      // export Worker already does. A later font load cannot repair that cache.
+      await loadFontsIntoFaceSet(document.fonts, await loadBundledFontBytes());
+      if (applicationRef.current !== app || app.stage.destroyed) return;
       const compositor = new Compositor({
         app,
         // LANDMINE: the composition's size, not `app.canvas.width/height` and
