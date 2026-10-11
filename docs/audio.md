@@ -16,6 +16,22 @@ lane moves, trims or voice choices are inferred. `engine: auto` explicitly
 permits Edge/macOS fallback; `engine: openai` explicitly requests configured
 cloud TTS. Kokoro does not silently attempt either route.
 
+Rendered-audio inspection measures signal and transcribes speech. Optional
+`include_understanding:true` adds **SenseVoiceSmall INT8** coarse language,
+emotion and event labels from the actual rendered mix. It is installed locally
+through pinned managed content and uses a one-thread CPU process only on request:
+30s maximum per call, independent 10s windows, 60s timeout, one job at a time,
+8-entry content/model cache, process exits after inference. It does not load on
+app startup or replace Qwen vision/Kokoro synthesis/Whisper word timing.
+`get_audio_understanding_status` reports readiness without inference. The initial
+supported platform is macOS Apple Silicon. Other platforms report unsupported;
+missing files/native failures remain unavailable without cloud fallback.
+
+Coarse labels may be unknown or wrong; they do not detect all sounds, judge
+voice quality or prove dialogue boundaries. Contradictory windows remain visible.
+Hermes chooses whether the evidence warrants an edit. No auto-sync or creative
+repair is generated. Render state freshness and modality requirements remain.
+
 Rendered-audio inspection measures signal and transcribes speech. Neither that
 tool nor spectrum-based background measurements certify confidence, emotional
 delivery or whether a voice fits the creator's request. Hermes/user chooses

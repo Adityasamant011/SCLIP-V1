@@ -104,6 +104,8 @@ export interface ContentDeps {
    * to start at all — the zip lane, whose payloads are Windows-only, does not.
    */
   extractTar(archivePath: string, destDir: string): Promise<void>;
+  /** Platform preparation after verification, before publication. */
+  prepareInstall?(item: ContentItem, stagingDir: string): Promise<void>;
   join(...parts: string[]): string;
   downloadsDir: string;
   partialDir: string;
@@ -570,6 +572,7 @@ async function installVerified(
         deps.join(stagingDir, ...artifact.entryPath.split("/")),
       );
     }
+    await deps.prepareInstall?.(item, stagingDir);
     finishInstall(deps, item, artifact, stagingDir, finalDir);
     return entryAbsPath(deps, item, artifact);
   } catch (e) {

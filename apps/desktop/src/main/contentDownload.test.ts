@@ -1070,3 +1070,17 @@ describe("vlmAutofillPlan — same rules, plus mmproj and multi-backend items", 
     expect(plan[0].backend).toBe("qwen3_vl");
   });
 });
+
+
+describe('verified platform preparation before publication',()=>{
+ it('prepares staging only; failure does not replace an existing install',async()=>{
+  const deps=makeDeps({responses:[PAYLOAD]}),prior='root/downloads/test-model/rev1/model.bin'
+  deps.fs.mkdirp('root/downloads/test-model/rev1');deps.fs.writeBytes(prior,new TextEncoder().encode('prior'))
+  let staging='';deps.prepareInstall=async(_item,dir)=>{staging=dir;expect(deps.fs.statBytes(dir+'/model.bin')).toBe(PAYLOAD.byteLength);expect(deps.fs.statBytes(dir+'/manifest.json')).toBeNull();throw Error('Signing failed')}
+  const result=await downloadItem(deps,rawItem(),'win32-x64',noProgress,live());expect(result.ok).toBe(false);expect(deps.fs.readText(prior)).toBe('prior');expect(staging).toContain('.staging-');expect(deps.fetches).toBe(1)
+ })
+ it('publishes successfully prepared payload and manifest together',async()=>{
+  const deps=makeDeps({responses:[PAYLOAD]});let called=false;deps.prepareInstall=async()=>{called=true}
+  expect((await downloadItem(deps,rawItem(),'win32-x64',noProgress,live())).ok).toBe(true);expect(called).toBe(true);expect(itemStatus(deps,rawItem(),'win32-x64').state).toBe('installed')
+ })
+})

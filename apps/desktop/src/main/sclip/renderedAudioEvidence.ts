@@ -1,3 +1,4 @@
+import type { AudioUnderstandingBackend } from './audioUnderstanding'
 import fs from 'node:fs'
 import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
@@ -49,9 +50,10 @@ export function renderedTranscriptArgs(file:string, contentHash:string, start:nu
   return {layer_id:id,backend:'whisper_cpp',word_timestamps:true,
     layer:{id,label:null,t_start_us:start,t_end_us:start+duration,enabled:true,locked:false,metadata:{},effects:[],params:audioParams(media.id,0,duration)},media}
 }
-type Deps = { render: typeof renderComposedTimelineRange; decode: typeof decodeRenderedPcm; transcribe:(args:ReturnType<typeof renderedTranscriptArgs>)=>Promise<any> }
+type Deps = { understand?: AudioUnderstandingBackend['understand']; render: typeof renderComposedTimelineRange; decode: typeof decodeRenderedPcm; transcribe:(args:ReturnType<typeof renderedTranscriptArgs>)=>Promise<any> }
 const cache=new Map<string,unknown>()
 export async function inspectRenderedAudio(project:Project,args:Record<string,unknown>,getActiveWindow:()=>any,deps:Deps,signal?:AbortSignal) {
+  if(args.include_understanding !== undefined && typeof args.include_understanding !== 'boolean')throw new Error('include_understanding must be boolean')
   const compId=String(args.composition_id??project.root_id)
   const comp=project.compositions[compId]
   if(!comp)throw new Error('Composition not found')
@@ -60,7 +62,7 @@ export async function inspectRenderedAudio(project:Project,args:Record<string,un
   const state=createHash('sha256').update(reviewState(project)).digest('hex')
   const audibility=audioAudibility(project,compId,Number(args.start_us),Number(args.end_us))
   if (audibility.selected_count === 0) return { coordinate_space:'timeline',evidence_origin:'CURRENT_TIMELINE',state_version:state,
-    composition_id:compId,timeline_range_us:[Number(args.start_us),Number(args.end_us)],has_audio:false,
+    composition_id:compId,timeline_range_us:[Number(args.start_us),Number(args.end_us)],has_audio:false,audio_understanding:{status:args.include_understanding?'no_audio':'not_requested',windows:[],provider_calls:0},
     delivery_assessment:{status:'not_assessed',reason:'No audible material; no vocal delivery judgment.'},status:'no_audible_material',render_content_sha256:null,audibility,signal:null,transcript:{status:'no_audio',evidence_class:'MODEL_OBSERVATION',segments:[]},
     observed_dimensions:[],cached:false,semantics:'Authoritative mix gates select no audio. No rendered signal or speech was inspected. Hermes chooses whether the silence is intentional or a repair is justified.' }
   const rendered=await deps.render(project,{start_us:Number(args.start_us),end_us:Number(args.end_us),composition_id:args.composition_id as string|undefined,getActiveWindow,signal,
@@ -72,7 +74,7 @@ export async function inspectRenderedAudio(project:Project,args:Record<string,un
     // reuse identical bytes/range/state; native Whisper owns its engine cache.
     const key=[state,hash,args.start_us,args.end_us].join(':')
     const hit=cache.get(key) as any
-    const pcm=hit?undefined:await deps.decode(rendered.path,signal)
+    const pcm=hit&&!args.include_understanding?undefined:await deps.decode(rendered.path,signal)
     const hasAudio=!!hit||!!pcm
     const start=Number(args.start_us)
     const facts=hit??(pcm?measureRenderedPcm(pcm,start):null)
@@ -86,9 +88,15 @@ export async function inspectRenderedAudio(project:Project,args:Record<string,un
       }catch(error){transcript={status:'unavailable',evidence_class:'MODEL_OBSERVATION',segments:[],error:String(error)}}
     }
     signal?.throwIfAborted()
-    const evidence={coordinate_space:'timeline',evidence_origin:'CURRENT_TIMELINE',state_version:state,composition_id:args.composition_id??project.root_id,
+    let understanding:unknown={status:'not_requested'}
+    if(args.include_understanding) {
+      try {understanding=pcm&&deps.understand?await deps.understand(pcm.subarray(0,Math.floor((Number(args.end_us)-start)/1e6*SAMPLE_RATE)*4),start,signal):{status:hasAudio?'unavailable':'no_audio',windows:[],provider_calls:0}}
+      catch(error){signal?.throwIfAborted();understanding={status:'unavailable',error:String(error),windows:[]}}
+    }
+    signal?.throwIfAborted()
+    const evidence={audio_understanding:understanding,coordinate_space:'timeline',evidence_origin:'CURRENT_TIMELINE',state_version:state,composition_id:args.composition_id??project.root_id,
       timeline_range_us:[start,Number(args.end_us)],render_content_sha256:hash,has_audio:hasAudio,
-      delivery_assessment:{status:'not_assessed',reason:'Signal levels and local recognition do not assess assertiveness, whisperiness, emotion or voice suitability. Hermes/user must evaluate actual audio; no semantic audio model was invoked.'},signal:facts,transcript,audibility,status:hasAudio?'measured':'no_audio_stream',cached:!!hit,observed_dimensions:hasAudio?['audio',...(transcript.status==='available'?['speech']:[])]:[],
+      delivery_assessment:{status:'not_assessed',reason:'Signal measurements and recognition do not assess assertiveness, whisperiness or voice suitability. Optional coarse emotion/event observations are fallible labels, not delivery-quality verification. Hermes/user must evaluate the actual audio.'},signal:facts,transcript,audibility,status:hasAudio?'measured':'no_audio_stream',cached:!!hit,observed_dimensions:hasAudio?['audio',...(transcript.status==='available'?['speech']:[])]:[],
       semantics:'Actual production audio mix. Signal facts are measurements; local transcript/words are fallible recognition, not source projections or an editorial verdict.'}
     // Failed recognition is not cached as permanent unavailability.
     if(facts){cache.set(key,facts);if(cache.size>8)cache.delete(cache.keys().next().value!)}

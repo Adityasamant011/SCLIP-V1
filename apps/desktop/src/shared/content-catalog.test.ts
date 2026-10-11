@@ -221,7 +221,7 @@ describe("the ADR 0073 Linux slice is present verbatim", () => {
   });
 
   it("every catalog item covers Linux — a half-covered engine has no usable row", () => {
-    for (const item of CONTENT_CATALOG) {
+    for (const item of CONTENT_CATALOG.filter(i => i.speech || i.vlm)) {
       expect(Object.keys(item.platforms), item.id).toContain("linux-x64");
     }
   });

@@ -1,3 +1,4 @@
+import { createAudioUnderstanding, managedAudioPaths, prepareAudioRuntime } from './sclip/audioUnderstanding'
 import path from 'node:path'
 import { sourceSignature } from './state/mutations/textCorrection.js'
 import { locateLayer } from './state/mutations/helpers.js'
@@ -1046,6 +1047,7 @@ app.whenReady().then(async () => {
 
   const mcpHost = await startMcpHost(backend, {
     listSpeechVoices: listLocalSpeechVoices,
+    audioUnderstanding: createAudioUnderstanding(() => managedAudioPaths(dataRoot.downloadsDir)),
     triageToolFailure: createToolFailureRecovery(jevDecide, () => process.env.SCLIP_FAILURE_JEV_AUTHORIZED === '1' && !!jevCredential()),
     getTsHost: () => tsHost,
     getActiveWindow: () => mainWindow && !mainWindow.isDestroyed() ? mainWindow : null,
@@ -2375,6 +2377,7 @@ app.whenReady().then(async () => {
     extractTar: async (archivePath, destDir) => {
       await backend!.invoke('content_extract_archive', JSON.stringify({ archivePath, destDir }))
     },
+    prepareInstall: prepareAudioRuntime,
     join: path.join,
     downloadsDir: dataRoot.downloadsDir,
     partialDir: path.join(dataRoot.cacheDir, 'content-partial'),

@@ -16,6 +16,72 @@ import type { ContentItem } from "./content-download";
 
 export const CONTENT_CATALOG: readonly ContentItem[] = [
   {
+  "id": "sensevoice-runtime",
+  "kind": "audio-understanding-runtime",
+  "version": "1.13.4",
+  "labelKey": "content_sensevoice_runtime",
+  "license": {
+    "name": "Apache-2.0",
+    "upstreamUrl": "https://github.com/k2-fsa/sherpa-onnx"
+  },
+  "platforms": {
+    "darwin-arm64": {
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/sherpa-onnx-v1.13.4-osx-arm64-shared-no-tts.tar.bz2",
+      "sha256": "b4e5d0971ef1bee29fa63ed4060009067d2cde60ca6ad7bb99033e98c7271614",
+      "bytes": 25046327,
+      "archive": "tar.bz2",
+      "entryPath": "sherpa-onnx-v1.13.4-osx-arm64-shared-no-tts/bin/sherpa-onnx-offline",
+      "fields": {
+        "binary": "sherpa-onnx-v1.13.4-osx-arm64-shared-no-tts/bin/sherpa-onnx-offline"
+      }
+    }
+  }
+},
+  {
+  "id": "sensevoice-model-int8",
+  "kind": "audio-understanding-model",
+  "version": "2365baeacb507f821a0c8120fcee3d484dba7a07",
+  "labelKey": "content_sensevoice_model_int8",
+  "license": {
+    "name": "FunASR Model Open Source License v1.1",
+    "upstreamUrl": "https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE"
+  },
+  "platforms": {
+    "darwin-arm64": {
+      "url": "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/2365baeacb507f821a0c8120fcee3d484dba7a07/model.int8.onnx",
+      "sha256": "c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51",
+      "bytes": 239233841,
+      "archive": "none",
+      "entryPath": "model.int8.onnx",
+      "fields": {
+        "model": "model.int8.onnx"
+      }
+    }
+  }
+},
+  {
+  "id": "sensevoice-tokens",
+  "kind": "audio-understanding-model",
+  "version": "2365baeacb507f821a0c8120fcee3d484dba7a07",
+  "labelKey": "content_sensevoice_tokens",
+  "license": {
+    "name": "FunASR Model Open Source License v1.1",
+    "upstreamUrl": "https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE"
+  },
+  "platforms": {
+    "darwin-arm64": {
+      "url": "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/2365baeacb507f821a0c8120fcee3d484dba7a07/tokens.txt",
+      "sha256": "f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc",
+      "bytes": 315894,
+      "archive": "none",
+      "entryPath": "tokens.txt",
+      "fields": {
+        "tokens": "tokens.txt"
+      }
+    }
+  }
+},
+  {
     id: "whisper-cpp-runtime",
     kind: "speech-runtime",
     version: "1.9.1",

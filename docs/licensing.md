@@ -96,3 +96,13 @@ instead of shipping.
 - **No shader code may be ported from OBS or Natron** (both GPL). Keyer and
   filter math comes from public literature only. The renderer has no process
   boundary at all, so a single ported GLSL snippet contaminates the app.
+
+## Optional local audio understanding
+
+SenseVoiceSmall INT8 model/tokenizer use the **FunASR Model Open Source License
+v1.1**, retained at `docs/licenses/sensevoice-model-license.txt`. This is not an
+Apache-2.0 model license. Attribution: FunAudioLLM / SenseVoice, QwenAudio,
+ONNX conversion by the sherpa-onnx project. sherpa-onnx's runtime is Apache-2.0.
+The model is external managed content, not embedded in the application binary.
+Model observation limitations and upstream license provenance accompany the
+catalog/status/docs; the configured local installation retains the license.

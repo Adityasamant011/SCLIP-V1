@@ -784,7 +784,7 @@ filters by category (`Mcp`) and source (`Agent { client }`).
 
 - `ripple_cut_range { layer_ids, start_us, end_us, expected_state_version }`: explicitly selected timeline interval removal and downstream closure, respecting existing authored links. Requires fresh state and legal main-track geometry; returns authoritative affected layers and relationship/geometry changes.
 - `apply_repair_transaction { reason, expected_state_version, operations }`: 1–8 explicitly authored operations, validated and committed atomically. Invalid/stale batches publish nothing. Returns per-operation before/after and state/relationship receipts; verification follows the complete repair boundary. No partner edits or creative parameters are generated.
-- `inspect_rendered_audio { start_us, end_us, composition_id? }`: rendered current mix measurements and local speech observations, with explicit unavailable status when local recognition is not configured.
+- `inspect_rendered_audio { start_us, end_us, composition_id?, include_understanding? }`: rendered current mix measurements and local speech observations, with explicit unavailable status when local recognition is not configured.
 - `inspect_timeline_temporal_window { start_us, end_us, representative_samples?, question? }`: bounded chronological rendered timeline samples and separate local-model visual observations; no editorial verdict.
 
 ### Evidence and review integration
@@ -809,3 +809,5 @@ filters by category (`Mcp`) and source (`Agent { client }`).
 ### Creator memory
 
 - `creator_style_memory { action, creator_id?, expected_revision?, ... }`: canonical local creator-style context and evidence. `context` returns the same compact selection and IDs supplied to Hermes; `preference`, `evidence`, and version-checked `preferences` pagination provide omitted detail. Foreground `maintenance` atomically applies 1–8 Hermes-authored hypotheses, links, counterexamples, exceptions, consolidations or supersessions. Writes require current creator/revision, target versions and scoped evidence. Creator approval/disable/forget controls cannot be overridden; the current brief takes priority. No timeline edit, background model call, or mirroring into generic Hermes memory occurs.
+
+- `get_audio_understanding_status {}`: readiness of the local CPU SenseVoiceSmall INT8 sense. `include_understanding:true` adds bounded per-window emotion/event/language observations to rendered audio evidence; 30s maximum, one thread/job, no cloud fallback or delivery-quality verdict.

@@ -38,6 +38,16 @@ describe('actual rendered audio facts, never editorial judgments',()=>{
  })
  it('rejects malformed PCM and counts near-full-scale samples without inferring audible clipping',()=>{const r=measureRenderedPcm(pcm([1,-1,0]),0);expect(r.clipping_sample_count).toBe(2);expect(()=>measureRenderedPcm(Buffer.alloc(3),0)).toThrow();expect(()=>measureRenderedPcm(pcm([NaN]),0)).toThrow()})
  it('cancellation discards evidence and temporary render',async()=>{const f=fixture(),ctrl=new AbortController();f.decode.mockImplementation(async()=>{ctrl.abort();return pcm([0])});await expect(f.run(ctrl.signal)).rejects.toThrow();expect(f.paths.every(p=>!fs.existsSync(p))).toBe(true)})
+ it('optional coarse understanding inspects mix without replacing speech/delivery verification',async()=>{
+  const f=fixture(),understand=vi.fn(async(..._args:any[])=>({status:'available',evidence_class:'MODEL_OBSERVATION',windows:[{emotion:'EMO_UNKNOWN',event:'Speech'}]}))
+  f.transcribe.mockRejectedValue(Error('Whisper unavailable'))
+  const args={start_us:4000000,end_us:6000000,include_understanding:true},before=JSON.stringify(f.project)
+  const r=await inspectRenderedAudio(f.project,args,()=>null,{render:f.render,decode:f.decode,transcribe:f.transcribe,understand} as any)
+  expect((r as any).audio_understanding.status).toBe('available');expect(r.delivery_assessment.status).toBe('not_assessed');expect(r.observed_dimensions).toEqual(['audio']);expect(understand.mock.calls[0][0]).toBeInstanceOf(Buffer);expect(JSON.stringify(f.project)).toBe(before)
+  await inspectRenderedAudio(f.project,args,()=>null,{render:f.render,decode:f.decode,transcribe:f.transcribe,understand} as any);expect(f.decode).toHaveBeenCalledTimes(2)
+  understand.mockRejectedValueOnce(Error('native timeout'));const fail=await inspectRenderedAudio(f.project,args,()=>null,{render:f.render,decode:f.decode,transcribe:f.transcribe,understand} as any);expect((fail as any).audio_understanding.status).toBe('unavailable');expect(fail.signal).not.toBeNull()
+ })
+ it('rejects nonboolean opt-in before rendering',async()=>{const f=fixture();await expect(inspectRenderedAudio(f.project,{start_us:0,end_us:1000000,include_understanding:'true'},()=>null,f as any)).rejects.toThrow('must be boolean');expect(f.render).not.toHaveBeenCalled()})
  it('decodes real rendered containers, silence and absent audio; malformed file rejects',async()=>{
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'sclip-audio-codec-')),ffmpeg=resolveFfmpegPath(),file=path.join(dir,'silence.mkv'),mute=path.join(dir,'mute.mkv')
   try{

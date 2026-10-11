@@ -82,7 +82,7 @@ export interface VlmConsumer {
 /// install, never an in-place mutation.
 export interface ContentItem {
   id: string;
-  kind: "speech-runtime" | "speech-model" | "vlm-runtime" | "vlm-model";
+  kind: "speech-runtime" | "speech-model" | "vlm-runtime" | "vlm-model" | "audio-understanding-runtime" | "audio-understanding-model";
   version: string;
   /// i18n key for the human label (en-US + zh-CN).
   labelKey: string;

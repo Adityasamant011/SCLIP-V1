@@ -1,3 +1,4 @@
+import type { AudioUnderstandingBackend } from '../sclip/audioUnderstanding'
 import { completionReview, completionDisposition, outputState, hasAuthoredOutput, type CompletionReview } from '../sclip/completionReview.js'
 import { currentCritique } from '../sclip/reviewer/currentCritique.js'
 import { inspectRenderedAudio, decodeRenderedPcm } from '../sclip/renderedAudioEvidence'
@@ -107,7 +108,7 @@ const RANGE_VISUALS_TOOL = {
   inputSchema: { type: 'object', properties: { start_us: { type: 'integer', minimum: 0, description: 'TIMELINE start, not source time.' }, end_us: { type: 'integer', minimum: 1, description: 'Exclusive TIMELINE end, within current composition.' }, composition_id: { type: 'string' }, representative_samples: { type: 'integer', minimum: 2, maximum: 5 }, question: { type: 'string', description: 'Optional observable visual question; no editing instruction.' } }, required: ['start_us', 'end_us'], additionalProperties: false },
 } as const
 
-export const RENDERED_AUDIO_TOOL = {name:'inspect_rendered_audio',description:'Inspect the actual production timeline audio mix over YOUR bounded timeline range (configured ceiling default 120s, maximum 300s). Returns local Whisper transcript/word timings when available, measured RMS/peak/near-full-scale sample counts and threshold-defined quiet spans. Never transcribes raw source in place of rendered audio, never edits, never evaluates pacing/dialogue. Local whisper_cpp only; missing local engine is explicit, never falls back to paid transcription. No-audio and recognition failures do not count as speech evidence.',inputSchema:{type:'object',properties:{start_us:{type:'integer',minimum:0},end_us:{type:'integer',minimum:1},composition_id:{type:'string'}},required:['start_us','end_us'],additionalProperties:false}} as const
+export const RENDERED_AUDIO_TOOL = {name:'inspect_rendered_audio',description:'Inspect the actual production timeline audio mix over YOUR bounded timeline range (configured ceiling default 120s, maximum 300s). Returns local Whisper transcript/word timings when available, measured RMS/peak/near-full-scale sample counts and threshold-defined quiet spans. Never transcribes raw source in place of rendered audio, never edits, never evaluates pacing/dialogue. Local whisper_cpp only; missing local engine is explicit, never falls back to paid transcription. No-audio and recognition failures do not count as speech evidence. Optional include_understanding uses local SenseVoiceSmall INT8 CPU for coarse emotion/event/language observations in bounded 10s windows (30s total); not a delivery-quality verdict.',inputSchema:{type:'object',properties:{start_us:{type:'integer',minimum:0},end_us:{type:'integer',minimum:1},composition_id:{type:'string'},include_understanding:{type:'boolean',description:'Opt in to local SenseVoiceSmall CPU coarse emotion/event/language observations for at most 30 seconds, in 10-second windows. Fallible labels; not a voice-quality verdict or word-timing substitute.'}},required:['start_us','end_us'],additionalProperties:false}} as const
 export const TEMPORAL_WINDOW_TOOL = {name:'inspect_timeline_temporal_window',description:'Observe bounded visual progression in CURRENT_TIMELINE time through 2–5 chronological composed frames and independent local Qwen observations, plus authored layer/caption/transition changes and source mappings. Configured review duration ceiling; unsampled motion remains unknown. Per-frame differences are preserved. No creative recommendation or consistency verdict; Hermes interprets the sequence.',inputSchema:RANGE_VISUALS_TOOL.inputSchema} as const
 
 const VISION_INSPECT_TOOL = {
@@ -424,6 +425,7 @@ export async function handleCallTool(
   externalMediaService?: ExternalMediaService,
   enableExternalMedia?: boolean,
   signal?: AbortSignal,
+  audioUnderstanding?: AudioUnderstandingBackend,
 ): Promise<ServerResult> {
   // Final delivery belongs to the user, including for clients with an old
   // cached catalog. Short temporary QA rendering remains available below.
@@ -748,6 +750,7 @@ export async function handleCallTool(
         const snap=tsHost.actor.snapshot()
         const evidence=name==='inspect_timeline_temporal_window' ? await inspectTimelineTemporalWindow(snap,args,getActiveWindow,undefined,signal) :
           await inspectRenderedAudio(snap,args,getActiveWindow,{render:renderComposedTimelineRange,decode:decodeRenderedPcm,
+            understand: audioUnderstanding?.understand,
             transcribe:async computeArgs => { const release=beginModelUse();try{return unwrap(await backend.mcpCallTool('transcribe_clip',JSON.stringify(computeArgs)))}finally{release()} }},signal)
         if(reviewState(snap)!==reviewState(tsHost.actor.snapshot()))throw new Error('Timeline changed during inspection; reacquire evidence')
         return {content:[{type:'text',text:JSON.stringify(evidence)}]} as ServerResult
@@ -1209,10 +1212,13 @@ export function mcpCommitObserver(getTsHost: () => TsActorHost | null): (tool: s
   }
 }
 
+export const AUDIO_UNDERSTANDING_STATUS_TOOL = {name:'get_audio_understanding_status',description:'Check local SenseVoiceSmall audio-understanding installation and bounds without loading a model. Use inspect_rendered_audio with include_understanding:true for coarse current-mix observations. No cloud fallback.',inputSchema:{type:'object',properties:{},additionalProperties:false}} as const
+
 /** The injectable seams of one MCP session. An options bag rather than trailing
  *  positionals: `log` is the fourth and every one of them is optional, and each
  *  omitted seam must keep the behaviour it had before it existed. */
 export interface McpServerOptions {
+  audioUnderstanding?: AudioUnderstandingBackend
   listSpeechVoices?: () => Promise<unknown>
   triageToolFailure?: (name: string, args: Record<string, unknown>, result: ServerResult, state: string) => Promise<unknown>
   creatorStyleStore?: CreatorStyleStore
@@ -1284,6 +1290,7 @@ export async function registeredMcpTools(backend: Backend, opts: McpServerOption
     ...MCP_TOOL_DEFS,
     ...MOTIF_TOOL_DEFS,
     ...(opts.listSpeechVoices ? [SPEECH_VOICES_TOOL] : []),
+    ...(opts.audioUnderstanding ? [AUDIO_UNDERSTANDING_STATUS_TOOL] : []),
     CREATOR_STYLE_TOOL,
     EDITORIAL_PACKET_TOOL,
     REVISION_CONTROL_TOOL,
@@ -1473,6 +1480,10 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
         const refusal = revisionGuard.validateEvidence(review, reviewState(getTsHost()?.actor.snapshot()))
         if (refusal) return { content: [{ type: 'text', text: JSON.stringify({ valid: false, code: 'INVALID_REVIEW_RECORD', errors: [refusal], correction: 'Use record_issue with flat description, severity, repairable, evidence_receipt_ids and affected_range_us or layer_ids; do not build nested inspections.', review_session: revisionGuard.status }) }] } as ServerResult
       }
+      if (name === 'get_audio_understanding_status') {
+        if (Object.keys(args).length) return revisionToolError('get_audio_understanding_status accepts no arguments')
+        return {content:[{type:'text',text:JSON.stringify(opts.audioUnderstanding?.status() ?? {status:'unavailable'})}]} as ServerResult
+      }
       if (name === 'list_speech_voices') {
         if (Object.keys(args).length) return revisionToolError('list_speech_voices accepts no arguments')
         if (!opts.listSpeechVoices) return revisionToolError('Local voice catalog unavailable')
@@ -1481,7 +1492,7 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
       const evidenceState = reviewState(getTsHost()?.actor.snapshot())
       const auditBefore = mutation ? getTsHost()?.actor.snapshot() : undefined
       const before = mutation ? reviewState(getTsHost()?.actor.snapshot()) : null
-      const result = await handleCallTool(backend, getTsHost, name, args, getPreferredEngine, getVlm, peaksPathFor, opts.getActiveWindow, opts.getReviewerSummary, opts.sourceObservationIndex, opts.externalMediaService, externalEnabled, (extra as {signal?:AbortSignal}).signal)
+      const result = await handleCallTool(backend, getTsHost, name, args, getPreferredEngine, getVlm, peaksPathFor, opts.getActiveWindow, opts.getReviewerSummary, opts.sourceObservationIndex, opts.externalMediaService, externalEnabled, (extra as {signal?:AbortSignal}).signal, opts.audioUnderstanding)
       if (restartCompletion && completion && !('isError' in result && result.isError)) {
         completion.baseline = outputState(getTsHost()!.actor.snapshot())
         completion.guard = revisionGuard = new RevisionLoopGuard()
