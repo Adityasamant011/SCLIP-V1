@@ -21,6 +21,7 @@ export class RevisionLoopGuard {
   private readonly outcomes = new Map<string, 'resolved' | 'unresolved'>()
   private verificationPending = false
   private repairInspections = 0
+  private readonly reservedVerificationAttempts = new Set<EvidenceDimension>()
   private retainedRepair = false
   private rollbackRegrounding = false
   private lastRollback: { checkpoint_id: string; abandoned_state_version: string; restored_state_version: string; invalidated_evidence_ids: string[] } | undefined
@@ -59,6 +60,58 @@ export class RevisionLoopGuard {
     }
   }
 
+  /** Legal protocol choices only. No issue, edit or editorial verdict is inferred. */
+  guidance(state: string, required: EvidenceDimension[] = []) {
+    const receipts=[...this.evidence.values()].filter(r=>r.state===state&&r.coordinate_space==='timeline')
+    const missing=required.filter(d=>!this.hasCurrentRenderedEvidence(state,[d]))
+    const open=[...(this.reviewedIssueIds??[])].filter(id=>!this.outcomes.has(id))
+    const actions:string[]=[],examples:Array<{name:string;arguments:Record<string,unknown>}>=[]
+    const offer=(tool:string,args:Record<string,unknown>)=>{actions.push(tool+(typeof args.action==='string'?`:${args.action}`:''));examples.push({name:`mcp__weftcut__${tool}`,arguments:args})}
+    const current=receipts.at(-1)
+    if(this.phase==='idle')offer('end_agent_session',{})
+    if(this.phase==='initial'||this.phase==='decision'){
+      if(this.inspectionCalls<this.inspectionLimit&&(!this.phaseStartedAt||this.now()-this.phaseStartedAt<RevisionLoopGuard.INITIAL_MS))actions.push('current_rendered_inspection')
+      if(!this.extended&&this.inspectionCalls>=this.inspectionLimit&&(!this.phaseStartedAt||this.now()-this.phaseStartedAt<RevisionLoopGuard.INITIAL_MS))offer('revision_control',{action:'extend_inspection',reason:'State the specific unresolved evidence question before extending.'})
+      if(current&&this.recordedIssues.size<3)offer('record_issue',{
+        description:'Replace with your observed issue and why it matters for the user brief; this example does not certify a defect.',
+        severity:'moderate',repairable:true,evidence_receipt_ids:[current.id],
+        evidence_dimensions:current.modalities,affected_range_us:current.range,
+      })
+    }
+    if(['initial','decision','repair'].includes(this.phase)&&!this.activeIssue&&!open.length&&this.hasCurrentRenderedEvidence(state,required))
+      offer('revision_control',{action:'conclude_no_repair',evidence_id:receipts.find(r=>['vision_inspect','inspect_timeline_frame','inspect_timeline_range_visuals','inspect_timeline_temporal_window','inspect_rendered_audio','render_timeline_range'].includes(r.tool))!.id,
+        reason:'Supply your own judgment grounded in the current inspected result and original brief; this example is not a verdict.'})
+    if(this.phase==='repair'){
+      if(!this.activeIssue){
+        if(open.length)offer('revision_control',{action:'select_issue',issue_id:open[0]})
+        else offer('revision_control',{action:'complete'})
+      }else if(this.verificationPending||this.rollbackRegrounding){actions.push('current_rendered_inspection')}
+      else {
+        if(!this.checkpointSeen)offer('checkpoint',{label:`Before repair of ${this.activeIssue}`})
+        else if(!this.retainedRepair&&(this.attempts.get(this.activeIssue)??0)<3)actions.push('chosen_editing_tool')
+        if(this.retainedRepair)offer('revision_control',{action:'finish_issue',status:'resolved'})
+        offer('revision_control',{action:'finish_issue',status:'unresolved'})
+      }
+    }
+    if(this.phase==='final')actions.push('validate_rough_cut_review:current_receipt_bound_review')
+    if(this.phase==='done')offer('end_agent_session',{})
+    // Withdrawal is an existing agent-owned judgment, not an automatic host
+    // dismissal. Offer it alongside repair only when its real guard permits it.
+    if(this.phase==='repair'&&!this.verificationPending){
+      const withdrawable=[...this.recordedIssues.values()].find(i=>i.repairable&&!this.outcomes.has(i.id))
+      const receipt=withdrawable&&receipts.find(r=>r.range[1]>=withdrawable.affected_range_us[0]&&r.range[0]<=withdrawable.affected_range_us[1])
+      if(withdrawable&&receipt)offer('withdraw_issue',{issue_id:withdrawable.id,evidence_receipt_ids:[receipt.id],reason:'Supply YOUR current evidence-grounded reason for withdrawing or reclassifying this concern; this example is not a verdict.'})
+    }
+    const issue=this.recordedIssues.get(this.activeIssue??'')
+    return {stage:this.status.workflow_stage,phase:this.phase,state_version:createHash('sha256').update(state).digest('hex'),
+      legal_next_actions:actions,tool_call_examples:examples.slice(0,3),
+      current_timeline_receipts:receipts.slice(-4).map(r=>({id:r.id,tool:r.tool,range_us:r.range,modalities:r.modalities})),
+      missing_rendered_modalities:missing,active_issue:this.activeIssue,open_issue_ids:open,
+      ...(issue?{inspection_range_us:issue.affected_range_us,missing_repair_modalities:issue.evidence_dimensions.filter(d=>!this.verifiedDimensions.has(d))}:{}),
+      editing_tools_allowed:this.beforeMutation(state)===null,
+      instruction:'Discover the exact names with tool_search/tool_describe, then invoke tool_call using one legal example shape. Examples supply no editorial decision. record_issue already registers the initial flat diagnosis; select its returned ID, checkpoint, repair, inspect, finish_issue, complete, end_agent_session. Do not add a legacy finalize/validate loop to this flat path. Terminal echo or prose does not invoke these tools.'}
+  }
+
   begin() {
     if (this.phase !== 'idle') throw new Error('Revision session already used on this connection; begin cannot reset attempt counts')
     this.phase = 'initial'
@@ -80,7 +133,23 @@ export class RevisionLoopGuard {
     if (this.phase === 'repair') {
       if (!this.activeIssue) return 'Diagnosis is complete. Select a registered issue before focused inspection; checkpoint before mutation. If none needs repair, conclude_no_repair or complete after closing issues.'
       if (this.verificationPending && !this.isRelevantTimelineInspection(name, args)) return 'Verification requires current timeline evidence overlapping the changed issue range, not unrelated/source-only evidence.'
-      if (this.repairInspections >= 2) return 'Focused inspection budget reached. Make the justified repair now, or finish this issue honestly as unresolved.'
+      if (this.repairInspections >= 2) {
+        // Metadata can consume the exploratory budget without satisfying the
+        // mandatory changed-output modalities. Reserve one bounded attempt per
+        // missing modality; permission to inspect is never evidence of success.
+        const potential: EvidenceDimension[] = name === 'inspect_rendered_audio' ? ['audio', 'speech']
+          : ['vision_inspect', 'inspect_timeline_frame', 'inspect_timeline_range_visuals', 'inspect_timeline_temporal_window'].includes(name) ? ['visual', 'geometry']
+          : name === 'render_timeline_range' ? ['visual', 'audio'] : []
+        const issue = this.recordedIssues.get(this.activeIssue)
+        const missing = issue?.evidence_dimensions.filter(d => !this.verifiedDimensions.has(d) && potential.includes(d) && !this.reservedVerificationAttempts.has(d)) ?? []
+        if (this.verificationPending && missing.length) {
+          missing.forEach(d => this.reservedVerificationAttempts.add(d))
+          return null
+        }
+        return this.verificationPending
+          ? 'Focused inspection budget reached, including required verification attempts. Report review unavailable honestly; do not claim resolution or completion without current evidence.'
+          : 'Focused inspection budget reached. Make the justified repair now, or finish this issue honestly as unresolved.'
+      }
       this.repairInspections++
       return null
     }
@@ -127,7 +196,7 @@ export class RevisionLoopGuard {
     if (this.activeIssue && this.activeIssue !== issueId) throw new Error('Finish the active issue before selecting another')
     if (this.outcomes.has(issueId)) throw new Error(`Issue ${issueId} is already closed`)
     if (!this.activeIssue && this.outcomes.size >= 3) throw new Error('Three repair cycles completed; finalize with remaining issues reported honestly')
-    if (!this.activeIssue) { this.repairInspections = 0; this.retainedRepair = false }
+    if (!this.activeIssue) { this.repairInspections = 0; this.reservedVerificationAttempts.clear(); this.retainedRepair = false }
     this.activeIssue = issueId
     return this.status
   }
@@ -156,6 +225,7 @@ export class RevisionLoopGuard {
     this.rollbackRegrounding = false
     this.verifiedDimensions.clear()
     this.repairInspections = 0
+    this.reservedVerificationAttempts.clear()
   }
 
   /** Called only after ProjectActor successfully restores a checkpoint. No editorial outcome is inferred. */
@@ -174,6 +244,7 @@ export class RevisionLoopGuard {
     this.retainedRepair = false
     this.verifiedDimensions.clear()
     this.repairInspections = 0
+    this.reservedVerificationAttempts.clear()
     this.checkpointSeen = false
     this.rollbackRegrounding = Boolean(this.activeIssue)
     if (this.activeIssue) {
@@ -230,10 +301,15 @@ export class RevisionLoopGuard {
     return { ...observable, state_version: createHash('sha256').update(state).digest('hex'), freshness: 'current_at_acquisition' }
   }
 
-  hasCurrentRenderedEvidence(state: string): boolean {
-    return [...this.evidence.values()].some(r => r.state === state && r.coordinate_space === 'timeline' &&
+  /** A host-observed revision invalidates observations even if content later returns to A.
+   * Keep agent decisions and active repair state; only reacquisition is required. */
+  invalidateAcquiredEvidence() { this.evidence.clear() }
+
+  hasCurrentRenderedEvidence(state: string, required: EvidenceDimension[] = []): boolean {
+    const current=[...this.evidence.values()].filter(r => r.state === state && r.coordinate_space === 'timeline' &&
       ['vision_inspect', 'inspect_timeline_frame', 'inspect_timeline_range_visuals', 'inspect_timeline_temporal_window', 'inspect_rendered_audio', 'render_timeline_range'].includes(r.tool) &&
       r.modalities.some(d => ['visual', 'audio', 'speech'].includes(d) && r.coverage[d]?.length))
+    return current.length>0 && required.every(d=>current.some(r=>r.modalities.includes(d)&&r.coverage[d]?.length))
   }
 
   private currentReceipts(ids: unknown, state: string, range?: [number, number]) {

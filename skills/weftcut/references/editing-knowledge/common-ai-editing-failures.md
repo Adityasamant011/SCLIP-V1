@@ -99,6 +99,6 @@ Context from Sclip's own user research [I]: professional editors' dominant pains
 ## 16. Inset floating video / Partial screen coverage
 **Looks like.** A video scaled down or floating in a corner (e.g. top-right) with giant black voids around it, or an unscaled 1.0x horizontal video inside a vertical frame with massive pillarboxing.
 **Underlying mistake.** Forgetting canvas geometry and leaving default 1.0x transforms instead of fitting the composition.
-**Recognize it.** Check background reviewer `video_coverage` issues; inspect composed frames with `vision_inspect` to verify edge-to-edge coverage.
-**Instead.** Always call `calculate_video_fit` with `mode='cover'` so the video completely fills the entire screen canvas (zero black bars, zero letterboxing/pillarboxing, and never an unintended floating box), unless the user explicitly requests an inset or picture-in-picture layout.
+**Recognize it.** Inspect current reviewer geometry and composed frames. Determine whether the empty region or inset was intentional for this brief.
+**Instead.** Choose `calculate_video_fit` with `cover`, `contain`, or unchanged framing according to the content and brief. Verify subject visibility and layout in actual composed frames; full canvas coverage alone does not establish quality.
 

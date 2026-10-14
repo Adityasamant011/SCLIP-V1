@@ -1,0 +1,698 @@
+{
+  "scope": "Approved technical-core freeze; not creator-ready or publicly launchable",
+  "approved_snapshot_head": "00d48b6fc89932e7ce0fac5f770e5a53f9768035",
+  "preserved_development_branch": "sclip/product-validation",
+  "baseline_branch": "sclip/core-v1-baseline",
+  "annotated_tag": "sclip-core-v1-baseline",
+  "editorial_branch": "sclip/editorial-intelligence-v1",
+  "commit_resolution": "git rev-parse sclip-core-v1-baseline^{commit}",
+  "source_snapshot_manifest_sha256": "38246d3d120dc300ece7356a7a6d49e5fff75298c1f89954028433e91f199f2d",
+  "source_archive_sha256": "b01ec9f7b72a32a052afb8541abe7003a155fa0b7964a7a6c2fc10fb3da2000f",
+  "evidence_manifest_sha256": "078757c8089e65b35860214907e11aa6288937b42d30d15d50115b0c13bb87c7",
+  "runtime_pin_manifest_sha256": "c2684877aad434cc83678c43a25f6e6c225713b217e23c742924fa471d3f302d",
+  "package_manifest": {
+    "package": "acceptance-artifacts/core-v1-20261014/package-verification/mac-arm64/Sclip.app",
+    "signing": "ad-hoc; notarization explicitly disabled; not Developer ID distribution",
+    "files": {
+      "Contents/Resources/app.asar": {
+        "sha256": "0bb9542370359315c8a9c2c93bde94d0f88491a9892b827265721b7fc1a86264",
+        "bytes": 124546174
+      },
+      "Contents/Info.plist": {
+        "sha256": "0f06444554cbdaca64cd593b0f2f0dfe3defd4df92785e7b43d8a1fc51741150",
+        "bytes": 4059
+      },
+      "Contents/MacOS/Sclip": {
+        "sha256": "ffe59adbbb6b1de1246a089ec3aecfcea60c2a6e551b869c793ce9ce0d61c824",
+        "bytes": 34800
+      }
+    }
+  },
+  "approved_changes": [
+    {
+      "path": ".gitignore",
+      "sha256": "aad9b5e1c81fd0b7cd5d7798e208830dff454e997b6477a1ebf3995c1715edcc",
+      "bytes": 1369
+    },
+    {
+      "path": "apps/desktop/.gitignore",
+      "sha256": "fad67c0f5776dbbbc1d03a59d0a7f182c4b3a4f83f8d60b7c081834c4c303751",
+      "bytes": 2164
+    },
+    {
+      "path": "apps/desktop/e2e/acceptance-routing/run.mjs",
+      "sha256": "f52bf99b33f8fd7fca2272e24acd4c51c53a48aa94ffa4a80e400f4236c17176",
+      "bytes": 8341
+    },
+    {
+      "path": "apps/desktop/e2e/acceptance-routing/session-supervisor.test.mjs",
+      "sha256": "18100e55e01fe5d76fad9295139c323a01186c6094947f3c9275441c19ef5ae5",
+      "bytes": 3305
+    },
+    {
+      "path": "apps/desktop/electron-builder.yml",
+      "sha256": "aa0dfc3c16aee600e113b0789a07cd01baed5cfa97ed6f79666b7ad945b39b5c",
+      "bytes": 9905
+    },
+    {
+      "path": "apps/desktop/native/src/mcp/clip_audio.rs",
+      "sha256": "39948db3db64e7c771f8ad1c6ddfa01cd51a8b082783265b19f1345711d1f76f",
+      "bytes": 18044
+    },
+    {
+      "path": "apps/desktop/native/src/mcp/resources.rs",
+      "sha256": "03fbdaa7ab01ec1d5426c3ca1a46e1bb71deccd25770ced3e1b1d36c285d6650",
+      "bytes": 56988
+    },
+    {
+      "path": "apps/desktop/native/src/mcp/tools.rs",
+      "sha256": "26ed7bac254c1205fa35ee83d64b9683088644145b656809b518c228a22749cd",
+      "bytes": 84309
+    },
+    {
+      "path": "apps/desktop/native/src/speech/audio_extract.rs",
+      "sha256": "cd4e4e4b0881ebccb8646cbdbaf93473016dc35d16b14e85eda92d606c008484",
+      "bytes": 12596
+    },
+    {
+      "path": "apps/desktop/native/src/speech/parse/whisper_json.rs",
+      "sha256": "bed37c29681e2d72b66efdff0847e8f21870340182f435bf87da3f2614ff9ff6",
+      "bytes": 11095
+    },
+    {
+      "path": "apps/desktop/native/src/speech/transcript.rs",
+      "sha256": "bca26ad0e459b063c7f267144ef304e1ae9b1c32069c5c50936223a504204239",
+      "bytes": 22142
+    },
+    {
+      "path": "apps/desktop/scripts/after-pack-hermes.mjs",
+      "sha256": "359e68420d4e5029e11d0264ce3f85df235bd4ee63be46dc4174a091764186c3",
+      "bytes": 2061
+    },
+    {
+      "path": "apps/desktop/scripts/after-pack-hermes.test.mjs",
+      "sha256": "569c6dbc04038257a9b4c68ca6d7396cc0ec159d392a4e38f857c887872c92d1",
+      "bytes": 3036
+    },
+    {
+      "path": "apps/desktop/scripts/after-pack-whisper.mjs",
+      "sha256": "d4ee45a957f4a801c6634d11bd2f2b87fb5c3cdfb7fcacb43f294e5be720382d",
+      "bytes": 1138
+    },
+    {
+      "path": "apps/desktop/scripts/after-pack.mjs",
+      "sha256": "14a91752dfaf917fbc7277bcbaf06c22778dd84355db9e51a4221d7eba4f1ccd",
+      "bytes": 1335
+    },
+    {
+      "path": "apps/desktop/scripts/core-foundation-acceptance.mjs",
+      "sha256": "e776af2b912e2634a7770b01b1e9a4e12ee98055fa939c1394b5ba542172df9e",
+      "bytes": 24636
+    },
+    {
+      "path": "apps/desktop/scripts/runtime-pins/hermes-darwin-arm64.json",
+      "sha256": "b59164cf1a8a0968a9006a9c7edd0d4356d11c652e3323d3df40f42266f9da2b",
+      "bytes": 3446
+    },
+    {
+      "path": "apps/desktop/scripts/runtime-pins/whisper-darwin-arm64.json",
+      "sha256": "006596ffd657b17df05a376a86559ca6abab91924be33b631a76ab3386c5c97f",
+      "bytes": 514
+    },
+    {
+      "path": "apps/desktop/scripts/stage-hermes-runtime.mjs",
+      "sha256": "89e8c287145f947989aa8e186d08c715340185aea345d53f5a969e11e72d6f9d",
+      "bytes": 6283
+    },
+    {
+      "path": "apps/desktop/scripts/stage-whisper-runtime.mjs",
+      "sha256": "df8f0c1ffe4db682f28545c340c7f4246a15ca67c4e594c8d6175ade23c86741",
+      "bytes": 5164
+    },
+    {
+      "path": "apps/desktop/scripts/stage-whisper-runtime.test.mjs",
+      "sha256": "367e75bd1a2c729332a1c709b5d0d03a1586b0645c3eb675615d39e7072d15d4",
+      "bytes": 673
+    },
+    {
+      "path": "apps/desktop/src/main/bundledWhisperRuntime.test.ts",
+      "sha256": "30b7e1d5e22cb12f8e26c06eee5a7800acad4fb4ba73826b7ff159db313e5a77",
+      "bytes": 1839
+    },
+    {
+      "path": "apps/desktop/src/main/bundledWhisperRuntime.ts",
+      "sha256": "d1c044b858c8b13cede9d61c32d9dc9c73a5c2bb4ad8ff6a4ab68653142f6470",
+      "bytes": 1826
+    },
+    {
+      "path": "apps/desktop/src/main/index.ts",
+      "sha256": "ef4f50dbf1686ab4a5f5122fd28e84aeda6d59bcfe178343f3df45b32f41337b",
+      "bytes": 146970
+    },
+    {
+      "path": "apps/desktop/src/main/mcp/auditToolInventory.test.ts",
+      "sha256": "3b994cef2f617cca410049cac9f20b977d0b429784ec706b868e8b00e537fe77",
+      "bytes": 38873
+    },
+    {
+      "path": "apps/desktop/src/main/mcp/completionReview.test.ts",
+      "sha256": "5ddef0b1d858369a52b7d736909bab061d450e55020590e1137abc38732d4863",
+      "bytes": 19302
+    },
+    {
+      "path": "apps/desktop/src/main/mcp/index.ts",
+      "sha256": "3f70c52b2b68d5707de77dd92218fd48683db137f66d9d576a0c154b4447572f",
+      "bytes": 18972
+    },
+    {
+      "path": "apps/desktop/src/main/mcp/lifecycle.test.ts",
+      "sha256": "96c95a5f475ce6335a61c5747613a529ce548a41428b0609be1eda9361e63565",
+      "bytes": 7959
+    },
+    {
+      "path": "apps/desktop/src/main/mcp/server.ts",
+      "sha256": "f57144628885e23b765b5e39f0052285ca6a68df99ad73229dde09e5d9c86f75",
+      "bytes": 124230
+    },
+    {
+      "path": "apps/desktop/src/main/model-feature.bundled.test.ts",
+      "sha256": "8672df87b404bb14ec0cf8e09d4df0b0d2acecf910387a4ff67a3fef4321cc43",
+      "bytes": 3732
+    },
+    {
+      "path": "apps/desktop/src/main/model-feature.ts",
+      "sha256": "f4d769f26b309cd6e02250a9db4849a61aa48c5ad1744fdcafc9e92ad3325496",
+      "bytes": 7716
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/completionCheckpoint.test.ts",
+      "sha256": "a9f22ab5a01abe458f992600de547d038f7e53a3da302647f7de84346bc68f67",
+      "bytes": 13392
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/completionCheckpoint.ts",
+      "sha256": "10f1d0f06fc7c63098c1bff9199bf958f91a51479b6c98c5babc19ac2c6df2e5",
+      "bytes": 13898
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/completionReview.ts",
+      "sha256": "0de2adce830600b95254d79c944c442cfcc94228ca8e6cae2d35168197c250fc",
+      "bytes": 5973
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/creatorMemoryGuidance.test.ts",
+      "sha256": "0f5480150c91560f22eeaf47f9bce323213d98c237bb607e0b065afc00c7d2f9",
+      "bytes": 1658
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/creatorMemoryGuidance.ts",
+      "sha256": "030fa2ac24c4ecde2034d87a4a5873f6313d1c1059aef4f3214a1c79ee1a2bbd",
+      "bytes": 2307
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/creatorStyle.ts",
+      "sha256": "18c5b6e56839eb0a218e8f64fbada3483f7f9abbc786dc603cb5a499e55bf5df",
+      "bytes": 37293
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/creatorStyleMcp.test.ts",
+      "sha256": "cf5b493a7ac3364b47c03005c1c1f07f38b4177be8a18cf84d92ef6c068dd156",
+      "bytes": 3090
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/creatorStyleTool.ts",
+      "sha256": "fc4cf317eb040d500fe4023f7ae4d5885c5a4c5c8bb9ce5f23eb80ab82689607",
+      "bytes": 4014
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/editingBrief.test.ts",
+      "sha256": "468f50746eee1655eb05a3850b49628426e10a08548ff64ec2774f50225ec655",
+      "bytes": 2924
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/editingBrief.ts",
+      "sha256": "6d190e259d65aa796a09f3001a52d72aee93ca154d805b065111b3996f8d2a86",
+      "bytes": 4170
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/editorialEvidencePacket.test.ts",
+      "sha256": "4e54fe94ff5f681057c10a343d7a2e7e0787093322c393c501a475cdc7c3473e",
+      "bytes": 8400
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/editorialEvidencePacket.ts",
+      "sha256": "9b70ae32ebab8c434e1a3bfebef0b48dea218c8bdf9df7808173828e55bfa8c4",
+      "bytes": 11808
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/evidenceModalities.ts",
+      "sha256": "ebaa7b40c8321720f2c94196fd55f6380fba8edbdd15009482ef543b99dde746",
+      "bytes": 3318
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/finalOutput.test.ts",
+      "sha256": "80509e3b68093204f6aad28c3c44f5ae732482cafae4b4500e4b96cce88fae22",
+      "bytes": 8025
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/finalOutput.ts",
+      "sha256": "03772581a13d05ae6659fb9d2d67b1d030466ac968e9c3550d05e46358d739c1",
+      "bytes": 11557
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/hermesBridge.test.ts",
+      "sha256": "f1e7e28590a61130d92665014816bcd76391b259050e65924e109d9ec63838dd",
+      "bytes": 4394
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/hermesBridge.ts",
+      "sha256": "a4737829563e3e7d2fae68aef512bcd34d10ab7bcfad377c65d48663064dcab6",
+      "bytes": 12184
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/hermesEditorToolContracts.test.ts",
+      "sha256": "d4500691335571336e471ee9a714efb0bc01947f534e8ac20865870fbeedbe34",
+      "bytes": 7482
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/hermesEditorToolContracts.ts",
+      "sha256": "fe319324064189adb82c661d0d1e4e08bc56a1d1bc3ec28ff73df78919bf03f6",
+      "bytes": 7796
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/hermesLifecycle.test.ts",
+      "sha256": "8e11c2678686b49e3c1606d4c9f37cb0c53a7d53088585b188e5ff5130d54a53",
+      "bytes": 2140
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/hermesLifecycle.ts",
+      "sha256": "e913547abab8e13326c8fc4add0fe9b9ce2cc269e0a3efe392ef8abdd0eeda64",
+      "bytes": 4362
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/hermesPackagedLaunch.test.ts",
+      "sha256": "0d769919db3cdef0c5dd88270339aadf5024b14f464976d0b916e2631cde7817",
+      "bytes": 1536
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/hermesRuntime.ts",
+      "sha256": "473fb4f61eeaa2a5d570c7436d93ab45ac78da7ede33aa259b8893425092491b",
+      "bytes": 19440
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/hermesSettings.test.ts",
+      "sha256": "6af0c65d6b2d6e5c5d2225b558de260c2b6e574dd7d88ba3ae5bd63d8fd31457",
+      "bytes": 14168
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/hermesTerminalRuntime.test.ts",
+      "sha256": "a46c393bc8d4b94b078e564b568c8da5489da68a4b02d52ae116add28fe94af4",
+      "bytes": 12663
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/hermesTerminalRuntime.ts",
+      "sha256": "67ae7045d34179c83293b1ede7e483134331125c24aa6bf5ceceab30f27aaca4",
+      "bytes": 16076
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/kokoroTtsWorker.test.ts",
+      "sha256": "0158733fcdc7734655cbfaaed5f48ebc30cdd05a1807170915531350f6f183f6",
+      "bytes": 4318
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/localTts.cache.test.ts",
+      "sha256": "2439432c44d467805c40e3900fa7991d8e63d8b0f1c84b899f71704fe8f6011d",
+      "bytes": 5057
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/localTts.ts",
+      "sha256": "e13eff1e3fb2ce3d8748edd6e220f6ec642bb7cc0130251bfdeff56e7ede5192",
+      "bytes": 8604
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/rangeRender.cancellation.test.ts",
+      "sha256": "0f03a6855d4c69e7418cf286d1aa358e612b31219c763c14f79f7c466c9dbd92",
+      "bytes": 1692
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/rangeRender.ts",
+      "sha256": "742091d2062c8bf812a0072796e038d78d483b6683b3d78b66ada79bdfb0f711",
+      "bytes": 14221
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/renderedAudioEvidence.test.ts",
+      "sha256": "84f179ee5e5c30dc70b1601fd66790cc693ecc140b6a6d5300c02e6acbd7f9f5",
+      "bytes": 8371
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/renderedAudioEvidence.ts",
+      "sha256": "c61424451e78d8d84784b103c5c7c262bbf92ef53536b3cf2e5fd4655f55afd0",
+      "bytes": 9413
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/reviewProgress.test.ts",
+      "sha256": "18507892f37efdd5d56cdab984cec750794ed8c1d98ae72e5d0ebb8959e88a42",
+      "bytes": 6053
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/reviewProgress.ts",
+      "sha256": "bb3a6ec80ada51fdb26d65abcb9696c103d5d86b31e69b8fdf267ea5f9049955",
+      "bytes": 2741
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/revisionLoopGuard.ts",
+      "sha256": "d3b6e7ef0e54fb8c6ab8f5aa34fc8cb98c32ec4e459d0cb805a630afecd4f101",
+      "bytes": 33670
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/sourceObservationIndex.test.ts",
+      "sha256": "74b372e597ffb12c1324fdd48015ef0c25b6a1919c8d29e117e6eb68ecaf0aad",
+      "bytes": 5622
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/sourceObservationIndex.ts",
+      "sha256": "7eee28e3162302e69b2b7ec35d9edca3ac67cc64e763cbe1d0bc91a523cb9343",
+      "bytes": 14934
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/sourceUnderstanding.test.ts",
+      "sha256": "8501b41ca8712197d126ac75f6550dc5b7cc8bf04558fb6d88f912e63d9392da",
+      "bytes": 10043
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/sourceUnderstanding.ts",
+      "sha256": "06b977a604a66f8be509e96cf1ea2922735018da7ab0259190542182819f2b88",
+      "bytes": 10408
+    },
+    {
+      "path": "apps/desktop/src/main/sclip/timelineContext.ts",
+      "sha256": "159a225eb80b2accede1f9ce821f0a0d58a45871bf8248bf19b355266f33ff13",
+      "bytes": 14728
+    },
+    {
+      "path": "apps/desktop/src/main/state/__tests__/hybrids.test.ts",
+      "sha256": "f53bf3ba0c8b9d5230688d3cbad54bc59d530b0af2eb96f9b558ef0b0904b09e",
+      "bytes": 111194
+    },
+    {
+      "path": "apps/desktop/src/main/state/__tests__/mcp.skill-conformance.test.ts",
+      "sha256": "9d8c2244b02c553550f229dc6fc8179b5a424fe434a23cd17a65238376494642",
+      "bytes": 6812
+    },
+    {
+      "path": "apps/desktop/src/main/state/__tests__/repair-transaction.test.ts",
+      "sha256": "9e7b6f71523b98e04a0c13a1b28472e61294900cf75108c89e1b5154d280d3a5",
+      "bytes": 10856
+    },
+    {
+      "path": "apps/desktop/src/main/state/hybrids.ts",
+      "sha256": "f9e97b162ea767d4db32fb63001353b63707cec08a5e15c33f21513b4b43a3df",
+      "bytes": 65004
+    },
+    {
+      "path": "apps/desktop/src/main/state/mcp-commands.test.ts",
+      "sha256": "4fdf7252ae5d0beffc66427800c53ce5845cf11a173a069284c4fe18721f0b7f",
+      "bytes": 2619
+    },
+    {
+      "path": "apps/desktop/src/main/state/mcp-commands.ts",
+      "sha256": "e9e3dd8c01afa2a0084b42c108e6fdeee66c5107dd2c4b6eb3afc5176cb8ff6a",
+      "bytes": 171767
+    },
+    {
+      "path": "apps/desktop/src/main/state/mutations/update.test.ts",
+      "sha256": "16ca1f66da5d1d58097a649d36adc56c05c2b5d0d5c2274741ba69e8958f441a",
+      "bytes": 5603
+    },
+    {
+      "path": "apps/desktop/src/main/state/mutations/update.ts",
+      "sha256": "641a57509d724fa4f77bffad3eed4e1201fd6d064fa758b232c25bc165743084",
+      "bytes": 2659
+    },
+    {
+      "path": "apps/desktop/src/main/state/repairTransaction.ts",
+      "sha256": "be6d8f1af76ed62f0e516d5a75a2e961393827be1adc33388326cb88f33f2f21",
+      "bytes": 4020
+    },
+    {
+      "path": "apps/desktop/src/main/state/shotCompute.test.ts",
+      "sha256": "3689f15aec799adb009c9bd76c9dd26716b06c85c85bb26a27ee35c2b73b0dc2",
+      "bytes": 1366
+    },
+    {
+      "path": "apps/desktop/src/main/state/shotCompute.ts",
+      "sha256": "a5754887c0b58f46d4188b71a0618105d89d6c2b21bd85cf39f1dc143f5207e1",
+      "bytes": 1124
+    },
+    {
+      "path": "apps/desktop/src/main/state/ts-actor-host.ts",
+      "sha256": "76955f3667c76c524aa2b244e6954a57af5da712b8588a5e2e0aadc7b49ac44d",
+      "bytes": 29170
+    },
+    {
+      "path": "apps/desktop/src/renderer/App.tsx",
+      "sha256": "69a60ed84191bc2a57ec82ea810644ffd3c76020cc2dc40f421b1c615a123ef9",
+      "bytes": 56224
+    },
+    {
+      "path": "apps/desktop/src/renderer/agent/ReviewStatus.test.tsx",
+      "sha256": "189b441973874572e6e57fb599ff4a469615b536dd210aac52d9f146f975879b",
+      "bytes": 1113
+    },
+    {
+      "path": "apps/desktop/src/renderer/agent/ReviewStatus.tsx",
+      "sha256": "f6172a6bbca2c922175af58629835e03842b575624fd92837e469dd9c43b16d6",
+      "bytes": 1708
+    },
+    {
+      "path": "apps/desktop/src/renderer/app/useExportFlow.test.ts",
+      "sha256": "09c6acf4d28c7fcccdbad40c74d1b70c0db275a03f88e2731a6908b69ab27514",
+      "bytes": 13963
+    },
+    {
+      "path": "apps/desktop/src/renderer/app/useExportFlow.ts",
+      "sha256": "b136e97a27b4cbe44c5ecdd52cf96b7fbefc73b3b76987d461fd559810742d2d",
+      "bytes": 44065
+    },
+    {
+      "path": "apps/desktop/src/renderer/panels/ExportPanel.tsx",
+      "sha256": "af205d57ce5a9fe0df0e042532327f6ed0255c51b0f31366595776e8ce668b94",
+      "bytes": 7148
+    },
+    {
+      "path": "apps/desktop/src/renderer/preview/PreviewSurface.tsx",
+      "sha256": "46dd6678d107f0811f2764cd4b50a82dee54dc34edeb751d559536e6f2ca4a7b",
+      "bytes": 6863
+    },
+    {
+      "path": "apps/desktop/src/renderer/render/PixiPreview.tsx",
+      "sha256": "9eab2b6eb3d8490d9166d09f0f3b29fa797f33948047b1d376087ae4ec67dcdf",
+      "bytes": 65206
+    },
+    {
+      "path": "apps/desktop/src/renderer/render/pixiPreviewFlag.ts",
+      "sha256": "b77d9db4da9f345915ca4dfefead4daccced46d65db5d1d25cd4f99886878b56",
+      "bytes": 3247
+    },
+    {
+      "path": "apps/desktop/src/renderer/render/worker/runExport.ts",
+      "sha256": "57fa6e39f6f6ea881aec6735d1c004f2abbb9268a35027d76f97de606b102050",
+      "bytes": 21154
+    },
+    {
+      "path": "apps/desktop/src/shared/content-catalog.ts",
+      "sha256": "b5f6e4b94848a536ad40fa4937888e15e411d2b67af6e2f81b85b386d4cf814f",
+      "bytes": 17563
+    },
+    {
+      "path": "apps/desktop/src/vision/sidecar/kokoro_tts_worker.py",
+      "sha256": "3b3e28dfd0dca47812cfac57d8e335a2fb60fd41404c00d47b7084f3b6739e2c",
+      "bytes": 6580
+    },
+    {
+      "path": "docs/acceptance/SCLIP_PHASE_1_AUTONOMY_REPAIR.md",
+      "sha256": "dee9d1cd2168c561799e79d79ad3674574c61a99443e587b997ef08cd29e2749",
+      "bytes": 46473
+    },
+    {
+      "path": "docs/acceptance/SCLIP_PHASE_2_COMPLETION_ACCEPTANCE.md",
+      "sha256": "f2dca80377ee4d598e710de8adabba7b82915609d8772a6739fe69a0289070e2",
+      "bytes": 58564
+    },
+    {
+      "path": "docs/acceptance/SCLIP_V1_FINAL_RELEASE_READINESS.md",
+      "sha256": "865119978a74af4617b37710850fd5fb365972b036ef4e41f5353c815656042e",
+      "bytes": 58139
+    },
+    {
+      "path": "docs/acceptance/SCLIP_V1_REMAINING_WORK.md",
+      "sha256": "f7c08c677464566d89b9afb960923f6549a228c5159fbb2df45c16b0cc2cfdf8",
+      "bytes": 35404
+    },
+    {
+      "path": "docs/implementation/SCLIP_V1_FINAL_IMPLEMENTATION_REPORT.md",
+      "sha256": "8f12255569c0e5463dad5946cf85af253b832bf1dc50c805bc72f5c4c1153047",
+      "bytes": 6438
+    },
+    {
+      "path": "docs/implementation/SCLIP_V1_FINISHING_LEDGER.md",
+      "sha256": "0e77e29e0ca881c2898612676f2cfdcdfdee3e6621f2ad76b3d491e81e7c70b7",
+      "bytes": 73819
+    },
+    {
+      "path": "docs/implementation/SCLIP_V1_FOUNDATION_COMPLETION.md",
+      "sha256": "bb373d63b05c851c83918c89594f3e7cc146bbc21223babddee16b4b13b80306",
+      "bytes": 8408
+    },
+    {
+      "path": "docs/implementation/SCLIP_V1_M1_SAFETY.md",
+      "sha256": "d95fa4db6818c9a6fa13d0222f69c73ef2786ba5a4d585564ba0d2b537a351c8",
+      "bytes": 6681
+    },
+    {
+      "path": "docs/implementation/SCLIP_V1_M2_REVIEW.md",
+      "sha256": "762456f5e1a9eabd6315def6acdd1a91bf502c805e3c145c2a9791dd08455595",
+      "bytes": 11645
+    },
+    {
+      "path": "docs/implementation/SCLIP_V1_M5_PACKAGING.md",
+      "sha256": "5288f4c0d43f3d5cc672232084df41d3b52f70de54fb871ed4f3326e5561fec2",
+      "bytes": 10117
+    },
+    {
+      "path": "skills/weftcut/SKILL.md",
+      "sha256": "b4c3cd141b36aa50876789a9e40e3170a4ed13a7ce96acc9aa4d50e88ea2b12d",
+      "bytes": 40021
+    },
+    {
+      "path": "skills/weftcut/references/editing-knowledge/common-ai-editing-failures.md",
+      "sha256": "298ee7375efbdea61b8993f7fa992ba1780cc3355a7b47bbf56ee6da0b68a53a",
+      "bytes": 13253
+    },
+    {
+      "path": "skills/weftcut/references/editing-knowledge/visual-editing.md",
+      "sha256": "8aa577f34eb8055fbf90b6412bc00db59e5f7d03869ecac49440b50737887290",
+      "bytes": 22333
+    }
+  ],
+  "representative_evidence": {
+    "packaged-native-valid-isolated/title.mp4": {
+      "sha256": "9859fb5a03382cf78be2b36b78f545f74a1e8ca4d756cc91a4f562bec1a63a06",
+      "bytes": 16858
+    },
+    "packaged-native-valid-isolated/native-final-project.json": {
+      "sha256": "61eace5b2b2079c1707398d16d0311686913f3d182e327dc1d3c73a85dd5d453",
+      "bytes": 5359
+    },
+    "packaged-native-gap/title.mp4": {
+      "sha256": "8762d2162cdd589a85be3c9e8a5228594ba06b70d6a432ab434ccad254ecfe41",
+      "bytes": 88017
+    },
+    "packaged-native-gap/native-final-project.json": {
+      "sha256": "97f5c820b53864bab344895caf46903d76f0ebd63eb33c69fbf66c6b19ee4dab",
+      "bytes": 7234
+    },
+    "packaged-native-offscreen/title.mp4": {
+      "sha256": "be8ebaa9c4164a6bf5e0951abf1c01299f1d4b6c2e1049611c4380e8a5919450",
+      "bytes": 16691
+    },
+    "packaged-native-offscreen/final-project.json": {
+      "sha256": "592fc81d200d8f9aad1266d2a04e6593f081dc7326c33ad63902823545460bf4",
+      "bytes": 5359
+    },
+    "typescript-final-controlled.log": {
+      "sha256": "c44076d3349aa189634cbf9a26803fa65b416e2ebf2403315edf0c880fd9ddeb",
+      "bytes": 10757
+    },
+    "verification-budget-integration.log": {
+      "sha256": "265f79220ea94c38489873b6a6bf9c9dce5134d994d8a316b0e261b80f83a328",
+      "bytes": 238
+    },
+    "rust-regression.log": {
+      "sha256": "9403e6af44cac637c331252db9ee95bc9863da9e72d58b1daf38a882ddc85d7b",
+      "bytes": 56756
+    },
+    "scripts-final.log": {
+      "sha256": "442282d01c74210457a40bbe8cb4212268eb9d8e36cd098afff9a3ae878b603c",
+      "bytes": 15423
+    },
+    "signature-verification-final.log": {
+      "sha256": "b96744926d35b2886b641228d929936bd54ee7c11b71301a4a2a173fb7ce1062",
+      "bytes": 3592
+    }
+  },
+  "dependency_versions": {
+    "node": "24.10.0",
+    "electron": "44.1.1",
+    "hermes": "0.20.4",
+    "bundled_python": "3.11.15",
+    "hermes_source": "515354038a3c383b38b43aba6959ceddd858bb12",
+    "whisper": "1.9.1",
+    "ggml": "0.15.2",
+    "configured_local_python": "3.14.2",
+    "onnxruntime": "1.30.0",
+    "kokoro_onnx": "0.4.7",
+    "sensevoice_runtime": "sherpa-onnx1.13.4",
+    "qwen_model": "mlx-community/Qwen3-VL-2B-Instruct-4bit",
+    "qwen_revision": "9c4f5209e57b31f4b9dfba735de3fb983739c9cc"
+  },
+  "dependency_inputs": {
+    "package-lock.json": "cc8c04ece929d42db3bda5e219693f18a2075001968b222b140fb2a4ce805c27",
+    "apps/desktop/native/Cargo.lock": "ee3e7cf09ea344606c4920e5dfa63bd7bb0781c9bd696796b8d5987959a53075",
+    "apps/desktop/scripts/runtime-pins/hermes-darwin-arm64.json": "b59164cf1a8a0968a9006a9c7edd0d4356d11c652e3323d3df40f42266f9da2b",
+    "apps/desktop/scripts/runtime-pins/whisper-darwin-arm64.json": "006596ffd657b17df05a376a86559ca6abab91924be33b631a76ab3386c5c97f"
+  },
+  "excluded_work": [
+    ".scratch/phase4b-editorial-execution/report.md",
+    ".scratch/phase4b-editorial-execution/spec.md",
+    "apps/desktop/:memory:.ses",
+    "apps/desktop/src/vision/sidecar/__pycache__/audio_analyzer.cpython-314.pyc",
+    "docs/audits/SCLIP_FINAL_POST_REPAIR_AUDIT_2026-10-12/BUGS_AND_ARCHITECTURAL_GAPS.md",
+    "docs/audits/SCLIP_FINAL_POST_REPAIR_AUDIT_2026-10-12/CREATOR_MEMORY_AND_STYLE.md",
+    "docs/audits/SCLIP_FINAL_POST_REPAIR_AUDIT_2026-10-12/EVIDENCE_INDEX.md",
+    "docs/audits/SCLIP_FINAL_POST_REPAIR_AUDIT_2026-10-12/EXECUTIVE_VERDICT.md",
+    "docs/audits/SCLIP_FINAL_POST_REPAIR_AUDIT_2026-10-12/FINAL_RECOMMENDATIONS.md",
+    "docs/audits/SCLIP_FINAL_POST_REPAIR_AUDIT_2026-10-12/FULL_ARCHITECTURE.md",
+    "docs/audits/SCLIP_FINAL_POST_REPAIR_AUDIT_2026-10-12/HERMES_AGENTICNESS_AUDIT.md",
+    "docs/audits/SCLIP_FINAL_POST_REPAIR_AUDIT_2026-10-12/HERMES_TOOL_COVERAGE.csv",
+    "docs/audits/SCLIP_FINAL_POST_REPAIR_AUDIT_2026-10-12/MCP_TOOL_COVERAGE.csv",
+    "docs/audits/SCLIP_FINAL_POST_REPAIR_AUDIT_2026-10-12/NATIVE_INTERFACE_COVERAGE.csv",
+    "docs/audits/SCLIP_FINAL_POST_REPAIR_AUDIT_2026-10-12/PHASE1_PHASE2_FIX_VERIFICATION.md",
+    "docs/audits/SCLIP_FINAL_POST_REPAIR_AUDIT_2026-10-12/REAL_HERMES_VIDEO_ACCEPTANCE.md",
+    "docs/audits/SCLIP_FINAL_POST_REPAIR_AUDIT_2026-10-12/RELIABILITY_AND_PERFORMANCE.md",
+    "docs/audits/SCLIP_FINAL_POST_REPAIR_AUDIT_2026-10-12/REVIEWER_AND_COMPLETION.md",
+    "docs/audits/SCLIP_FINAL_POST_REPAIR_AUDIT_2026-10-12/SENSES_AND_CROSS_MODAL.md",
+    "docs/audits/SCLIP_FULL_SYSTEM_AUDIT_2026-10-11.md",
+    "docs/audits/SCLIP_TOOL_COVERAGE_MATRIX_2026-10-11.csv",
+    "docs/audits/SCLIP_TOOL_COVERAGE_MATRIX_2026-10-11.json",
+    "docs/audits/SCLIP_VERIFICATION_PASS_2/ANTIGRAVITY_CLAIMS_RECONCILIATION.md",
+    "docs/audits/SCLIP_VERIFICATION_PASS_2/ARCHITECTURE.md",
+    "docs/audits/SCLIP_VERIFICATION_PASS_2/BATCH_RECOVERY_RESULTS.md",
+    "docs/audits/SCLIP_VERIFICATION_PASS_2/BUGS_AND_GAPS.md",
+    "docs/audits/SCLIP_VERIFICATION_PASS_2/CONDITIONAL_DISABLED_TOOLS.csv",
+    "docs/audits/SCLIP_VERIFICATION_PASS_2/CONDITIONAL_DISABLED_TOOLS.json",
+    "docs/audits/SCLIP_VERIFICATION_PASS_2/COUNTS.json",
+    "docs/audits/SCLIP_VERIFICATION_PASS_2/DEFERRED_TOOL_MATRIX.csv",
+    "docs/audits/SCLIP_VERIFICATION_PASS_2/FINAL_VERDICT.md",
+    "docs/audits/SCLIP_VERIFICATION_PASS_2/HERMES_INSTRUCTIONS_AUDIT.md",
+    "docs/audits/SCLIP_VERIFICATION_PASS_2/HERMES_NATIVE_TOOL_MATRIX.csv",
+    "docs/audits/SCLIP_VERIFICATION_PASS_2/HERMES_NATIVE_TOOL_MATRIX.json",
+    "docs/audits/SCLIP_VERIFICATION_PASS_2/INSTRUCTION_RUNTIME_READS.json",
+    "docs/audits/SCLIP_VERIFICATION_PASS_2/INTEGRITY.json",
+    "docs/audits/SCLIP_VERIFICATION_PASS_2/MCP_TOOL_MATRIX.csv",
+    "docs/audits/SCLIP_VERIFICATION_PASS_2/MCP_TOOL_MATRIX.json",
+    "docs/audits/SCLIP_VERIFICATION_PASS_2/MEMORY_STYLE_RESULTS.md",
+    "docs/audits/SCLIP_VERIFICATION_PASS_2/NATIVE_WEFTCUT_INVENTORY.csv",
+    "docs/audits/SCLIP_VERIFICATION_PASS_2/NATIVE_WEFTCUT_INVENTORY.json",
+    "docs/audits/SCLIP_VERIFICATION_PASS_2/PROGRESS_LEDGER.md",
+    "docs/audits/SCLIP_VERIFICATION_PASS_2/REAL_HERMES_NEMOTRON_RESULTS.json",
+    "docs/audits/SCLIP_VERIFICATION_PASS_2/REAL_HERMES_NEMOTRON_RESULTS.md",
+    "docs/audits/SCLIP_VERIFICATION_PASS_2/REVIEWER_RESULTS.md",
+    "docs/audits/SCLIP_VERIFICATION_PASS_2/SENSES_RESULTS.md",
+    "docs/audits/SCLIP_VERIFICATION_PASS_2/TEST_EVIDENCE_INDEX.md",
+    "docs/audits/SCLIP_VERIFICATION_PASS_2/UI_INTERNAL_CAPABILITY_INVENTORY.csv",
+    "docs/audits/SCLIP_VERIFICATION_PASS_2/UI_INTERNAL_CAPABILITY_INVENTORY.json",
+    "index.js",
+    "ts-actor-host-DbS6bu1F.js"
+  ]
+}

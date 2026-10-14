@@ -121,3 +121,16 @@ describe('atomic Hermes repair transactions', () => {
     expect(run([{kind:'update_layer',layer_id:v,patch:{t_end_us:12_000_000}}]).ok).toBe(false);expect(actor.snapshot()).toBe(before)
   })
 })
+
+it('diagnoses stringified/alias repair arguments without accepting or committing them',()=>{
+ const {actor,v,version}=fixture(),before=actor.snapshot(),history=actor.historyStatus().len
+ for(const argumentsObject of [
+  {expected_state_version:version(),reason:'Synthetic invalid representation',operations:JSON.stringify([{kind:'update_layer_params',layer_id:v,patch:{kind:'VideoClip',opacity:.8}}])},
+  {current_state_version:version(),reason:'Synthetic alias',operations:[]},
+ ]){
+  const result=actor.mcpCall('apply_repair_transaction',JSON.stringify(argumentsObject))
+  expect(result.ok).toBe(false)
+  if(!result.ok)expect(JSON.stringify(result.error)).toContain('expected_state_version, reason, operations')
+  expect(actor.snapshot()).toBe(before);expect(actor.historyStatus().len).toBe(history)
+ }
+})

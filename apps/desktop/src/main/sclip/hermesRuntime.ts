@@ -144,16 +144,15 @@ export class HermesRuntime {
   }
 
   private resolveLaunch(): LaunchSpec {
+    if (this.options.isPackaged) {
+      const executable = path.join(this.options.resourcesPath, 'hermes', process.platform === 'win32' ? 'hermes.exe' : 'hermes')
+      if (!fs.existsSync(executable)) throw new Error('Bundled Hermes runtime is missing')
+      return { command: executable, args: ['gateway', 'run', '--external-supervisor', '--replace'], cwd: path.dirname(executable) }
+    }
     const explicit = this.options.executableOverride?.trim()
     if (explicit) {
       if (!fs.existsSync(explicit)) throw new Error('Configured Hermes executable does not exist')
       return { command: explicit, args: ['gateway', 'run', '--external-supervisor', '--replace'], cwd: path.dirname(explicit) }
-    }
-    if (this.options.isPackaged) {
-      const executable = path.join(this.options.resourcesPath, 'hermes', process.platform === 'win32' ? 'hermes.exe' : 'hermes')
-      if (fs.existsSync(executable)) {
-        return { command: executable, args: ['gateway', 'run', '--external-supervisor', '--replace'], cwd: path.dirname(executable) }
-      }
     }
     const source = this.options.sourceOverride?.trim()
     if (!source) {
@@ -266,7 +265,9 @@ export function writeHermesProfile(
   try { previous = parseYaml(fs.readFileSync(target, 'utf8')) ?? {} } catch { /* New or legacy profile. */ }
   const capabilityGuidance = 'Capability reporting: describe something as AVAILABLE NOW only when the current session tool definitions or current deferred tool_search/tool_describe catalog expose it and its prerequisites are configured. Requested toolset names and installed skills are not proof of availability. Distinguish OPTIONAL / NOT CONFIGURED and NOT AVAILABLE IN THIS SESSION when appropriate. Before listing all tools, inspect the current catalog; do not invent names or counts, count skills as callable tools, or confuse server tools with protocol methods. Hermes-generated MCP utility wrappers are callable only when explicitly present in the current tool catalog; distinguish them from server-registered editing tools. Generic terminal/API access does not establish that a specific web search or authenticated service is configured. If configuration has not been checked, say it is unverified.'
   const previousPrompt = typeof previous.agent?.system_prompt === 'string' ? previous.agent.system_prompt : ''
-  const systemPrompt = previousPrompt.includes(capabilityGuidance) ? previousPrompt : [previousPrompt, capabilityGuidance].filter(Boolean).join('\n\n')
+  const discoveryGuidance = 'Deferred MCP calls: invoke native tool_call with name and arguments at the top level. Its JSON arguments have exactly the shape {"name":"mcp__weftcut__get_timeline_context","arguments":{}} for this no-argument example; discover the actual target with tool_search/tool_describe. For an edit, put only that target schema\'s fields inside arguments. Do not wrap the whole call in another arguments object, and do not put another name/arguments wrapper inside the target arguments. A missing name error means repair the outer tool_call shape; missing target fields means repair the inner arguments against tool_describe. An argument/schema error is not a lost MCP connection and the rejected tool was not invoked. Diagnose that call rather than editing MCP/provider configuration or replacing discovery with CLI workarounds. Do not launch another Hermes agent to do this editing task. Use this current native session and its tools; a proposed edit or memory entry is not an applied mutation. Confirm the mutation result and current state before claiming it happened.'
+  const creatorRoutingGuidance = 'Creator style routing: creator corrections and preferences belong in the canonical mcp__weftcut__creator_style_memory tool. Discover its current schema, retrieve action=context and relevant evidence details before interpreting, and use the returned creator identity, fresh revision/version and actual evidence IDs for any justified hypothesis or maintenance write. YOU choose the meaning, scope, applicability, uncertainty and whether to learn; a single correction is not a universal rule, and your own output is not creator confirmation. Decline learning when the evidence is insufficient. Do not put creator style interpretations into generic memory, USER.md or MEMORY.md: those entries bypass the canonical evidence and creator controls. Generic memory remains available for non-style facts. Current user instructions override remembered preferences. Never invent support, approve a candidate yourself, copy another creator\'s preferences or automatically apply a subjective correction.'
+  const systemPrompt = [previousPrompt, ...[capabilityGuidance, discoveryGuidance, creatorRoutingGuidance].filter(guidance => !previousPrompt.includes(guidance))].filter(Boolean).join('\n\n')
   const terminalCwd = typeof previous.terminal?.cwd === 'string' ? previous.terminal.cwd : '.'
 
   const modelLines = [
@@ -304,16 +305,16 @@ export function writeHermesProfile(
 
   // Memory controls are supported Hermes settings, not credentials. Preserve
   // deliberate user choices instead of silently resetting them on reconnect.
-  const supported = ['memory', 'skills'] as const
+  const supported = ['memory', 'skills', 'plugins'] as const
   const memoryConfig = supported.filter(key => previous[key] && typeof previous[key] === 'object')
     .map(key => `${key}: ${JSON.stringify(previous[key])}`).join('\n')
   // Creator learning uses foreground Hermes. Do not silently spawn an extra
   // model to curate it; retain a user's explicit supported setting if present.
   const backgroundEnabled = previous.auxiliary?.background_review?.enabled ?? false
   const backgroundConfig = typeof backgroundEnabled === 'boolean'
-    ? `auxiliary:\n  background_review:\n    enabled: ${backgroundEnabled}\n` : ''
+    ? `auxiliary:\n  background_review:\n    enabled: ${backgroundEnabled}\n  title_generation:\n    enabled: ${previous.auxiliary?.title_generation?.enabled === true}\n` : ''
 
-  fs.writeFileSync(`${target}.tmp`, `${config}${memoryConfig}\n${backgroundConfig}`, { encoding: 'utf8', mode: 0o600 })
+  fs.writeFileSync(`${target}.tmp`, `${config}${memoryConfig}\n${backgroundConfig}${typeof previous.compression?.enabled === 'boolean' ? `compression:\n  enabled: ${previous.compression.enabled}\n` : ''}`, { encoding: 'utf8', mode: 0o600 })
   fs.renameSync(`${target}.tmp`, target)
   try { fs.chmodSync(target, 0o600) } catch { /* Windows lacks POSIX modes. */ }
 }
@@ -332,7 +333,7 @@ export function initializeCreatorHermesControls(base: string, home: string): voi
   const skills = pick('skills', ['creation_nudge_interval', 'write_approval'])
   const enabled = typeof config.auxiliary?.background_review?.enabled === 'boolean' ? config.auxiliary.background_review.enabled : false
   fs.mkdirSync(home, { recursive: true, mode: 0o700 })
-  fs.writeFileSync(path.join(home, 'config.yaml'), `memory: ${JSON.stringify(memory)}\nskills: ${JSON.stringify(skills)}\nauxiliary:\n  background_review:\n    enabled: ${enabled}\n`, { mode: 0o600 })
+  fs.writeFileSync(path.join(home, 'config.yaml'), `memory: ${JSON.stringify(memory)}\nskills: ${JSON.stringify(skills)}\nauxiliary:\n  background_review:\n    enabled: ${enabled}\n  title_generation:\n    enabled: ${config.auxiliary?.title_generation?.enabled === true}\n${typeof config.compression?.enabled === 'boolean' ? `compression:\n  enabled: ${config.compression.enabled}\n` : ''}`, { mode: 0o600 })
 }
 
 /** Local learning must never start auxiliary inference. Retain explicit settings

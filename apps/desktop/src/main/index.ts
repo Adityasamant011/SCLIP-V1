@@ -1,3 +1,4 @@
+import { shotCompute } from './state/shotCompute.js'
 import { createAudioUnderstanding, managedAudioPaths, prepareAudioRuntime } from './sclip/audioUnderstanding'
 import path from 'node:path'
 import { sourceSignature } from './state/mutations/textCorrection.js'
@@ -66,6 +67,7 @@ import { contentPlatformKey } from '../shared/content-download.js'
 import { downloadItem, itemStatus, speechAutofillPlan, vlmAutofillPlan, sweepStalePartials, type ContentDeps } from './contentDownload.js'
 import { ContentQueue } from './contentQueue.js'
 import { createModelFeature } from './model-feature.js'
+import { bundledWhisperRuntime } from './bundledWhisperRuntime.js'
 import { ModelManager } from './model-manager.js'
 import { MODEL_EVENTS, type ModelUseRequest, type ModelFamily } from '../shared/inference-models.js'
 
@@ -781,24 +783,21 @@ app.whenReady().then(async () => {
     probeMedia: (p: string) => backend!.probeMedia(p),
     hashMediaSource: (p: string) => backend!.hashMediaSource(p),
     parseSubtitles: (body: string, format: string | null) => backend!.parseSubtitles(body, format),
-    synthesizeSpeechCompute: async (argsJson: string) => {
+    synthesizeSpeechCompute: async (argsJson: string, signal?: AbortSignal) => {
+      signal?.throwIfAborted()
       const args = JSON.parse(argsJson) as import('./sclip/localTts.js').LocalTtsArgs
       // Cloud TTS is explicit, never an accidental paid first attempt.
       if (args.engine === 'openai') {
         const result = JSON.parse(await backend!.synthesizeSpeechCompute(argsJson))
         return JSON.stringify({...result, synthesis: {engine: 'openai-tts', requested_voice: args.voice, resolved_voice: args.voice, model: 'tts-1', speed: args.speed ?? 1}})
       }
-      const {filePath, cached, synthesis} = await synthesizeSpeechLocally(args, dataRoot.cacheDir)
+      const {filePath, cached, synthesis} = await synthesizeSpeechLocally(args, dataRoot.cacheDir, undefined, signal)
+      signal?.throwIfAborted()
       const mediaItem = JSON.parse(await backend!.probeMedia(filePath))
       return JSON.stringify({media_item: mediaItem, duration_us: mediaItem.metadata?.duration_us ?? 0, cached, synthesis})
     },
 
-    reduceShotReport: (reportJson: string, sensitivity: number, minShotUs: number, inUs: number, outUs: number) =>
-      backend!.reduceShotReport(reportJson, sensitivity, minShotUs, inUs, outUs),
-    shotFloorReportCached: (mediaJson: string) => backend!.shotFloorReportCached(mediaJson),
-    shotFloorSensitivity: () => backend!.shotFloorSensitivity(),
-    shotDefaultOpts: () =>
-      JSON.parse(backend!.shotDefaultOpts()) as import('./state/hybrids.js').ShotDefaultOpts,
+    ...shotCompute(backend!),
     // Not a bare napi method like the shot entries above: `detect_pauses` is
     // a clip-compute TOOL, and its subject + media + peaks slice is resolved by
     // `callClipComputeTool` — the very function the agent's call and the
@@ -1218,10 +1217,7 @@ app.whenReady().then(async () => {
   const { callClipComputeTool, readMediaFrameDataUrl, readMediaDescription } = await import('./mcp/server.js')
   const { AUDIO_FX_CHANNELS, CLIP_COMPUTE_CHANNELS } = await import('./state/router.js')
 
-  const { registeredMcpTools } = await import('./mcp/server.js')
-  const registeredToolCount = (await registeredMcpTools(backend, {
-    evaluateSourcePassages: jevEnabled ? evaluateSourcePassages : undefined,
-  })).length
+  const registeredToolCount = mcpHost.getToolCount()
   const { SclipSessionStore } = await import('./sclip/sessionStore.js')
   const {
     configureHermesBridge,
@@ -1307,6 +1303,8 @@ app.whenReady().then(async () => {
     sessions: sclipSessionStore,
   })
   hermesTerminalRuntime = new HermesTerminalRuntime({
+    onSubmittedPrompt: (projectId, brief) => mcpHost.setEditingBrief(brief,projectId),
+    registerLifecycle: (projectId,sessionId,handler) => mcpHost.registerHermesTerminal(projectId,sessionId,handler),
     isPackaged: app.isPackaged,
     resourcesPath: process.resourcesPath,
     userDataPath: app.getPath('userData'),
@@ -2537,6 +2535,9 @@ app.whenReady().then(async () => {
     dir: app.getPath('userData'), cacheDir: dataRoot.cacheDir, atomicFs,
     content: contentDeps, platform: contentPlatform, queue,
     speech: speechConfig, vlm: vlmConfig, backend: backend!,
+    ...(app.isPackaged && process.platform === 'darwin' && process.arch === 'arm64' ? {
+      bundledWhisper: () => bundledWhisperRuntime(process.resourcesPath),
+    } : {}),
     changed: () => emitToRenderer(MODEL_EVENTS.changed, {}),
     activated: () => emitToRenderer(MODEL_EVENTS.activated, {}),
   })

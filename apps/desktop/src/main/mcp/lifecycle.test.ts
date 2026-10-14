@@ -47,14 +47,27 @@ function collector(): { rows: McpLogEntryInput[]; deps: McpLogDeps } {
   return { rows, deps: { emit: (e) => { rows.push(e) }, currentWorkspace: () => null } }
 }
 
-/** Start a host over a backend no lifecycle row ever reaches — only the six
- *  request handlers touch it, and this spec issues no tool calls. */
+/** The host reads its catalog at startup; lifecycle rows do not execute tools. */
 async function start(deps: McpLogDeps): Promise<{ host: McpHost; port: number }> {
-  const host = await startMcpHost({} as Backend, { log: deps })
+  const host = await startMcpHost({ mcpCatalog: async () => '{"tools":[]}' } as Backend, { log: deps })
   hosts.push(host)
   const bind = host.getInfo().bind
   return { host, port: Number(bind.slice(bind.lastIndexOf(':') + 1)) }
 }
+
+it('counts the catalog with the same optional senses and filter as live discovery', async () => {
+  const backend = { mcpCatalog: async () => '{"tools":[]}' } as Backend
+  const options = {
+    listSpeechVoices: async () => ({ status: 'unavailable' }),
+    sourceObservationIndex: {} as never,
+    audioUnderstanding: {} as never,
+    toolFilter: (name: string) => name !== 'ping',
+  }
+  const { registeredMcpTools } = await import('./server')
+  const host = await startMcpHost(backend, options as any)
+  hosts.push(host)
+  expect(host.getToolCount()).toBe((await registeredMcpTools(backend, options as any)).length)
+})
 
 /** One POST to /mcp, resolved on the response head. The transport answers a
  *  request-bearing POST with an open SSE stream, and every assertion below needs

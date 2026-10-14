@@ -1295,7 +1295,19 @@ pub(super) fn resolve_clip_audio_source(
     }
 
     let t_start = t_start_arg.unwrap_or(layer.t_start_us);
-    let t_end = t_end_arg.unwrap_or(layer.t_end_us);
+    // The authored video envelope may round up to a composition frame while
+    // its source range ends at the physical media boundary. An omitted end
+    // asks for the available clip audio, not that silent frame remainder.
+    // Explicit windows still receive the strict source-range check below.
+    let t_end = match t_end_arg {
+        Some(end) => end,
+        None => {
+            let source_end_on_timeline = src_out_us.checked_sub(src_in_us)
+                .and_then(|span| layer.t_start_us.checked_add(span))
+                .ok_or_else(|| McpToolError::invalid_params("clip source range cannot map to the timeline", None))?;
+            layer.t_end_us.min(source_end_on_timeline)
+        }
+    };
     if t_end <= t_start {
         return Err(McpToolError::invalid_params(
             format!(
@@ -1350,7 +1362,10 @@ pub(super) fn resolve_clip_audio_source(
 
 /// Write serialized transcript JSON bytes atomically to the cache.
 #[cfg(feature = "speech")]
-async fn write_transcript_atomic(dest: &std::path::Path, bytes: &[u8]) -> Result<(), anyhow::Error> {
+async fn write_transcript_atomic(
+    dest: &std::path::Path,
+    bytes: &[u8],
+) -> Result<(), anyhow::Error> {
     use crate::cache::{cached_ok, discard_temp, promote_temp, temp_path};
     use anyhow::Context;
     if let Some(parent) = dest.parent() {
@@ -1429,6 +1444,9 @@ fn map_speech_error(e: speech::SpeechError) -> McpToolError {
 #[derive(Serialize)]
 struct TranscribeClipResult<'a> {
     backend: &'a str,
+    timing_adjustments: &'a [serde_json::Value],
+    timing_adjustment_coordinate_space: &'static str,
+    timing_adjustment_source_start_us: i64,
     segments: &'a [speech::Segment],
     #[serde(skip_serializing_if = "Option::is_none")]
     language: Option<&'a str>,
@@ -1514,12 +1532,18 @@ pub(super) async fn transcribe_clip(
     if crate::cache::cached_ok(&full_path) {
         crate::cache::touch_if_stale(&full_path);
         if let Ok(bytes) = tokio::fs::read(&full_path).await {
-            if let Ok(cached) = serde_json::from_slice::<speech::transcript::CachedTranscript>(&bytes) {
+            if let Ok(cached) =
+                serde_json::from_slice::<speech::transcript::CachedTranscript>(&bytes).and_then(|c| c.validated().map_err(serde::de::Error::custom))
+            {
                 let sliced = cached.slice_window(resolved.source_in_us, resolved.source_out_us);
-                let transcript = sliced.to_shifted_transcript(resolved.source_in_us, resolved.timeline_start_us);
+                let transcript =
+                    sliced.to_shifted_transcript(resolved.source_in_us, resolved.timeline_start_us);
                 let srt = transcript.render_srt();
                 let result = TranscribeClipResult {
                     backend: used_backend.as_str(),
+                    timing_adjustments: &cached.timing_adjustments,
+                    timing_adjustment_coordinate_space: "analysis_audio",
+                    timing_adjustment_source_start_us: cached.in_us,
                     segments: &transcript.segments,
                     language: transcript.language.as_deref(),
                     word_timing: transcript.word_timing,
@@ -1542,11 +1566,18 @@ pub(super) async fn transcribe_clip(
     if crate::cache::cached_ok(&range_path) {
         crate::cache::touch_if_stale(&range_path);
         if let Ok(bytes) = tokio::fs::read(&range_path).await {
-            if let Ok(cached) = serde_json::from_slice::<speech::transcript::CachedTranscript>(&bytes) {
-                let transcript = cached.to_shifted_transcript(resolved.source_in_us, resolved.timeline_start_us);
+            if let Ok(cached) =
+                serde_json::from_slice::<speech::transcript::CachedTranscript>(&bytes).and_then(|c| c.validated().map_err(serde::de::Error::custom))
+            {
+                let sliced = cached.slice_window(resolved.source_in_us, resolved.source_out_us);
+                let transcript =
+                    sliced.to_shifted_transcript(resolved.source_in_us, resolved.timeline_start_us);
                 let srt = transcript.render_srt();
                 let result = TranscribeClipResult {
                     backend: used_backend.as_str(),
+                    timing_adjustments: &cached.timing_adjustments,
+                    timing_adjustment_coordinate_space: "analysis_audio",
+                    timing_adjustment_source_start_us: cached.in_us,
                     segments: &transcript.segments,
                     language: transcript.language.as_deref(),
                     word_timing: transcript.word_timing,
@@ -1568,6 +1599,9 @@ pub(super) async fn transcribe_clip(
     .await
     .map_err(|e| McpToolError::internal_error(format!("audio extract: {e:#}"), None))?;
 
+    let decoded_duration = speech::audio_extract::decoded_wav_duration_us(&audio_path)
+        .map_err(|e| McpToolError::internal_error(format!("audio duration: {e:#}"), None))?;
+    let analysis_duration = decoded_duration.min(resolved.source_out_us - resolved.source_in_us);
     let raw = transcriber
         .transcribe(speech::TranscribeRequest {
             audio_path,
@@ -1580,20 +1614,21 @@ pub(super) async fn transcribe_clip(
     // Normalize the backend's raw style → one Transcript
     let mut transcript = speech::parse_raw(raw).map_err(map_speech_error)?;
 
+    let timing_adjustments = transcript
+        .validate_audio_bounds(analysis_duration)
+        .map_err(map_speech_error)?;
+
     // Shift window-relative times to source-relative times for caching
     transcript.shift(resolved.source_in_us);
 
     // Write to persistent cache in source-relative time
     let cached_entry = speech::transcript::CachedTranscript {
+        timing_adjustments,
         source_hash: resolved.source_hash.clone(),
         is_full_source: is_full,
         source_duration_us: resolved.source_duration_us,
         in_us: if is_full { 0 } else { resolved.source_in_us },
-        out_us: if is_full {
-            resolved.source_duration_us.unwrap_or(resolved.source_out_us)
-        } else {
-            resolved.source_out_us
-        },
+        out_us: resolved.source_in_us + analysis_duration,
         backend: used_backend.as_str().to_string(),
         language: transcript.language.clone(),
         word_timing: transcript.word_timing,
@@ -1606,11 +1641,18 @@ pub(super) async fn transcribe_clip(
     }
 
     // Shift the remaining delta to place on the timeline
-    transcript.shift(resolved.timeline_start_us.saturating_sub(resolved.source_in_us));
+    transcript.shift(
+        resolved
+            .timeline_start_us
+            .saturating_sub(resolved.source_in_us),
+    );
 
     let srt = transcript.render_srt();
     let result = TranscribeClipResult {
         backend: used_backend.as_str(),
+        timing_adjustments: &cached_entry.timing_adjustments,
+        timing_adjustment_coordinate_space: "analysis_audio",
+        timing_adjustment_source_start_us: resolved.source_in_us,
         segments: &transcript.segments,
         language: transcript.language.as_deref(),
         word_timing: transcript.word_timing,
@@ -2106,7 +2148,10 @@ pub(super) async fn get_media_context(
 ) -> Result<ToolResult, McpToolError> {
     let media_id = parse_uuid(&args.media_id, "media_id")?;
     let media = args.media.ok_or_else(|| {
-        McpToolError::resource_not_found(format!("media {media_id} not found in project media pool"), None)
+        McpToolError::resource_not_found(
+            format!("media {media_id} not found in project media pool"),
+            None,
+        )
     })?;
 
     let body = super::resources::build_media_context_json(

@@ -19,5 +19,13 @@ export const CREATOR_STYLE_TOOL = {
   request:{type:'string',maxLength:1000,description:'Current objective for local lexical relevance; never chooses edits.'},
   cursor:{type:'integer',minimum:0},request_id:{type:'string',maxLength:80},
   operations:{type:'array',minItems:1,maxItems:8,items:{type:'object',properties:operationProperties,required:['action','evidence_ids'],additionalProperties:false}},
- },required:['action'],additionalProperties:false},
+ },required:['action'],additionalProperties:false,
+ allOf:[
+  {if:{properties:{action:{enum:['evidence','preference']}},required:['action']},then:{required:['id']}},
+  {if:{properties:{action:{enum:['hypothesis','counterexample','maintenance','preferences']}},required:['action']},then:{required:['creator_id','expected_revision']}},
+  {if:{properties:{action:{const:'hypothesis'}},required:['action']},then:{required:['hypothesis','dimension','evidence_ids']}},
+  {if:{properties:{action:{const:'hypothesis'},id:{type:'string'}},required:['action','id']},then:{required:['expected_version']}},
+  {if:{properties:{action:{const:'counterexample'}},required:['action']},then:{required:['id','expected_version','evidence_ids']}},
+  {if:{properties:{action:{const:'maintenance'}},required:['action']},then:{required:['request_id','operations']}},
+ ]},
 } as const

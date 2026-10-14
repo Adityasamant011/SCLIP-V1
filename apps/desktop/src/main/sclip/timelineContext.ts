@@ -125,6 +125,12 @@ export interface CachedSegment {
 
 export interface CachedTranscriptData {
   source_hash?: string
+  is_full_source?: boolean
+  source_duration_us?: number | null
+  in_us?: number
+  out_us?: number
+  word_timing?: string
+  timing_adjustments?: unknown[]
   segments?: CachedSegment[]
 }
 

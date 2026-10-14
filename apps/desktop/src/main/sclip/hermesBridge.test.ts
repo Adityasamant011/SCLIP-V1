@@ -62,3 +62,10 @@ it('injects current creator context into the real gateway request and rotates co
     expect(JSON.stringify(second)).not.toContain(SECRET)
   }finally{vi.unstubAllGlobals()}
 })
+
+it('reports the current unavailable runtime before creating a remote or local session',async()=>{
+  const fetchMock=vi.fn();vi.stubGlobal('fetch',fetchMock)
+  const add=vi.fn()
+  configureHermesBridge({getGatewayUrl:()=> 'http://127.0.0.1:1',getGatewayToken:()=>SECRET,getActiveProjectId:async()=> 'project',getMcpStatus:()=>({tools:118,resources:1}),getRuntimeStatus:()=>({state:'failed',detail:'Bundled Hermes runtime is missing'}),sessions:{...sessions,add} as any})
+  try{await expect(createProjectSession('project','test')).rejects.toThrow('HERMES_NOT_READY: Bundled Hermes runtime is missing');expect(fetchMock).not.toHaveBeenCalled();expect(add).not.toHaveBeenCalled()}finally{vi.unstubAllGlobals()}
+})

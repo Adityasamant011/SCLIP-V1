@@ -7,9 +7,9 @@ assert.equal(process.env.SCLIP_PAID_HOLDOUT_OPT_IN,'1','Paid holdout requires se
 const ready=JSON.parse(fs.readFileSync('.scratch/phase4b-final/routing-readiness.json'));
 assert(Date.now()-Date.parse(ready.checked_at)<15*60*1000,'Recheck metadata before a future authorized run');
 assert(ready.key.limit<=0.5&&ready.key.remaining>=0.4,'Provider budget must be sufficient and bounded to $0.50');
-const repo=process.cwd(),source='/Users/adityasamant/Downloads/How_to_cook_Poffertjes_for_fast_Money..webm';
-const prompt='Make a concise, engaging cooking video from this footage that helps viewers understand how to make poffertjes.';
-const out=path.join(repo,'apps/desktop/e2e/bench-results/phase4b-final-poffertjes-authorized');
+const repo=process.cwd(),source='/Users/adityasamant/Downloads/Man United 0-1 Man City _ Highlights as 10-man Blues win Manchester derby through Haaland.mp4';
+const prompt='Make a concise, engaging match highlights video from this footage.';
+const out=path.join(repo,'apps/desktop/e2e/bench-results/phase4b-final-manchester-holdout');
 assert(!fs.existsSync(out),'Never overwrite or repeat this acceptance');fs.mkdirSync(out,{recursive:true});
 const profile=fs.mkdtempSync(path.join(os.tmpdir(),'sclip-final-4b-')),home=path.join(profile,'sclip-hermes');fs.mkdirSync(home);
 const realProfile='/Users/adityasamant/Library/Application Support/Sclip';

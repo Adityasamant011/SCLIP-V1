@@ -307,6 +307,36 @@ function fakeSpeechComputePayload(cached = false) {
 }
 
 describe('runHybrid: synthesize_speech (MCP hybrid)', () => {
+  it.each(['before', 'during', 'computed'] as const)('cancelled %s synthesis cannot import, place or change history; next request works', async phase => {
+    const actor=freshActor(),deps=makeDeps(actor),before=actor.snapshot(),history=actor.historyStatus()
+    const abort=new AbortController()
+    if(phase==='before')abort.abort()
+    let finish!: (payload:string)=>void
+    deps.compute.synthesizeSpeechCompute=vi.fn(async()=>{
+      if(phase==='during')return new Promise<string>(resolve=>{finish=resolve})
+      if(phase==='computed')abort.abort()
+      return fakeSpeechComputePayload()
+    })
+    const work=runHybrid('synthesize_speech',{text:'Synthetic'},deps,{signal:abort.signal})
+    if(phase==='during'){expect(finish).toBeTypeOf('function');abort.abort();finish(fakeSpeechComputePayload())}
+    await expect(work).rejects.toThrow()
+    expect(actor.snapshot()).toBe(before);expect(actor.historyStatus()).toEqual(history)
+    expect(deps._enqueueDerivatives).not.toHaveBeenCalled()
+    if(phase==='before')expect(deps.compute.synthesizeSpeechCompute).not.toHaveBeenCalled()
+    deps.compute.synthesizeSpeechCompute=vi.fn(async()=>fakeSpeechComputePayload())
+    expect(JSON.parse(await runHybrid('synthesize_speech',{text:'Next valid request'},deps) as string).placed).toBe(true)
+  })
+  it('refuses same-ID reopening and an expired owning turn without cancelling a different request', async()=>{
+    const actor=freshActor(),deps=makeDeps(actor);let opening='first',valid=true
+    deps.projectOpening=()=>opening
+    const before=actor.snapshot(),history=actor.historyStatus()
+    deps.compute.synthesizeSpeechCompute=vi.fn(async()=>{opening='reopened';return fakeSpeechComputePayload()})
+    await expect(runHybrid('synthesize_speech',{text:'Synthetic'},deps)).rejects.toThrow('SPEECH_PROJECT_CHANGED')
+    deps.compute.synthesizeSpeechCompute=vi.fn(async()=>{valid=false;return fakeSpeechComputePayload()})
+    await expect(runHybrid('synthesize_speech',{text:'Synthetic'},deps,{assertAuthority:()=>{if(!valid)throw Error('expired turn')}})).rejects.toThrow('expired turn')
+    expect(actor.snapshot()).toBe(before);expect(actor.historyStatus()).toEqual(history)
+    expect(JSON.parse(await runHybrid('synthesize_speech',{text:'Unrelated valid request'},deps) as string).placed).toBe(true)
+  })
   it('occupied placement is atomic and corrected retry reuses cached media identity', async () => {
     const actor=freshActor(),deps=makeDeps(actor),track=root(actor.snapshot()).tracks.at(-1)!.id
     deps.compute.synthesizeSpeechCompute=vi.fn(async()=>fakeSpeechComputePayload(true))

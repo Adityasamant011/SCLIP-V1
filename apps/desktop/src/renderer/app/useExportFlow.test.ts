@@ -187,6 +187,22 @@ function mount() {
 }
 
 describe("useExportFlow audio-effect gate", () => {
+  it('inspection cancellation while waiting releases its lock and a subsequent user export succeeds',async()=>{
+    bridge.answers.set('project_summary',()=>summary([track('track-a','Audio',[AUDIO_LAYER])]))
+    bridge.answers.set('ensure_export_audio_conform',()=>['audio-source'])
+    bridge.answers.set('ensure_export_audio_fx',()=>({waiting:[],failed:[]}))
+    bridge.answers.set('export_project_audio_only',()=>true)
+    const {result}=mount(),abort=new AbortController()
+    let job!:Promise<void>
+    act(()=>{job=result.current.runExportWithSettings({...DEFAULT_EXPORT_SETTINGS,includeVideo:false},'/tmp/owned-inspection.m4a',undefined,'inspection',abort.signal)})
+    const refused=expect(job).rejects.toMatchObject({name:'AbortError'})
+    await waitFor(()=>expect(bridge.log).toContain('invoke ensure_export_audio_conform'))
+    await act(async()=>{abort.abort();await refused})
+    expect(bridge.log).not.toContain('invoke export_project_audio_only');expect(result.current.exportState).toBeNull()
+    bridge.answers.set('ensure_export_audio_conform',()=>[])
+    await act(async()=>{await result.current.runExportWithSettings({...DEFAULT_EXPORT_SETTINGS,includeVideo:false},'/tmp/user-recovery.m4a')})
+    expect(result.current.exportState?.kind).toBe('complete')
+  })
   beforeEach(() => {
     bridge.answers.clear();
     bridge.log.length = 0;

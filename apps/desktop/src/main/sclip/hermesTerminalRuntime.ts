@@ -1,3 +1,7 @@
+import { stageHermesLifecycle, type HermesLifecycleLease } from './hermesLifecycle.js'
+import { stageHermesEditorToolContracts,creatorMemoryProvenanceIds } from './hermesEditorToolContracts.js'
+import type { HermesTurnEvent } from './completionCheckpoint.js'
+import { SubmittedPrompt } from './editingBrief.js'
 import path from 'node:path'
 import { startAutonomousReview, initialEditorialEvidence, stageEditorialEvidence } from './autonomousReview.js'
 import fs from 'node:fs'
@@ -28,12 +32,23 @@ export interface HermesTerminalOptions {
   getCreatorContext?: (projectId: string) => string
   getCreatorHome?: (baseHome: string, projectId: string) => string
   getCreatorSessionKey?: (projectId: string) => string
+  registerLifecycle?: (projectId: string, sessionId: string, handler: (event: HermesTurnEvent) => void) => HermesLifecycleLease
+  onSubmittedPrompt?: (projectId: string, brief: string | null) => void
   onOutput: (event: { projectId: string; sessionId: string; sequence: number; data: string }) => void
   onExit: (event: { projectId: string; sessionId: string; code: number }) => void
 }
 
 interface TerminalSession {
   mode: 'edit' | 'review'
+  lifecycle?: HermesLifecycleLease
+  firstTurnAt?: number
+  followups: number
+  inputGeneration: number
+  inputReady: boolean
+  readyTail: string
+  cancelled: boolean
+  pendingFollowup?: {text:string;generation:number}
+  submittedPrompt: SubmittedPrompt
   pty: pty.IPty
   history: string
   sequence: number
@@ -82,11 +97,31 @@ export class HermesTerminalRuntime {
       if (fs.existsSync(skill)) fs.cpSync(skill, path.join(home, 'skills', 'weftcut'), { recursive: true })
     } else if (!fs.existsSync(configPath)) writeHermesProfile(home, 0)
     assertForegroundHermesConfiguration(home)
+    stageHermesEditorToolContracts(home)
     await this.options.assertSession(projectId, sessionId)
     if (creatorKey !== this.options.getCreatorSessionKey?.(projectId)) throw new Error('Creator context changed while opening Hermes; open the terminal again')
     const profile = readHermesProfile(home)
     const providerEnv = this.options.getProviderEnvironment(profile)
-    const stagedEvidence=stageEditorialEvidence(home,packet,this.options.getCreatorContext?.(projectId) ?? '')
+    const creatorContext=this.options.getCreatorContext?.(projectId) ?? ''
+    const stagedEvidence=stageEditorialEvidence(home,packet,creatorContext)
+    const lifecycle=this.options.registerLifecycle?.(projectId,sessionId,event=>{
+      const live=this.sessions.get(key);if(!live)return
+      if(event.kind==='start'){
+        live.firstTurnAt??=Date.now();live.inputReady=false
+        try{live.lifecycle?.start(event)}catch{this.checkpointMessage(projectId,sessionId,live,'Native lifecycle is stale; current output remains unverified.')}
+      } else {
+        const generation=live.inputGeneration
+        const allow=live.followups<2&&Date.now()-(live.firstTurnAt??0)<600000&&!live.cancelled
+        void live.lifecycle?.finish(event,allow,live.cancelled).then(result=>{
+          if(this.sessions.get(key)!==live||generation!==live.inputGeneration)return
+          this.checkpointMessage(projectId,sessionId,live,`Completion checkpoint: ${result.status}. ${result.reason??result.scope??''}`)
+          if(result.followup&&allow){live.pendingFollowup={text:result.followup,generation};this.flushFollowup(live)}
+        }).catch(()=>{if(this.sessions.get(key)===live)this.checkpointMessage(projectId,sessionId,live,'Completion checkpoint could not verify the current task; output remains unverified.')})
+      }
+    })
+    const lifecycleEnabled=lifecycle?stageHermesLifecycle(home):false
+    const toolUrl=new URL(review?.url??mcp.url)
+    if(lifecycle)toolUrl.searchParams.set('native_terminal',lifecycle.url.split('/').at(-1)!)
     const env: Record<string, string | undefined> = {
       ...hermesBaseEnvironment(),
       ...providerEnv,
@@ -97,9 +132,11 @@ export class HermesTerminalRuntime {
       ...(profile.provider === 'openrouter' ? { OPENROUTER_MODEL: profile.model } : {}),
       SCLIP_ACTIVE_PROJECT_ID: projectId,
       SCLIP_PROJECT_ID: projectId,
-      SCLIP_MCP_URL: review?.url ?? mcp.url,
+      SCLIP_CREATOR_PROVENANCE_IDS: JSON.stringify(creatorMemoryProvenanceIds(creatorContext)),
+      SCLIP_MCP_URL: lifecycle?toolUrl.toString():review?.url ?? mcp.url,
       SCLIP_MCP_TOKEN: mcp.bearer_token,
       TERM: 'xterm-256color',
+      ...(lifecycleEnabled?{SCLIP_LIFECYCLE_URL:lifecycle!.url,SCLIP_LIFECYCLE_TOKEN:lifecycle!.token}:{}),
       // Hermes already supports this hint; avoid a startup OSC query whose
       // delayed response can land in the editable prompt. Matches xterm theme.
       HERMES_TUI_BACKGROUND: '#0b0d12',
@@ -132,11 +169,14 @@ export class HermesTerminalRuntime {
       cwd: launch.cwd,
       env: env as Record<string, string>,
     })
-    const session: TerminalSession = { pty: terminal, mode, history: '', sequence: 0 }
+    const session: TerminalSession = { pty: terminal, mode, lifecycle, followups:0,inputGeneration:0,inputReady:false,readyTail:'',cancelled:false, submittedPrompt: new SubmittedPrompt(), history: '', sequence: 0 }
     this.sessions.set(key, session)
-    const redactor = createHermesOutputRedactor([...Object.values(providerEnv), mcp.bearer_token])
+    const redactor = createHermesOutputRedactor([...Object.values(providerEnv), mcp.bearer_token,...(lifecycle?[lifecycle.token]:[])])
     terminal.onData(data => {
       if (this.sessions.get(key) !== session) return
+      const readyScan=session.readyTail+data
+      session.readyTail=readyScan.slice(-32)
+      if(readyScan.includes('\x1b[?2004h')){session.inputReady=true;session.readyTail='';this.flushFollowup(session)}
       data = redactor.push(data)
       if (!data) return
       // Keep a bounded in-memory replay buffer. It is never persisted because
@@ -152,6 +192,8 @@ export class HermesTerminalRuntime {
         session.history = `${session.history}${tail}`.slice(-MAX_HISTORY_BYTES)
         this.options.onOutput({ projectId, sessionId, sequence: ++session.sequence, data: tail })
       }
+      session.lifecycle?.interrupt(`process_exit:${exitCode}`,session.cancelled)
+      session.lifecycle?.close()
       this.sessions.delete(key)
       this.options.onExit({ projectId, sessionId, code: exitCode })
     })
@@ -162,6 +204,7 @@ export class HermesTerminalRuntime {
     const key = this.key(projectId, sessionId)
     const existing = this.sessions.get(key)
     if (existing) {
+      existing.lifecycle?.interrupt('terminal_restart');existing.lifecycle?.close()
       try { existing.pty.kill() } catch { /* already gone */ }
       this.sessions.delete(key)
     }
@@ -183,6 +226,12 @@ export class HermesTerminalRuntime {
     if (Buffer.byteLength(data, 'utf8') > MAX_INPUT_BYTES) throw new Error('Terminal input is too large')
     const session = this.sessions.get(this.key(projectId, sessionId))
     if (!session) throw new Error('Open the Hermes terminal before sending input')
+    session.inputGeneration++;delete session.pendingFollowup
+    if(data.includes('\x03')){session.cancelled=true;session.lifecycle?.cancel?.()}
+    for(const brief of session.submittedPrompt.feed(data)) {
+      session.cancelled=false;session.firstTurnAt=undefined;session.followups=0;session.inputReady=false
+      if(brief===null||(!brief.startsWith('/')&&brief.trim().length>8))this.options.onSubmittedPrompt?.(projectId,brief)
+    }
     session.pty.write(data)
   }
 
@@ -193,10 +242,26 @@ export class HermesTerminalRuntime {
   }
 
   stopAll(): void {
-    for (const { pty: terminal } of this.sessions.values()) {
-      try { terminal.kill() } catch { /* already gone */ }
+    for (const session of this.sessions.values()) {
+      session.lifecycle?.interrupt('terminal_stopped',session.cancelled);session.lifecycle?.close()
+      try { session.pty.kill() } catch { /* already gone */ }
     }
     this.sessions.clear()
+  }
+
+  private checkpointMessage(projectId:string,sessionId:string,session:TerminalSession,text:string) {
+    const data=`\r\n[Sclip] ${text}\r\n`
+    session.history=`${session.history}${data}`.slice(-MAX_HISTORY_BYTES)
+    this.options.onOutput({projectId,sessionId,sequence:++session.sequence,data})
+  }
+  private flushFollowup(session:TerminalSession) {
+    const pending=session.pendingFollowup
+    if(!pending||!session.inputReady||session.cancelled||pending.generation!==session.inputGeneration)return
+    delete session.pendingFollowup;session.followups++;session.inputReady=false
+    // This is labelled host feedback through the SAME native conversation.
+    // It is not a forged model tool call or a replacement editing loop.
+    session.pty.write(`\x1b[200~${pending.text}\x1b[201~`)
+    setTimeout(()=>{if([...this.sessions.values()].includes(session)&&pending.generation===session.inputGeneration&&!session.cancelled)session.pty.write('\r')},300)
   }
 
   private key(projectId: string, sessionId: string): string { return `${projectId}\u0000${sessionId}` }
@@ -209,16 +274,15 @@ export class HermesTerminalRuntime {
   }
 
   private resolveLaunch(): LaunchSpec {
+    if (this.options.isPackaged) {
+      const executable = path.join(this.options.resourcesPath, 'hermes', process.platform === 'win32' ? 'hermes.exe' : 'hermes')
+      if (!fs.existsSync(executable)) throw new Error('Bundled Hermes runtime is missing')
+      return { command: executable, args: [], cwd: path.dirname(executable) }
+    }
     const explicit = this.options.executableOverride?.trim()
     if (explicit) {
       if (!fs.existsSync(explicit)) throw new Error('Configured Hermes executable does not exist')
       return { command: explicit, args: [], cwd: path.dirname(explicit) }
-    }
-    if (this.options.isPackaged) {
-      const executable = path.join(this.options.resourcesPath, 'hermes', process.platform === 'win32' ? 'hermes.exe' : 'hermes')
-      if (fs.existsSync(executable)) {
-        return { command: executable, args: [], cwd: path.dirname(executable) }
-      }
     }
     const source = this.options.sourceOverride?.trim()
     if (!source) {

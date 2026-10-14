@@ -15,14 +15,17 @@ import { loadAllKeys, setKey } from "./keys";
 import { installModelComponents, missingModelComponents } from "./model-components";
 import { createModelDownloads } from "./model-downloads";
 import { assertModelsIdle, beginModelUse } from "./model-usage";
+import type { BundledWhisperStatus } from "./bundledWhisperRuntime";
 
 export function createModelFeature(deps: {
   dir: string; cacheDir: string; atomicFs: SpeechConfigFs;
   content: ContentDeps; platform: ContentPlatformKey | null; queue: ContentQueue;
   speech: SpeechConfigStore; vlm: VlmConfigStore; backend: Backend;
+  bundledWhisper?: () => BundledWhisperStatus;
   changed(): void;
   activated(): void;
 }): ModelManager {
+  const bundled = (id: string) => deps.platform === "darwin-arm64" && !!deps.bundledWhisper && id === "whisper-cpp-runtime";
   // Where a managed profile's files land once downloaded. The paths come from
   // THIS platform's artifacts, so an unsupported platform yields the blank
   // config its `supported: false` row already implies rather than a set of
@@ -30,6 +33,7 @@ export function createModelFeature(deps: {
   const managedLocal = (id: string): ModelLocalConfig => {
     const config: ModelLocalConfig = { binary: "", model: "" };
     for (const artifact of MODEL_DEFINITIONS.find(d => d.id === id)?.artifacts ?? []) {
+      if (bundled(artifact)) { config.binary = deps.bundledWhisper!().binary; continue; }
       const item = CONTENT_CATALOG.find(c => c.id === artifact)!;
       const fields = (deps.platform ? item.platforms[deps.platform]?.fields : undefined) ?? {};
       for (const [field, relative] of Object.entries(fields)) {
@@ -84,13 +88,20 @@ export function createModelFeature(deps: {
       if (ids.some(id => deps.queue.isPending(id))) throw new Error("Download is stopping or still in progress. Retry after it finishes.");
     },
     content: id => {
+      if (bundled(id)) return { installed: deps.bundledWhisper!().ready, supported: true, bytes: 0, receivedBytes: 0 };
       const item = CONTENT_CATALOG.find(c => c.id === id)!;
       const status = itemStatus(deps.content, item, deps.platform);
       return { installed: status.state === "installed", supported: status.state !== "unavailable",
         bytes: (deps.platform ? item.platforms[deps.platform]?.bytes : 0) ?? 0,
         receivedBytes: deps.queue.entryOf(id)?.receivedBytes ?? 0 };
     },
-    ensureContent: (ids, signal) => deps.queue.ensure(ids, signal),
+    ensureContent: (ids, signal) => {
+      if (ids.some(bundled)) {
+        const status = deps.bundledWhisper!();
+        if (!status.ready) return Promise.reject(new Error(status.detail));
+      }
+      return deps.queue.ensure(ids.filter(id => !bundled(id)), signal);
+    },
     cancelContent: id => deps.queue.cancel(id),
     exists: fs.existsSync, getKey, setKey: persistKey,
     needsComponents: p => missingModelComponents(p),

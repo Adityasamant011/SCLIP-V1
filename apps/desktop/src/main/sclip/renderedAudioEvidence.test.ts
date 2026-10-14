@@ -58,3 +58,16 @@ describe('actual rendered audio facts, never editorial judgments',()=>{
   }finally{fs.rmSync(dir,{recursive:true,force:true})}
  })
 })
+
+describe('rendered audio review bounds',()=>{
+ it('excludes codec frame padding from signal, silence, transcription and understanding',async()=>{
+  const f=fixture(),samples=16000*2+256,decoded=Buffer.alloc(samples*4)
+  for(let i=16000*2;i<samples;i++)decoded.writeFloatLE(.9,i*4)
+  f.decode.mockResolvedValue(decoded)
+  const r=await f.run()
+  expect(r.signal!.duration_us).toBe(2000000)
+  expect(r.signal!.peak).toBe(0)
+  expect(r.signal!.silence_spans_us).toEqual([[4000000,6000000]])
+  expect(f.transcribe.mock.calls[0][0].layer.t_end_us).toBe(6000000)
+ })
+})

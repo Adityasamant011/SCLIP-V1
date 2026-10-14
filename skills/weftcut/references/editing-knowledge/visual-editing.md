@@ -97,14 +97,13 @@
 **Exceptions.** Symmetric, centered content crops trivially.
 **How to evaluate.** Watch the reframed cut on the actual platform aspect: does anything important leave the frame or sit under UI?
 
-### Principle: Always fill the entire screen (Full Canvas Coverage)
-**Purpose.** Video must completely cover the composition canvas; empty black bars or a small video floating in a corner look unprofessional and broken.
-**When relevant.** Every video layer placed on the timeline across all aspect ratios (especially 16:9 footage in vertical 9:16 Shorts/Reels).
-**Evidence to examine.** Does the video layer's scaled dimensions cover 100% of the canvas width and height? Is there black space on any border or corner?
-**Good decision.** Always use `calculate_video_fit` with `mode: 'cover'` to scale and position the clip so 100% of the screen is filled edge-to-edge. Supply focal points (`focus_x`, `focus_y`) based on `vision_inspect` evidence to keep subjects centered.
-**Potential mistake.** Leaving a video clip unscaled (1.0x) or shrunk into a corner/top-right, leaving vast black voids across the preview.
-**Exceptions.** Picture-in-picture (PIP), insets, or multi-box splits ONLY when explicitly requested by the user.
-**How to evaluate.** Background reviewer automatically audits `video_coverage`; verify composed frames with `vision_inspect` to ensure zero unintended black bars.
+### Principle: Choose framing for the content and brief
+**Purpose.** Make the subject and intended layout readable without unintended crops or empty regions.
+**When relevant.** Reframing footage, changing aspect ratio, or choosing an inset/layout.
+**Evidence to examine.** Source dimensions, composition geometry, subject position and actual composed frames.
+**Good decision.** Choose `calculate_video_fit` with `cover` when edge-to-edge framing serves the brief, or `contain`/unchanged framing when preserving the full source or an inset is intentional. Hermes chooses the treatment and focal point.
+**Potential mistake.** Treating canvas coverage as quality, or cropping away the demonstrated action merely to fill the screen.
+**How to evaluate.** Reviewer geometry is fallible evidence, not a universal coverage rule. Inspect the actual composed result and decide whether its framing is justified.
 
 ---
 

@@ -101,6 +101,7 @@ function defaultEncoderConfig(
 }
 
 export async function runExport(init: RunExportInit): Promise<RunExportResult> {
+  init.signal?.throwIfAborted();
   const summary = init.summary;
   // Export renders the ROOT, whatever composition the editor has open
   // (compositionAnchorStore.ts); the Groups placed on it enter through the
@@ -244,6 +245,10 @@ export async function runExport(init: RunExportInit): Promise<RunExportResult> {
   const userFamilies = collectTextFontFamilies(summary);
   const userBytes = await resolveFontsForFamilies(userFamilies);
   const fontBytes = { ...(await loadBundledFontBytes()), ...userBytes };
+  if (init.signal?.aborted) {
+    worker.terminate();
+    init.signal.throwIfAborted();
+  }
   const startReq: Extract<ExportRequest, { type: "start" }> = {
     type: "start",
     project: snapshot,
@@ -360,7 +365,11 @@ export async function runExport(init: RunExportInit): Promise<RunExportResult> {
       }
     });
 
+    let cleaned = false;
     const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      init.signal?.removeEventListener('abort', abort);
       offMsg();
       // A terminated Worker may never flush its per-session `nd:close` (on cancel
       // it is torn down before draining; on success it posts `done` before its
@@ -370,11 +379,13 @@ export async function runExport(init: RunExportInit): Promise<RunExportResult> {
       worker.terminate();
     };
 
-    init.signal?.addEventListener("abort", () => {
+    const abort = () => {
       worker.postMessage({ type: "cancel" } satisfies ExportRequest);
       cleanup();
-      reject(new Error("export cancelled"));
-    });
+      reject(new DOMException("Export cancelled", "AbortError"));
+    };
+    init.signal?.addEventListener("abort", abort, {once:true});
+    if (init.signal?.aborted) { abort(); return; }
 
     worker.onerror = (e: ErrorEvent) => {
       cleanup();

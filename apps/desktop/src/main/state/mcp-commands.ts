@@ -903,9 +903,9 @@ export const MCP_TOOL_DEFS: ReadonlyArray<McpToolDef> = [
     inputSchema: { type: 'object', properties: { layer_ids: { type: 'array', items: { type: 'string' } }, enabled: { type: 'boolean' } }, required: ['layer_ids', 'enabled'] },
     parseArgs: (a) => ({ op: 'set_layers_enabled', args: { layers: asArray(a.layer_ids, 'layer_ids').map((s) => parseUuid(s, 'layer_ids')), enabled: parseBool(a.enabled, 'enabled') } }) },
   { name: 'update_layer', exec: 'table',
-    description: "Update a layer's envelope (label, time range, enabled, locked). Only fields you set are applied. Time range changes go through validation.",
+    description: "Update a layer's envelope ONLY: label, t_start_us, t_end_us, enabled, locked. Other fields are rejected without mutation. For x/y, anchors, text styling or other kind-specific parameters use update_layer_params with patch.kind matching the layer; discover its schema first. For position you can also use set_position. Time range changes go through validation.",
     inputSchema: { type: 'object', properties: { layer_id: { type: 'string' }, patch: {
-      type: 'object',
+      type: 'object', additionalProperties: false,
       properties: {
         label: { type: ['string', 'null'] },
         t_start_us: { type: 'integer' },
@@ -1229,8 +1229,12 @@ export const MCP_TOOL_DEFS: ReadonlyArray<McpToolDef> = [
       composition_id: parseCompositionIdOpt(a.composition_id) }) },
   { name: 'add_media_layer', exec: 'dedicated',
     description: 'Place an imported Audio, Video, or Image item using the editor\'s existing kind-matched media placement command. Standalone Audio becomes an editable Audio layer (use update_layer_params for music role, gain and fades). Places the full probed source duration; use trim_layer afterward for a shorter section. Video with audio follows the project\'s normal auto-pair setting. Returns the new layer id. Recorded through ProjectActor for undo, save and reload.',
-    inputSchema: { type: 'object', properties: { media_id: { type: 'string' }, track_id: { type: 'string' }, t_start_us: { type: 'integer' } }, required: ['media_id', 'track_id', 't_start_us'] },
-    parseDedicated: (a) => ({ media_id: parseUuid(a.media_id, 'media_id'), track_id: parseUuid(a.track_id, 'track_id'), t_start_us: parseNum(a.t_start_us, 't_start_us') }) },
+    inputSchema: { type: 'object', properties: { media_id: { type: 'string' }, track_id: { type: 'string' }, t_start_us: { type: 'integer' } }, required: ['media_id', 'track_id', 't_start_us'], additionalProperties: false },
+    parseDedicated: (a) => {
+      const unsupported=Object.keys(a).filter(key=>!['media_id','track_id','t_start_us'].includes(key))
+      if(unsupported.length)throw Error(`add_media_layer does not accept ${unsupported.join(', ')}; it places the full source. For a Video range use add_video_layer with source and timeline bounds, or place the full source then use trim_layer. No edit occurred.`)
+      return { media_id: parseUuid(a.media_id, 'media_id'), track_id: parseUuid(a.track_id, 'track_id'), t_start_us: parseNum(a.t_start_us, 't_start_us') }
+    } },
   { name: 'add_text_layer', exec: 'dedicated',
     description: 'Create a native, editable Text layer through the same ProjectActor command as the Insert Text UI. Timing is in timeline microseconds. Omit track_id to use a free overlay lane or create one. x/y name the text anchor point in composition pixels and must be supplied together. Optional styling uses the existing Text renderer; box_w enables wrapping, outline_width 0 removes the outline, and shadow is {color,offset_x,offset_y,blur}. Returns the layer id; undo/save/reload behave like UI-created text.',
     inputSchema: { type: 'object', properties: {
@@ -1373,16 +1377,19 @@ export const MCP_TOOL_DEFS: ReadonlyArray<McpToolDef> = [
     inputSchema: {type:'object',properties:{layer_ids:{type:'array',items:{type:'string'},minItems:1,maxItems:128},start_us:{type:'integer',minimum:0},end_us:{type:'integer',minimum:1},expected_state_version:{type:'string'}},required:['layer_ids','start_us','end_us','expected_state_version'],additionalProperties:false},
     parseDedicated: a => ({layer_ids:asArray(a.layer_ids,'layer_ids').map(id => parseUuid(id,'layer_ids')),start_us:parseNum(a.start_us,'start_us'),end_us:parseNum(a.end_us,'end_us'),expected_state_version:parseStr(a.expected_state_version,'expected_state_version')}) },
   { name: 'apply_repair_transaction', exec: 'dedicated',
-    description: 'Atomically apply 1–8 YOUR explicitly chosen layer edits as one repair and one undo boundary. Supply current Editorial Evidence Packet state_version, reason, and every operation/parameter. Supports update_layer (timeline envelope) and update_layer_params (source, visual, audio, text params), with their existing patch formats. Only named layers change; no A/V synchronization is inferred. Temporary intermediate overlap is allowed, but final state must satisfy technical invariants. All commit or none commit. Creates a checkpoint. During review select a grounded issue and create a checkpoint first; verification is required once AFTER the whole transaction, using fresh relevant evidence. Single edit tools and justified no-repair remain available.',
+    description: 'Atomically apply 1–8 YOUR explicitly chosen layer edits as one repair and one undo boundary. Supply current Editorial Evidence Packet state_version, reason, and every operation/parameter. Supports update_layer (timeline envelope) and update_layer_params (source, visual, audio, text params), with their existing patch formats. Only named layers change; no A/V synchronization is inferred. Temporary intermediate overlap is allowed, but final state must satisfy technical invariants. All commit or none commit. Creates a checkpoint. During review select a grounded issue and create a checkpoint first; verification is required once AFTER the whole transaction, using fresh relevant evidence. Single edit tools and justified no-repair remain available. Shape example: {expected_state_version: "<fresh packet hash>", reason: "<your decision>", operations: [{kind: "update_layer_params", layer_id: "<id>", patch: {kind: "Text", x: 100, y: 100}}]}. Outer kind names the operation; patch.kind names the layer type. Values are chosen by Hermes. Do not use current_state_version, operation, params, or a flat position object as aliases.',
     inputSchema: { type: 'object', properties: {
       expected_state_version: { type: 'string', description: 'Exact current packet state_version.' },
       reason: { type: 'string', minLength: 1, maxLength: 1000 },
       operations: { type: 'array', minItems: 1, maxItems: 8, items: { type: 'object', properties: {
         kind: { type: 'string', enum: ['update_layer', 'update_layer_params'] },
-        layer_id: { type: 'string' }, patch: { type: 'object', description: 'Same explicit patch as the named tool; params patches require kind.' },
+        layer_id: { type: 'string' }, patch: { type: 'object', description: 'update_layer: label/t_start_us/t_end_us/enabled/locked. update_layer_params: kind-tagged patch; for a Text position use {kind: Text, x: number, y: number}. Read update_layer_params for other supported parameters. No nested flat position object.' },
       }, required: ['kind', 'layer_id', 'patch'], additionalProperties: false } },
     }, required: ['expected_state_version', 'reason', 'operations'], additionalProperties: false },
-    parseDedicated: a => ({ expected_state_version: parseStr(a.expected_state_version, 'expected_state_version'), reason: parseStr(a.reason, 'reason'), operations: asArray(a.operations, 'operations') }) },
+    parseDedicated: a => {
+      try { return { expected_state_version: parseStr(a.expected_state_version, 'expected_state_version'), reason: parseStr(a.reason, 'reason'), operations: asArray(a.operations, 'operations') } }
+      catch (error) { throw new McpArgError(`apply_repair_transaction requires {expected_state_version, reason, operations: [{kind, layer_id, patch}]}; operations is a JSON array, not a string. For text position patch use {kind: "Text", x, y}. No aliases or partial edits were accepted. ${error instanceof Error ? error.message : String(error)}`) }
+    } },
   { name: 'dry_run', exec: 'dedicated',
     description: 'Try-run a sequence of edit operations against a clone of the current project WITHOUT committing. Useful for previewing complex multi-step edits — agents can detect overlap / invariant violations before mutating real state. Validates after each op (matching real `commit()` behaviour) and HALTS at the first error so subsequent ops don\'t dry-run against a state real execution wouldn\'t reach. Returns `{ results: [{ index, status, output? | error? }, ...] }`. Supports add_color_layer, add_video_layer, update_layer, update_layer_params, move_layer, split_layer, delete_layer, add_transition (same args as the add_transition tool, except the transition kind rides as `transition_kind` — the spec\'s `kind` names the operation — plus optional `placement`: \'overlap\' default | \'extend\'; its output predicts the moved incoming layer\'s sibling lane bounces and lane spawns, and its refusals, identically to the real command). Other tools (motifs, caption import, media import, undo/redo) are not dry-runnable in v1.',
     inputSchema: { type: 'object', properties: { operations: {

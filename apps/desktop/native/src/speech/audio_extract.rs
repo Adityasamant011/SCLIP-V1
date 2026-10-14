@@ -127,6 +127,48 @@ pub async fn extract_audio_window(
     Ok(dest)
 }
 
+/// Duration from the actual extracted PCM data chunk, excluding RIFF metadata.
+pub fn decoded_wav_duration_us(path: &Path) -> Result<i64> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path)?;
+    let mut header = [0u8; 12];
+    file.read_exact(&mut header)?;
+    anyhow::ensure!(
+        &header[..4] == b"RIFF" && &header[8..] == b"WAVE",
+        "expected PCM WAV"
+    );
+    let length = file.metadata()?.len();
+    let mut byte_rate = None;
+    loop {
+        let mut chunk = [0u8; 8];
+        file.read_exact(&mut chunk)?;
+        let size = u32::from_le_bytes(chunk[4..8].try_into().unwrap()) as u64;
+        anyhow::ensure!(
+            file.stream_position()? + size <= length,
+            "truncated WAV chunk"
+        );
+        if &chunk[..4] == b"fmt " {
+            anyhow::ensure!(size >= 16, "short WAV format");
+            let mut fmt = [0u8; 16];
+            file.read_exact(&mut fmt)?;
+            anyhow::ensure!(
+                u16::from_le_bytes(fmt[..2].try_into().unwrap()) == 1,
+                "expected integer PCM"
+            );
+            byte_rate = Some(u32::from_le_bytes(fmt[8..12].try_into().unwrap()));
+            file.seek(SeekFrom::Current((size - 16 + size % 2) as i64))?;
+        } else if &chunk[..4] == b"data" {
+            let rate = byte_rate
+                .filter(|r| *r > 0)
+                .context("missing WAV byte rate")?;
+            anyhow::ensure!(size > 0, "empty PCM audio");
+            return Ok((size * 1_000_000 / u64::from(rate)) as i64);
+        } else {
+            file.seek(SeekFrom::Current((size + size % 2) as i64))?;
+        }
+    }
+}
+
 fn window_hash(source_hash: &str, in_us: i64, out_us: i64) -> String {
     let mut hasher = blake3::Hasher::new();
     hasher.update(source_hash.as_bytes());
@@ -223,6 +265,7 @@ mod tests {
             path.display(),
         );
 
+        assert_eq!(decoded_wav_duration_us(&path).unwrap(), 2_000_000);
         let (channels, sample_rate, bits) = parse_wav_format(&path).expect("parse wav header");
         assert_eq!(channels, 1, "must be mono for Whisper input");
         assert_eq!(sample_rate, SAMPLE_RATE_HZ, "must be 16 kHz");

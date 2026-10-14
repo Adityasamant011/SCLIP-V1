@@ -145,6 +145,36 @@ describe('HermesTerminalRuntime', () => {
     ])
   })
 
+  it('uses structured native task ends, waits for prompt readiness, and sends at most labelled same-conversation feedback', async () => {
+    let handler: any
+    const finish=vi.fn(async()=>({status:'review_required',followup:'[Sclip completion checkpoint] Inspect actual current output.'}))
+    const lease={url:'http://127.0.0.1:44555/mcp/terminal/native-launch',token:'private-hook-token',start:vi.fn(),finish,interrupt:vi.fn(),close:vi.fn()}
+    const runtime=new HermesTerminalRuntime({isPackaged:false,resourcesPath:'',userDataPath:tmpDir,executableOverride:'/usr/bin/python3',getMcpInfo:()=>({url:'http://127.0.0.1:44555/mcp',bearer_token:'synthetic'}),getProviderEnvironment:()=>({}),assertSession:async()=>{},registerLifecycle:(_p,_s,h)=>{handler=h;return lease},onOutput:e=>outputEvents.push(e),onExit:()=>{}})
+    await runtime.ensure('project','session')
+    expect(spawnedEnv.SCLIP_MCP_URL).toContain('native_terminal=native-launch')
+    expect(spawnedEnv.SCLIP_LIFECYCLE_TOKEN).toBe('private-hook-token')
+    await runtime.input('project','session','Make a 20-second video.\r')
+    handler({kind:'start',turn_id:'t1'})
+    onDataCallback!('Temporary provider silence')
+    expect(finish).not.toHaveBeenCalled()
+    handler({kind:'end',turn_id:'t1',completed:true,turn_exit_reason:'text_response(stop)'})
+    await new Promise(r=>setTimeout(r,0))
+    expect(ptyWriteMock.mock.calls.some(c=>c[0].includes('[Sclip completion checkpoint]'))).toBe(false)
+    onDataCallback!('\x1b[?2004h'+'large terminal redraw '.repeat(1000))
+    expect(ptyWriteMock.mock.calls.some(c=>c[0].includes('[Sclip completion checkpoint]'))).toBe(true)
+    expect(outputEvents.map(e=>e.data).join('')).toContain('Completion checkpoint: review_required')
+    runtime.stopAll()
+  })
+  it('cancellation prevents automatic feedback and notifies process interruption', async () => {
+    let handler:any
+    const lease={url:'http://127.0.0.1/mcp/terminal/cancel',token:'secret',start:vi.fn(),finish:vi.fn(async()=>({status:'cancelled'})),interrupt:vi.fn(),close:vi.fn()}
+    const runtime=new HermesTerminalRuntime({isPackaged:false,resourcesPath:'',userDataPath:tmpDir,executableOverride:'/usr/bin/python3',getMcpInfo:()=>({url:'http://127.0.0.1/mcp',bearer_token:'synthetic'}),getProviderEnvironment:()=>({}),assertSession:async()=>{},registerLifecycle:(_p,_s,h)=>{handler=h;return lease},onOutput:()=>{},onExit:()=>{}})
+    await runtime.ensure('project','session');handler({kind:'start',turn_id:'t1'})
+    await runtime.input('project','session','\x03');handler({kind:'end',turn_id:'t1',interrupted:true})
+    await new Promise(r=>setTimeout(r,0));expect(lease.finish).toHaveBeenCalledWith(expect.anything(),false,true)
+    onExitCallback!({exitCode:1});expect(lease.interrupt).toHaveBeenCalledWith('process_exit:1',true)
+  })
+
   it('enforces session assertion before spawning or sending input', async () => {
     const runtime = new HermesTerminalRuntime({
       isPackaged: false,

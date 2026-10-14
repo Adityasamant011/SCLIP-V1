@@ -44,6 +44,9 @@ files:
   - "**/node_modules/@weftcut/native-decode/*.so.*"
   - "**/node_modules/@weftcut/native-decode/*.dylib"
   - "node_modules/node-pty/**"
+  # Last: selective positive native-addon globs must not re-include an older
+  # release when --config.directories.output points to an isolated build.
+  - "!release/**"
 asarUnpack:
   - "**/*.node"
   - "**/node_modules/node-pty/**"
@@ -161,6 +164,12 @@ mac:
   identity: "-"
   notarize: false
   extraResources:
+    - from: resources/hermes/${arch}
+      to: hermes
+      filter: ["**/*"]
+    - from: resources/whisper/${arch}
+      to: whisper
+      filter: ["**/*"]
     # Worker code runs from a real file outside app.asar. The Qwen model weights
     # and Python environment remain in the user's external vision-sidecar dir.
     - from: src/vision/sidecar/vlm_worker.py

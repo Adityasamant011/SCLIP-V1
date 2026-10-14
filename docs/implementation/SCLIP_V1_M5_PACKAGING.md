@@ -1,0 +1,50 @@
+# SCLIP V1 packaging — running acceptance record
+
+2026-10-13. **PARTIAL. No clean-machine/public distribution acceptance.** No installed application, global model installation, genuine project or creator profile was changed. No commit/tag/publication occurred.
+
+## Verified repairs and bounded runtime proof
+
+- Packaged Hermes gateway and terminal now require bundled resources and refuse developer executable/source overrides. Pinned native Hermes0.20.4, CPython3.11.15 and104 exact existing distributions are staged without upgrading/installing dependencies. Source revision515354038a3c383b38b43aba6959ceddd858bb12 and the existing discovery patch/lock hashes are recorded. Native CLI bootstrap and real packaged Electron/MCP discovery/read/save pass with a fresh private profile and system-only PATH.
+- Package resource integrity gates verify both runtimes alongside existing ffmpeg licensing and skill gates. The actual package revealed omitted metadata, accidental inclusion of previous release output and sealed-resource Python bytecode mutations. Final file-filter order excludes previous releases while retaining required native addons; explicit Python-I-B and a bytecode-cache gate prevent sealed resource changes. Strict signature verification succeeds before/after CLI and real app use. Prior failures remain in raw logs/inventories; invalid copied build outputs alone were removed when disk filled.
+- macOS ARM Whisper uses the existing pinned1.9.1/ggml0.15.2 source versions and MIT notices. Exact archives are SHA256 verified; static CPU build links only libSystem/libc++ and disables host-specific optimization, dynamic plugins and unsupported13.3 Accelerate APIs. Parent Git discovery is blocked so upstream archives do not falsely inherit SCLIP's commit. Current ad-hoc signing occurs before runtime hash recording; actual repeat signing preserves the hash. This CPU baseline is distinct from an explicitly configured accelerated runtime, which remains supported through its custom configuration.
+- Model-service integration preserves existing model-store/native verification/activation APIs. Fresh packaged setup downloads only the identical pinned multilingual Base model through the existing verified/resumable downloader. Missing/corrupt bundled runtime errors precede download. Existing explicit custom paths remain intact. No model activates automatically and no strict-local request falls back to cloud inference.
+- Actual old-package failure: `models_use` returned `no artifact for this platform: whisper-cpp-runtime`. Actual repaired package-v7 downloaded147951465 bytes, verified SHA25660ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe, activated the resource-contained CPU binary, imported authorized narration and performed real MCP transcription over timeline5–10s. Restarting the same private profile with Electron HTTP downloads blocked preserved selection/files and transcribed a distinct7–12s window using strict local Whisper. Signature verification remained valid. This is not a full OS airgap or physical macOS13/M1 proof.
+
+## Evidence
+
+All paths below are rooted at `.scratch/sclip-v1-foundation-completion/`:
+
+- `hermes-relocation-proof.json`, `hermes-stage-retest.log`, `staged-hermes/runtime-manifest.json`.
+- `r5-packaged-override-before.log`, `r5-packaged-override-after.log`, `r5-typecheck.log`, `r5-production-build.log`.
+- `r5-isolated-package*.log`, `packaged-codesign-verification-verbose.log`, discarded-build inventories and `packaged-core-smoke-v6/results.json`.
+- `portable-whisper-probe/result.json` contains the failed Homebrew relocation/SIGSEGV; `portable-whisper-source-v2/results.json` contains two successful relocated CPU CLI controls.
+- `whisper-production-build/ggml-configure.log`, `staged-whisper/runtime-manifest.json`, `whisper-signing-probe/results.json`.
+- `r6-routing-regression-retest.log`:44 tests/4 files. `r6-routing-typecheck.log` and `r6-production-build.log` pass. `r6-packaging-script-tests.log`:4 tests.
+- `packaged-speech-before/models-use-failure.json`; `packaged-speech-after-v7/` retains the initial fixture parsing failure after successful real setup. `packaged-speech-after-v7-retest/` contains setup progress, original/new-window transcripts, model state before/after restart, actual project and PASS scope record.
+- `package-core-candidate-v7/mac-arm64/Sclip.app` is the isolated current package; it was never copied to `/Applications`.
+
+## Additional packaged workflow proof
+
+Genuine bundled Hermes PTY → guarded free Nemotron → authenticated MCP → ProjectActor → rendered review → trusted completion → decoded export passed the unchanged synthetic gap-removal scenario (13 primary provider requests, reported cost zero, availability/pricing rechecked before each). The centered-title control preserved all authored compositions but ended **incomplete** after Hermes registered an unjustified missing-footage concern. This is a failed completion trial, not a packaged transport failure or successful edit.
+
+Actual missing-source recovery refused a same-size wrong-content candidate, healed the correct renamed source with unchanged source hash/compositions and produced the known white frame. Actual User correction was observed durably autosaved, then an owned app process was SIGKILLed; reopening preserved project identity/compositions and did not manufacture trusted completion. This does not test interruption during a filesystem write.
+
+Evidence under `.scratch/sclip-v1-implementation/`: `native-foundation-packaged-core-v7-gap-run1/`, `native-foundation-packaged-core-v7-no-repair-run1/`, `foundation-packaged-relink-runtime-retest/results.json`, `relink-render-pixels.json` in that folder, and `foundation-packaged-crash-runtime-retest2/results.json`.
+
+## Open gates
+
+Repeated packaged reviewer reliability, interruption/render cancellation/recovery and provider/model unavailability controls still need completion. One genuine packaged edit/completion/export and bounded relink/crash workflow now pass; they do not certify all scenarios. Corrupt/missing model controls and provisioning cancellation need actual package integration evidence beyond existing downloader/model-manager tests. Complete third-party dependency redistribution review, Developer ID signing/notarization and clean physical supported Macs are not certified. Local Qwen/SenseVoice/Kokoro fresh-machine readiness is not proven by this Whisper test. Broader core regression/native entry-point/recovery acceptance and positive canonical learning remain open. **Foundation is not ready to freeze.**
+
+
+## Latest negative controls and safety recertification
+
+Actual package-v7 speech controls now **PASS bounded**: cancellation after observed download progress leaves no active/verified model five seconds later; same-size corrupted model bytes invalidate verification and native activation fails with bad-magic diagnostics; missing managed file is reported absent; restoring the owned valid file permits subsequent native verification/activation/transcription. Same-profile downloads-blocked restart and a distinct local ASR window pass again. Proof: `.scratch/sclip-v1-foundation-completion/packaged-speech-negative-v7/results.json` and raw progress/error/transcript records. Only private model files were changed.
+
+Latest current-source safety runtime repeats also **PASS bounded**: R1 active abort34ms,92.251-second late-write watch with no media/layer/history write, next valid synthesis104.305s total; R3 actual in-flight A→B→A refused and unchanged inspection succeeds; R4 actual rendered-chunk cancellation releases in101ms, removes owned partials, admits simultaneous read/new export; real GUI export cancellation372ms, unrelated cancellation ignored, next30-second user output decodes. Both historical wrong-media briefs are rejected with actual independently decoded wrong-stream outputs. Evidence lives in implementation `foundation-final-r1-cancel-edit/`, `foundation-final-r3-evidence-races/`, `foundation-final-r4-active-render-cancellation/`, `foundation-final-user-export-cancellation/` and `output-foundation-final-*`. No model inference is credited to lifecycle-hook/mechanical controls.
+
+Three original packaged native trials remain separate: gap PASS(13requests/3visibleerrors), off-screen title repair PASS(19requests/5visibleerrors), centered-title completion FAIL with unchanged authored state(19requests/4visibleerrors). All reported cost zero; every request guarded by current official free pricing. Two completions out of three are not a reliability certification. Earlier ten-trial M2 results are historical, not pooled.
+
+A small read-only review contract clarification now exposes all/range layer-kind counts and states that the source-backed VideoClip/Audio index excludes generated content. Missing source clips no longer lack an explicit scope description. No subjective issue, chosen edit, no-repair verdict or completion is supplied. Regression failed before;38 affected tests, main typecheck, build and actual Electron/MCP/generated-frame proof pass. Native unchanged-title retest failed to produce an outcome: six provider requests, last logs in local Qwen loading/inference, helper exit1, exact exit cause unestablished. Actual saved compositions remained unchanged and no trusted completion was observed. Owned profile/ports were checked and cleaned; package-v7 predates this latest metadata clarification and remains a distinct frozen artifact. Broad8251/619/105 boundary results precede this tiny change; no newer full-boundary pass is implied.
+
+
+2026-10-14 current-source gate: v8 isolated build failed ENOSPC during Electron extraction. Raw final-core-package-v8.log and package-v8-failed-inventory.json preserved; only incomplete ownedv8copy removed. Preservedv7 continues to prove its historical bundled native workflow, but predates new memory provenance contract/evidence metadata. Latest-source packaged startup BLOCKED on adequate storage; no installed-app modifications or public-distribution claims. Clean other-model dependencies/physicalMac/signing remain unproven.

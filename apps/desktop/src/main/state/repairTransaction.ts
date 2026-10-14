@@ -20,7 +20,7 @@ function validateValue(value: unknown, schema: any, at: string): void {
     }
   }
 }
-export function validateRepairRequest(a: Record<string, unknown>, definition: (name: string) => McpToolDef): void {
+function validateRepairRequestFields(a: Record<string, unknown>, definition: (name: string) => McpToolDef): void {
   if (Object.keys(a).some(k => !['reason', 'expected_state_version', 'operations'].includes(k))) throw new McpArgError('Unknown transaction field')
   if (typeof a.expected_state_version !== 'string' || !/^[a-f0-9]{64}$/.test(a.expected_state_version)) throw new McpArgError('Current packet expected_state_version required')
   if (typeof a.reason !== 'string' || !a.reason.trim() || a.reason.length > 1000) throw new McpArgError('Repair reason must contain 1–1000 characters')
@@ -30,6 +30,10 @@ export function validateRepairRequest(a: Record<string, unknown>, definition: (n
     if (Object.keys(op).some(k => !['kind', 'layer_id', 'patch'].includes(k))) throw new McpArgError(`operations[${index}]: unknown field`)
     validateValue({ layer_id: op.layer_id, patch: op.patch }, definition(op.kind).inputSchema, `operations[${index}]`)
   }
+}
+export function validateRepairRequest(a: Record<string, unknown>, definition: (name: string) => McpToolDef): void {
+  try { validateRepairRequestFields(a,definition) }
+  catch(error) { throw new McpArgError(`Repair contract: {expected_state_version, reason, operations: [{kind, layer_id, patch}]}. operations must be a JSON array, not a string; use patch {kind: "Text", x, y} for text position. No aliases or partial edits accepted. ${error instanceof Error?error.message:String(error)}`) }
 }
 /** Measured adjacent intervals in affected tracks; no editorial verdict. */
 export function transactionGeometry(project: Project, layerIds: string[]) {

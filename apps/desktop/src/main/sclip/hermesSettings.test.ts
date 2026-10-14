@@ -43,9 +43,14 @@ describe('secure Hermes settings', () => {
       expect(saved).toContain('Use concise replies.')
       expect(saved).toContain('current deferred tool_search/tool_describe catalog')
       expect(saved).toContain('installed skills are not proof of availability')
+      expect(saved).toContain('Deferred MCP calls:')
+      expect(saved).toContain('name and arguments at the top level')
+      expect(saved).toContain('An argument/schema error is not a lost MCP connection')
+      expect(saved).toContain('Do not launch another Hermes agent')
       expect(saved).toContain('cwd: "/tmp/my-project"')
       writeHermesProfile(dir, 5678)
       expect(readFileSync(path.join(dir, 'config.yaml'), 'utf8').split('Capability reporting:')).toHaveLength(2)
+      expect(readFileSync(path.join(dir, 'config.yaml'), 'utf8').split('Deferred MCP calls:')).toHaveLength(2)
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
   it('uses the existing Hermes max_turns setting, migrating only the old Sclip default', () => {
@@ -180,4 +185,25 @@ describe('secure Hermes settings', () => {
       expect(JSON.stringify(profile)).not.toContain(SECRET)
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
+})
+
+it('disables unsolicited title inference and preserves an explicit no-compression test profile across rewrite and creator isolation',()=>{
+ const dir=mkdtempSync(path.join(os.tmpdir(),'sclip-no-aux-')),home=path.join(dir,'creator')
+ try{
+  writeFileSync(path.join(dir,'config.yaml'),'compression:\n  enabled: false\nauxiliary:\n  title_generation:\n    enabled: false\n')
+  writeHermesProfile(dir,0,base)
+  const first=readFileSync(path.join(dir,'config.yaml'),'utf8')
+  expect(first).toContain('title_generation:\n    enabled: false')
+  expect(first).toContain('compression:\n  enabled: false')
+  initializeCreatorHermesControls(dir,home);writeHermesProfile(home,0,base)
+  const second=readFileSync(path.join(home,'config.yaml'),'utf8')
+  expect(second).toContain('title_generation:\n    enabled: false')
+  expect(second).toContain('compression:\n  enabled: false')
+ }finally{rmSync(dir,{recursive:true,force:true})}
+})
+
+it('routes creator interpretations through canonical evidence-linked memory without requiring learning or choosing edits',()=>{
+ const dir=mkdtempSync(path.join(os.tmpdir(),'creator-routing-profile-'))
+ try{writeFileSync(path.join(dir,'config.yaml'),'agent:\n  system_prompt: Preserve this custom instruction\n');writeHermesProfile(dir,0,base);writeHermesProfile(dir,0,base);const text=readFileSync(path.join(dir,'config.yaml'),'utf8');expect(text).toContain('Preserve this custom instruction');expect(text.match(/Creator style routing:/g)).toHaveLength(1);expect(text).toContain('mcp__weftcut__creator_style_memory');expect(text).toContain('Decline learning when the evidence is insufficient');expect(text).toContain('Do not put creator style interpretations into generic memory');expect(text).toContain('Current user instructions override remembered preferences')}
+ finally{rmSync(dir,{recursive:true,force:true})}
 })

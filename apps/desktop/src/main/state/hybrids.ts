@@ -29,7 +29,7 @@ export interface ComputeNapi {
   /** Parse a subtitle body → {cues, simplified, label} JSON. (apply_subtitles) */
   parseSubtitles(body: string, format: string | null): Promise<string>
   /** synthesize_speech: TTS + cache + probe → {media_item, …} JSON. */
-  synthesizeSpeechCompute(argsJson: string): Promise<string>
+  synthesizeSpeechCompute(argsJson: string, signal?: AbortSignal): Promise<string>
   /** The WHOLE-source floor scan for a serialized MediaItem: `ShotReport` JSON
    *  `{shots,cut_scores}` in source-absolute time, from the VSHOT cache
    *  (computed and written through on a miss). The one expensive shot call —
@@ -121,6 +121,14 @@ export type HybridDeps = {
   readFile: (p: string) => string
   /** Current composition geometry — for caption layout / speech placement. */
   snapshotComposition: () => { width: number; height: number; duration_us: number }
+  /** Identity of this opening, including reopening the same project UUID. */
+  projectOpening?: () => string
+}
+
+export interface HybridRequest {
+  signal?: AbortSignal
+  /** Request/turn lease, checked synchronously at the authoritative write. */
+  assertAuthority?: () => void
 }
 
 /** Return the id of the topmost (last) track, or create a new "Voiceover"
@@ -1024,7 +1032,7 @@ export async function removePauses(
  *  the renderer's typed wrapper parses it (`renderer/ipc/index.ts`).
  *
  *  Throws on a rejected actor write or an unhandled tool. */
-export async function runHybrid(tool: string, args: Record<string, unknown>, deps: HybridDeps): Promise<unknown> {
+export async function runHybrid(tool: string, args: Record<string, unknown>, deps: HybridDeps, request: HybridRequest = {}): Promise<unknown> {
   switch (tool) {
     case 'import_media': {
       const path = args.path as string
@@ -1086,19 +1094,28 @@ export async function runHybrid(tool: string, args: Record<string, unknown>, dep
       if (args.preview_only !== undefined && typeof args.preview_only !== 'boolean') throw new Error('preview_only must be boolean')
       // Validate obvious placement mistakes before expensive synthesis.
       const startingProjectId = deps.actor.snapshot().project_id
+      const opening = deps.projectOpening?.()
+      const assertPlacementAuthority = () => {
+        request.signal?.throwIfAborted()
+        request.assertAuthority?.()
+        if (deps.actor.snapshot().project_id !== startingProjectId || deps.projectOpening?.() !== opening)
+          throw new Error('SPEECH_PROJECT_CHANGED: project opening changed during synthesis; no project writes committed.')
+      }
+      assertPlacementAuthority()
       const requestedTrack = args.target_track_id as string | undefined
       if (requestedTrack && !Object.values(deps.actor.snapshot().compositions).some(c => c.tracks.some(t => t.id === requestedTrack)))
         throw new Error('TrackNotFound: target_track_id must name a current track. Read the current timeline IDs before retrying.')
-      const computed = JSON.parse(await deps.compute.synthesizeSpeechCompute(JSON.stringify(args))) as {
+      const computed = JSON.parse(await deps.compute.synthesizeSpeechCompute(JSON.stringify(args), request.signal)) as {
         media_item: MediaItem; duration_us: number; cached: boolean; synthesis?: unknown
       }
       const {media_item, duration_us, cached, synthesis} = computed
-      if (deps.actor.snapshot().project_id !== startingProjectId) throw new Error('SPEECH_PROJECT_CHANGED: project changed during synthesis; cached audio preserved, no project writes committed.')
+      assertPlacementAuthority()
       if (!Number.isSafeInteger(duration_us) || duration_us <= 0) throw new Error('Synthesis returned no valid audio duration; no project mutation committed.')
       if (args.preview_only === true) return JSON.stringify({file_path: media_item.path_abs, duration_us, cached, synthesis, placed: false})
       const tStart = (args.t_start_us as number | undefined) ?? deps.snapshotComposition().duration_us
       const tEnd = tStart + duration_us
       const trackId = requestedTrack ?? ensureAudioTrack(deps)
+      assertPlacementAuthority()
       const placed = deps.actor.dispatch('place_synthesized_speech', {media: media_item, track: trackId, duration_us, t_start_us: tStart, t_end_us: tEnd})
       if (!placed.ok) throw new Error(JSON.stringify({code: 'SPEECH_PLACEMENT_REJECTED', error: placed.error,
         project_changed: false, generated_audio: {file_path: media_item.path_abs, duration_us, cached, synthesis},
@@ -1107,7 +1124,9 @@ export async function runHybrid(tool: string, args: Record<string, unknown>, dep
       // Jobs are derived work. A job enqueue failure must not misreport a
       // successful authoritative placement as a failed editing command.
       let derivativeStatus = 'queued'
-      try { if (receipt.imported) await deps.enqueueDerivatives([media_item]) } catch { derivativeStatus = 'enqueue_failed' }
+      // Placement is synchronous: cancellation cannot interleave with that
+      // commit. Do not start derived work for a subsequently invalid lease.
+      try { assertPlacementAuthority(); if (receipt.imported) await deps.enqueueDerivatives([media_item]) } catch { derivativeStatus = 'enqueue_failed' }
       return JSON.stringify({...receipt, t_start_us: tStart, t_end_us: tEnd, cached, synthesis, derivative_status: derivativeStatus, placed: true})
     }
     case 'auto_split_by_shot': {

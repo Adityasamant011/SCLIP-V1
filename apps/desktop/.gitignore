@@ -29,6 +29,7 @@ resources/ffmpeg/*/SOURCE-OFFER.txt
 # BtbN LGPL shared ffmpeg build (fetched by fetch-ffmpeg-lgpl.mjs):
 # bin/+include/+lib/+manifest.json are all download artifacts, never committed.
 resources/ffmpeg-lgpl/
+resources/whisper/
 
 # electron-builder output (transient build artifacts)
 release/

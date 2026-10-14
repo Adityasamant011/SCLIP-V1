@@ -9,7 +9,7 @@ export function toolDimensions(tool: string, data: any = {}): EvidenceDimension[
   if (tool === 'inspect_rendered_audio') return data.observed_dimensions ?? []
   if (tool === 'inspect_timeline_range_visuals' || tool === 'inspect_timeline_temporal_window') return Array.isArray(data.frame_observations) && !data.frame_observations.some((f:any)=>f.inference_ok) ? ['geometry'] : ['visual', 'geometry']
   if (['vision_inspect','inspect_timeline_frame'].includes(tool)) return data.composed_frame_facts ? ['visual','geometry'] : ['visual']
-  if (tool === 'render_timeline_range') return ['visual', 'audio']
+  if (tool === 'render_timeline_range') return data.has_audio === false ? ['visual'] : ['visual', 'audio']
   if (tool === 'get_editorial_evidence_packet') return data.observed_dimensions ?? ['timeline', 'text']
   if (tool === 'get_timeline_context') return ['timeline', 'text'] // Video-source cut cues alone do not establish audible speech in the edited Audio layer.
   if (tool === 'calculate_video_fit') return ['geometry']

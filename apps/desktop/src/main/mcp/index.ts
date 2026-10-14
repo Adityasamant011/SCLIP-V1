@@ -1,3 +1,8 @@
+import { CompletionCheckpoint, type HermesTurnEvent } from '../sclip/completionCheckpoint.js'
+import { validTurnEvent, type HermesLifecycleLease } from '../sclip/hermesLifecycle.js'
+import { verifyDelivery } from '../sclip/finalOutput.js'
+import { randomBytes } from 'node:crypto'
+import { setEditingBrief } from '../sclip/completionReview.js'
 import { currentCritique } from '../sclip/reviewer/currentCritique.js'
 import { completionDisposition, type CompletionReview } from '../sclip/completionReview.js'
 import {evidenceCoverage} from '../sclip/evidenceModalities.js'
@@ -10,7 +15,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js'
 import { randomUUID, timingSafeEqual } from 'node:crypto'
-import { buildMcpServer, type McpServerOptions } from './server.js'
+import { buildMcpServer, registeredMcpTools, type McpServerOptions } from './server.js'
 import { loadOrInitAuth, saveAuth, rotateToken, type McpAuth } from './auth.js'
 import { listenLoopback } from './bind.js'
 import { NO_MCP_LOG, type McpLogEntryInput } from './withLog.js'
@@ -25,8 +30,11 @@ export interface McpInfoView {
 }
 
 export interface McpHost {
+  setEditingBrief(brief: string | null, projectId?: string): void
+  registerHermesTerminal(projectId: string, sessionId: string, handler: (event: HermesTurnEvent) => void): HermesLifecycleLease
   reviewDisposition(): ReturnType<typeof completionDisposition> | {status:string}
   getInfo(): McpInfoView
+  getToolCount(): number
   connectionSnapshot(): AgentConnectionSnapshot
   resetToken(): string
   notifyChange(summary: unknown): void
@@ -37,12 +45,21 @@ export interface McpHost {
 export type McpHostOptions = McpServerOptions
 
 export async function startMcpHost(backend: Backend, opts: McpHostOptions = {}): Promise<McpHost> {
+  // Use the host's actual discovery options, including optional local senses.
+  const toolCount = (await registeredMcpTools(backend, opts)).length
   let auth: McpAuth = loadOrInitAuth()
   const transports = new Map<string, StreamableHTTPServerTransport>()
   const servers = new Set<Server>()
   const reviews = new Map<string, { projectId: string; guard: RevisionLoopGuard }>()
   const connections = new Map<string, AgentConnection>()
   const completionReviews = new Map<string, CompletionReview>()
+  const checkpoint = new CompletionCheckpoint(completionReviews,{
+    current:()=>{const ts=opts.getTsHost?.();if(!ts?.actor||!ts.agent)return undefined;const activity=ts.agent.snapshot();return {actor:ts.actor,opening:activity.workspace_id,pending:activity.activities.some(a=>a.state==='running')}},
+    review:()=>opts.getReviewerSummary?.(true),
+    verify:(project,requirements,signal)=>opts.verifyCompletionOutput?opts.verifyCompletionOutput(project,requirements,signal):verifyDelivery(project,requirements,opts.getActiveWindow??(()=>null),signal),
+    endWork:binding=>{const agent=opts.getTsHost?.()?.agent,owned=agent?.snapshot().session?.connection_id;if(owned&&binding.connections.has(owned))agent!.end('agent',owned)},
+  })
+  const nativeTerminals=new Map<string,{token:string;binding:import('../sclip/completionCheckpoint.js').TerminalBinding;handler:(event:HermesTurnEvent)=>void}>()
   let available = true
   const log = opts.log ?? NO_MCP_LOG
 
@@ -90,6 +107,13 @@ export async function startMcpHost(backend: Backend, opts: McpHostOptions = {}):
       return
     }
     next()
+  })
+
+  appExpress.post('/mcp/terminal/:id',(req,res)=>{
+    const terminal=nativeTerminals.get(String(req.params.id)),token=req.headers['x-sclip-lifecycle']
+    if(!terminal||typeof token!=='string'||Buffer.byteLength(token)!==Buffer.byteLength(terminal.token)||!timingSafeEqual(Buffer.from(token),Buffer.from(terminal.token))){res.status(403).json({error:'Unknown native terminal lifecycle'});return}
+    if(!validTurnEvent(req.body)){res.status(400).json({error:'Invalid native task metadata'});return}
+    try{terminal.handler(req.body);res.json({accepted:true})}catch{res.status(409).json({error:'Stale native task/project binding'})}
   })
 
   async function sourceMaps(snap: import('../state/model.js').Project, coarse: boolean) {
@@ -144,7 +168,11 @@ export async function startMcpHost(backend: Backend, opts: McpHostOptions = {}):
     }
     // No usable existing transport: only allow a fresh initialize request.
     if (!sid && isInitializeRequest(req.body)) {
+      const nativeId=typeof req.query.native_terminal==='string'?req.query.native_terminal:undefined
+      const native=nativeId?nativeTerminals.get(nativeId):undefined
+      if(nativeId&&!native){res.status(409).json({error:'Unknown native terminal connection'});return}
       const connectionId = randomUUID()
+      native?.binding.connections.add(connectionId)
       let newServer: Server | undefined
       transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => connectionId,
@@ -197,7 +225,9 @@ export async function startMcpHost(backend: Backend, opts: McpHostOptions = {}):
       const reviewId = typeof req.query.review_session === 'string' ? req.query.review_session : undefined
       const review = reviewId ? reviews.get(reviewId) : undefined
       if (reviewId && !review) { res.status(404).json({ error: 'Unknown review session' }); return }
-      newServer = buildMcpServer(backend, { ...opts, completionReviews, connectionId, ...(review ? { revisionGuard: review.guard, reviewProjectId: review.projectId } : {}) })
+      newServer = buildMcpServer(backend, { ...opts, observeCompletion:()=>checkpoint.observe(), completionReviews, connectionId,
+        ...(native ? {captureRequestAuthority: () => checkpoint.captureRequestAuthority(native.binding)} : {}),
+        ...(review ? { revisionGuard: review.guard, reviewProjectId: review.projectId } : {}) })
       servers.add(newServer)
       // `getClientVersion()` is populated while the `initialize` REQUEST is
       // handled, which precedes the `notifications/initialized` that fires this
@@ -241,10 +271,17 @@ export async function startMcpHost(backend: Backend, opts: McpHostOptions = {}):
   // Credentials are available through the connection settings, never logs.
 
   return {
+    getToolCount() { return toolCount },
     connectionSnapshot(): AgentConnectionSnapshot {
       return { available, url, connections: [...connections.values()] }
     },
-    reviewDisposition() { const project=opts.getTsHost?.()?.actor.snapshot(); return project ? completionDisposition(project,completionReviews) : {status:"not_considered_in_this_state"} },
+    registerHermesTerminal(projectId,sessionId,handler) {
+      const binding=checkpoint.bind(projectId,sessionId),id=randomUUID(),token=randomBytes(32).toString('hex')
+      nativeTerminals.set(id,{token,binding,handler})
+      return {url:`${url}/terminal/${id}`,token,start:e=>checkpoint.start(binding,e),finish:(e,allow,cancelled)=>checkpoint.finish(binding,e,allow,cancelled),cancel:()=>checkpoint.cancel(binding),interrupt:(reason,cancelled)=>checkpoint.interrupt(binding,reason,cancelled),close:()=>{checkpoint.closeBinding(binding);nativeTerminals.delete(id)}}
+    },
+    setEditingBrief(brief,projectId) {checkpoint.observe(); const project=opts.getTsHost?.()?.actor.snapshot(); if(project&&(!projectId||project.project_id===projectId))setEditingBrief(project,completionReviews,brief) },
+    reviewDisposition() { checkpoint.observe(); const project=opts.getTsHost?.()?.actor.snapshot(); return project ? completionDisposition(project,completionReviews) : {status:"not_considered_in_this_state"} },
     getInfo(): McpInfoView {
       return { bind: `127.0.0.1:${port}`, url, bearer_token: auth.token }
     },
@@ -268,6 +305,7 @@ export async function startMcpHost(backend: Backend, opts: McpHostOptions = {}):
       }
     },
     async close(): Promise<void> {
+      checkpoint.close();nativeTerminals.clear()
       available = false
       reviews.clear()
       for (const t of transports.values()) await t.close().catch(() => {})

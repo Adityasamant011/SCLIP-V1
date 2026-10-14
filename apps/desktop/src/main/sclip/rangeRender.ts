@@ -38,11 +38,14 @@ export interface RangeRenderResult {
 export async function exportThroughLiveCompositor(
   project: Project,
   window: { isDestroyed(): boolean; webContents: { executeJavaScript(code: string): Promise<unknown> } } | null,
-  request: { outputPath: string; startUs: number; endUs: number; resolutionHeight?: number; fps?: number; audioOnly?: boolean },
+  request: { outputPath: string; startUs: number; endUs: number; resolutionHeight?: number; fps?: number; audioOnly?: boolean; signal?: AbortSignal },
 ): Promise<void> {
   if (!window || window.isDestroyed()) throw new Error('Composed export requires an open Sclip desktop window')
+  request.signal?.throwIfAborted()
+  const requestId = randomUUID()
   const code = `window.__sclipExportRange ? window.__sclipExportRange(${JSON.stringify({
     projectId: project.project_id,
+    requestId,
     outputPath: request.outputPath,
     startUs: request.startUs,
     endUs: request.endUs,
@@ -50,7 +53,25 @@ export async function exportThroughLiveCompositor(
     fps: request.fps,
     audioOnly: request.audioOnly,
   })}) : Promise.reject(new Error('Sclip export surface is not ready'))`
-  await window.webContents.executeJavaScript(code)
+  let cancellation: Promise<unknown> | undefined
+  const cancel = () => {
+    // The renderer cancels only the controller registered under this UUID.
+    // A user export or a later inspection has no matching lease.
+    cancellation = window.webContents.executeJavaScript(`window.__sclipCancelExportRange?.(${JSON.stringify(requestId)})`).catch(() => undefined)
+  }
+  const executing = window.webContents.executeJavaScript(code)
+  request.signal?.addEventListener('abort', cancel, {once:true})
+  if (request.signal?.aborted) cancel()
+  try { await executing } catch (error) {
+    // Electron may deserialize a renderer DOMException as a plain object.
+    // Keep owned cancellation recognizable to the MCP caller.
+    request.signal?.throwIfAborted()
+    throw error
+  } finally {
+    request.signal?.removeEventListener('abort', cancel)
+    await cancellation
+  }
+  request.signal?.throwIfAborted()
   const stat = fs.statSync(request.outputPath, { throwIfNoEntry: false })
   if (!stat || stat.size <= 1024) throw new Error('The production export flow did not produce a media file')
 }
@@ -73,7 +94,7 @@ export async function renderComposedTimelineRange(
   const outputPath = path.join(outputDir, `${randomUUID()}.${options.audioOnly ? 'm4a' : 'mp4'}`)
   let hasAudio: boolean
   try {
-    await exportThroughLiveCompositor(project, options.getActiveWindow(), { outputPath, startUs: start_us, endUs: end_us, audioOnly: options.audioOnly })
+    await exportThroughLiveCompositor(project, options.getActiveWindow(), { outputPath, startUs: start_us, endUs: end_us, audioOnly: options.audioOnly, signal: options.signal })
     hasAudio = await renderedFileHasAudio(outputPath, resolveFfmpegPath(options.resourcesPath).replace(/ffmpeg(\.exe)?$/, 'ffprobe$1'), options.signal)
     options.signal?.throwIfAborted()
   } catch (error) {

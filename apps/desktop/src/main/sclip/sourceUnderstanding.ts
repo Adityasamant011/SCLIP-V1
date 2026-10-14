@@ -27,7 +27,7 @@ export function buildSourceUnderstanding(media: MediaItem, indexes: SourceObserv
   const packet = { identity:{media_id:media.id,source_hash:media.file_hash_blake3,coordinate_space:'source',evidence_origin:'SOURCE_MEDIA'},
     metadata:{duration_us:duration,kind:media.kind,width:media.metadata.video?.width??null,height:media.metadata.video?.height??null,audio_stream_present:!!media.metadata.audio,evidence_class:'AUTHORITATIVE_MEDIA_METADATA'},
     structure:{basis:'uniform coverage grid, not scene boundaries or editorial sections',cells},
-    observations:observations.slice(0,SOURCE_MAP_LIMITS.observations).map(x=>({source_t_us:x.source_t_us,kind:x.kind,description:x.description.slice(0,SOURCE_MAP_LIMITS.description_chars),model:x.model,evidence_class:x.evidence,observed_range_us:x.kind==='visual' ? [x.source_t_us,x.source_t_us] : x.sample_window_us})),
+    observations:observations.slice(0,SOURCE_MAP_LIMITS.observations).map(x=>({source_t_us:x.source_t_us,kind:x.kind,description:x.description.slice(0,SOURCE_MAP_LIMITS.description_chars),description_clipped:x.description.length>SOURCE_MAP_LIMITS.description_chars,generation:x.generation??null,confidence:x.confidence??null,model:x.model,evidence_class:x.evidence,observed_range_us:x.kind==='visual' ? [x.source_t_us,x.source_t_us] : x.sample_window_us})),
     transcript:{status:speech.length ? 'cached' : 'not_generated',segment_count:speech.length,word_timing_available:speech.some(s=>s.words?.length),speech_presence:speech.length ? 'observed_in_transcript_ranges' : 'unknown'},
     audio_measurements:indexes.filter(x=>x.audio.status==='available').slice(0,4).map(x=>({source_range_us:x.analysis_range_us??null,signal_analysis:{tempo_bpm:x.audio.signal_analysis?.tempo_bpm,has_clipping:x.audio.signal_analysis?.has_clipping,beat_count:x.audio.signal_analysis?.beats_us?.length},evidence_class:'DETERMINISTIC_MEASUREMENT',semantic_audio:'not_available'})),
     acquisition:{local_compute:'Qwen source frames and optional signal measurements',cached:indexes.every(x=>x.cached),cloud_inference:'none; only bounded returned text enters Hermes context'},
@@ -45,8 +45,30 @@ export function sourceSpeechContext(media:MediaItem, transcript:CachedTranscript
   if(![start,end,before,after].every(Number.isSafeInteger)||start<0||end<=start||end>duration||before<0||after<0||before>10_000_000||after>10_000_000)throw new Error('Valid source bounds and context padding of 0–10 seconds required')
   const lo=Math.max(0,start-before),hi=Math.min(duration,end+after)
   if(hi-lo>60_000_000)throw new Error('Speech context including padding is limited to 60 source seconds')
-  const select=(a:number,b:number)=>(transcript?.segments??[]).filter(s=>s.t_end_us>a&&s.t_start_us<b).map(s=>({...s,words:s.words?.filter(w=>w.t_end_us>a&&w.t_start_us<b)}))
-  const result={coordinate_space:'source',evidence_origin:'SOURCE_MEDIA',media_id:media.id,source_hash:media.file_hash_blake3,evidence_class:'MODEL_TRANSCRIPTION',status:transcript?.segments?.length?'cached':'not_generated',requested_range_us:[start,end],context_range_us:[lo,hi],before:select(lo,start),selected:select(start,end),after:select(end,hi),limitation:'Segment timing may cross selection edges; words retain original source times where available. Missing cache does not establish silence or a complete sentence.'}
+  const select=(a:number,b:number)=>b<=a?[]:(transcript?.segments??[]).filter(s=>s.t_end_us>a&&s.t_start_us<b).map(s=>({...s,words:s.words?.filter(w=>w.t_end_us>a&&w.t_start_us<b)}))
+  const knownRange=transcript&&Number.isSafeInteger(transcript.in_us)&&Number.isSafeInteger(transcript.out_us)&&transcript.in_us!>=0&&transcript.out_us!>transcript.in_us!&&transcript.out_us!<=duration
+    ? [transcript.in_us!,transcript.out_us!] as const : null
+  const coverage=(a:number,b:number)=>b<=a?'empty_window':!transcript?'not_generated':!knownRange?'unknown':a>=knownRange[0]&&b<=knownRange[1]?'covered':b<=knownRange[0]||a>=knownRange[1]?'unobserved':'partial'
+  const words=(transcript?.segments??[]).flatMap(s=>s.words??[]).filter(w=>Number.isSafeInteger(w.t_start_us)&&Number.isSafeInteger(w.t_end_us)&&w.t_start_us>=0&&w.t_end_us>w.t_start_us&&w.t_end_us<=duration&&w.t_end_us>lo&&w.t_start_us<hi)
+  const boundary=(t:number)=>{
+    // Valid words elsewhere do not establish timing inside an untimed segment.
+    const untimedAtEdge=(transcript?.segments??[]).some(s=>s.t_start_us<=t&&s.t_end_us>=t&&!s.words?.some(w=>words.includes(w)))
+    const available=words.length>0&&!untimedAtEdge
+    return {source_t_us:t,source_time_seconds:t/1e6,evidence_class:'MODEL_TRANSCRIPTION' as const,
+    word_timing_available:available,
+    crossing_words:available?words.filter(w=>w.t_start_us<t&&w.t_end_us>t):null,
+    crossing_segments:(transcript?.segments??[]).filter(s=>s.t_start_us<t&&s.t_end_us>t).slice(0,2).map(s=>({t_start_us:s.t_start_us,t_end_us:s.t_end_us,text:s.text.slice(0,160),text_clipped:s.text.length>160})),
+    previous_word:words.filter(w=>w.t_end_us<=t).sort((a,b)=>b.t_end_us-a.t_end_us)[0]??null,
+    next_word:words.filter(w=>w.t_start_us>=t).sort((a,b)=>a.t_start_us-b.t_start_us)[0]??null,
+    interpretation:'Intersections use reported ASR timing, not measured physical word boundaries. An untimed segment touching this edge makes word crossings unknown even if other context has words. No crossing word does not certify a complete sentence or silence. Hermes judges meaning using surrounding text and actual rendered audio.'}}
+  const result={coordinate_space:'source',evidence_origin:'SOURCE_MEDIA',media_id:media.id,source_hash:media.file_hash_blake3,evidence_class:'MODEL_TRANSCRIPTION',status:transcript?'cached':'not_generated',
+    time_units:'Source microseconds; 1000000us = 1 second',requested_range_us:[start,end],context_range_us:[lo,hi],
+    selection_duration_us_at_speed_1:end-start,selection_duration_seconds_at_speed_1:(end-start)/1e6,
+    duration_scope:'Source selection at speed 1 only, not actual assembled output. Existing plan validation and committed timeline facts report total output duration.',
+    timing_status:{producer_word_timing:transcript?.word_timing??'unspecified',adjustment_count:transcript?.timing_adjustments?.length??null,scope:'Some segments may retain usable word arrays even when the producer marks overall timing unavailable or adjusted. Edge-specific availability is reported separately.'},
+    coverage:{cached_range_us:knownRange,before:coverage(lo,start),selected:coverage(start,end),after:coverage(end,hi),limitation:'Coverage describes the transcription request window, not speech presence. Empty text in unobserved time is not silence.'},
+    boundaries:{start:boundary(start),end:boundary(end)},before:select(lo,start),selected:select(start,end),after:select(end,hi),
+    limitation:'Segment timing may cross selection edges; words retain original source times where available. Missing cache does not establish silence or a complete sentence. Sentence completeness is an editorial judgment, not a punctuation rule.'}
   if(Buffer.byteLength(JSON.stringify(result))>12000)throw new Error('Speech context exceeds bounded output; choose a narrower source range')
   return result
 }

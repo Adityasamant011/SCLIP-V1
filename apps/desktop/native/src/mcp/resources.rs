@@ -424,6 +424,7 @@ async fn find_cached_transcript(
         if path.extension().and_then(|s| s.to_str()) == Some("json") {
             if let Ok(bytes) = tokio::fs::read(&path).await {
                 if let Ok(cached) = serde_json::from_slice::<crate::speech::transcript::CachedTranscript>(&bytes) {
+                    let Ok(cached) = cached.validated() else { continue; };
                     if cached.source_hash == source_hash {
                         if cached.is_full_source {
                             crate::cache::touch_if_stale(&path);
@@ -1231,6 +1232,7 @@ mod stateless_tests {
         #[cfg(feature = "speech")]
         {
             let transcript_entry = crate::speech::transcript::CachedTranscript {
+                timing_adjustments: Vec::new(),
                 source_hash: hash.clone(),
                 is_full_source: true,
                 source_duration_us: Some(10_000_000),

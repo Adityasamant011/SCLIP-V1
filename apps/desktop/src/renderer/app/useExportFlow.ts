@@ -125,7 +125,7 @@ export function useExportFlow(deps: {
   closeConfirmOpen: boolean;
   setCloseConfirmOpen: React.Dispatch<React.SetStateAction<boolean>>;
   runExportWithSettings: (settings: ExportSettings, path: string,
-    range?: { startUs: number; endUs: number }, origin?: "user" | "inspection") => Promise<void>;
+    range?: { startUs: number; endUs: number }, origin?: "user" | "inspection", signal?: AbortSignal) => Promise<void>;
   openRenderPlayPopup: (path: string) => Promise<void>;
   revealExportedFile: (path: string) => void;
 } {
@@ -259,6 +259,8 @@ export function useExportFlow(deps: {
     (
       proj: ProjectSummary | null,
       range: { startUs: number | null; endUs: number | null },
+      controller?: AbortController,
+      update: (state: ExportState | null) => void = setExportState,
     ): Promise<AudioFxGateOutcome> =>
       runAudioFxGate({
         listen,
@@ -275,8 +277,8 @@ export function useExportFlow(deps: {
             ? t("export.failed_audio_fx_chain", { layer, message })
             : t("export.failed_audio_fx", { effect, layer, message }),
         onWaiting: (labels) => {
-          const ctrl = new AbortController();
-          setExportState({
+          const ctrl = controller ?? new AbortController();
+          update({
             kind: "preparing",
             labels,
             onCancel: () => ctrl.abort(),
@@ -308,9 +310,17 @@ export function useExportFlow(deps: {
   // clear.
   const renderInFlight = useRef(false);
   const runExportWithSettings = useCallback(
-    async (settings: ExportSettings, path: string, range?: { startUs: number; endUs: number }, origin: "user" | "inspection" = "user") => {
+    async (settings: ExportSettings, path: string, range?: { startUs: number; endUs: number }, origin: "user" | "inspection" = "user", requestSignal?: AbortSignal) => {
+    requestSignal?.throwIfAborted();
     if (renderInFlight.current) throw new Error("A render is already running");
     renderInFlight.current = true;
+    const controller = new AbortController();
+    const signal = controller.signal;
+    const cancel = () => controller.abort();
+    requestSignal?.addEventListener('abort', cancel, {once:true});
+    if (requestSignal?.aborted) cancel();
+    const ownedTemps: string[] = [];
+    let ownsVideoSink = false;
     const presentation = createRenderPresentation(origin, setExportState);
     const setRunState = presentation.update;
     let failed = false;
@@ -378,7 +388,7 @@ export function useExportFlow(deps: {
         await tracker.ready; // listeners first — a fast job must not slip by
         const conformWaiting = await ensureExportAudioConform({ startUs, endUs });
         if (conformWaiting.length > 0) {
-          const ctrl = new AbortController();
+          const ctrl = controller;
           setRunState({
             kind: "preparing",
             labels: conformWaiting.map(
@@ -405,7 +415,7 @@ export function useExportFlow(deps: {
       }
       // The mixer reads a baked sibling wherever a chain is desired, so the
       // conform gate above is only half the audio wait.
-      const fx = await audioFxGate(proj, { startUs, endUs });
+      const fx = await audioFxGate(proj, { startUs, endUs }, controller, setRunState);
       if (fx.kind === "cancelled") {
         setRunState(null);
         return;
@@ -500,7 +510,7 @@ export function useExportFlow(deps: {
       }
 
       if (prep.waiting.length > 0) {
-        const ctrl = new AbortController();
+        const ctrl = controller;
         const labels = prep.waiting.map(
           (id) => store.mediaById.get(id)?.label ?? id,
         );
@@ -565,7 +575,7 @@ export function useExportFlow(deps: {
             endUs,
           });
           if (conformWaiting.length > 0) {
-            const ctrl = new AbortController();
+            const ctrl = controller;
             setRunState({
               kind: "preparing",
               labels: conformWaiting.map(
@@ -593,7 +603,7 @@ export function useExportFlow(deps: {
         // ---- Audio effect-chain gate --------------------------------------
         // Same two-part wait as the audio-only path: the conform above, then
         // the bakes that read it.
-        const fx = await audioFxGate(proj, { startUs, endUs });
+        const fx = await audioFxGate(proj, { startUs, endUs }, controller, setRunState);
         if (fx.kind === "cancelled") {
           setRunState(null);
           return;
@@ -614,6 +624,8 @@ export function useExportFlow(deps: {
     const tempVideoPath = await join(tempBase, `weftcut-pixi-${stamp}.${tempVideoExt}`);
     const audioExt = settings.audio.codec === "opus" ? "mka" : "m4a";
     const tempAudioPath = await join(tempBase, `weftcut-pixi-${stamp}.${audioExt}`);
+    ownedTemps.push(tempVideoPath, tempAudioPath);
+    signal.throwIfAborted();
 
     const summary = useProjectStore.getState().summary!;
     const comp = rootCompositionOf(summary);
@@ -747,6 +759,7 @@ export function useExportFlow(deps: {
           ...(settings.codec === "dnxhr" ? { profile: settings.dnxhrProfile } : {}),
           outputPath: tempVideoPath,
         });
+        ownsVideoSink = true;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         console.error("[weftcut/pixi] video sink start failed:", e);
@@ -827,6 +840,7 @@ export function useExportFlow(deps: {
       const speed = elapsedSec > 0 ? currentTimeUs / 1e6 / elapsedSec : 0;
       setRunState({
         kind: "progress",
+        onCancel: cancel,
         progress: {
           progress: encoded / total,
           currentTimeUs,
@@ -857,6 +871,7 @@ export function useExportFlow(deps: {
     let result;
     try {
       result = await previewRef.current?.runPixiExport({
+        signal,
         onProgress,
         encoderConfig,
         outputFps: { num: fpsNum, den: fpsDen },
@@ -873,17 +888,20 @@ export function useExportFlow(deps: {
       const msg = e instanceof Error ? e.message : String(e);
       console.error("[weftcut/pixi] export failed:", e);
       if (nativeSink) await exportVideoSinkCancel().catch(() => {});
+      ownsVideoSink = false;
       setRunState({ kind: "error", detail: msg });
       return;
     }
     if (!result) {
       if (nativeSink) await exportVideoSinkCancel().catch(() => {});
+      ownsVideoSink = false;
       setRunState({
         kind: "error",
         detail: "Preview not initialized.",
       });
       return;
     }
+    signal.throwIfAborted();
 
     // On the native-sink path, signal the sink that all frames have been
     // sent. The sink flushes its encoder + muxer and writes the final
@@ -892,6 +910,7 @@ export function useExportFlow(deps: {
       setRunState({ kind: "finalizing", step: "sink" });
       try {
         await exportVideoSinkFinish();
+        ownsVideoSink = false;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         console.error("[weftcut/pixi] sink finish failed:", e);
@@ -943,6 +962,7 @@ export function useExportFlow(deps: {
     const durationUs = Math.round(
       (result.totalFrames * 1_000_000 * result.fpsDen) / result.fpsNum,
     );
+    signal.throwIfAborted();
     setRunState({
       kind: "complete",
       payload: { outputPath: path, durationUs },
@@ -951,7 +971,17 @@ export function useExportFlow(deps: {
       failed = true;
       throw error;
     } finally {
+      requestSignal?.removeEventListener('abort', cancel);
+      if (signal.aborted) {
+        if (ownsVideoSink) await exportVideoSinkCancel().catch(() => {});
+        for (const file of ownedTemps) await remove(file).catch(() => {});
+      }
       renderInFlight.current = false;
+      if (signal.aborted) {
+        setRunState(null);
+        if (origin === 'inspection') throw new DOMException('Export cancelled', 'AbortError');
+        return;
+      }
       if (!failed) presentation.finish();
     }
     },

@@ -22,6 +22,7 @@ export function buildEditorialEvidencePacket(project: Project, options: Timeline
   const range=options.range ?? {start_us:0,end_us:comp.duration_us}
   if(comp.duration_us>0)validateTimelineRange(range.start_us,range.end_us,comp.duration_us,id)
   const allLayers=comp.tracks.flatMap(t=>t.layers),layers=allLayers.filter(l=>l.t_end_us>range.start_us&&l.t_start_us<range.end_us)
+  const countKinds=(items:typeof allLayers)=>items.reduce<Record<string,number>>((counts,l)=>{counts[l.params.kind]=(counts[l.params.kind]??0)+1;return counts},{})
   const ctx = buildTimelineContext(project, options)
   const source = layers.filter(l => l.params.kind === 'VideoClip' || l.params.kind === 'Audio').sort((a,b) => a.t_start_us - b.t_start_us)
   const speech = source.slice(0, PACKET_LIMITS.clips).flatMap(l => {
@@ -46,7 +47,7 @@ export function buildEditorialEvidencePacket(project: Project, options: Timeline
   const packet = {
     source_understanding: sourceUnderstanding ?? {status:'not_generated',deeper_evidence:'get_source_understanding with media_id'},
     identity: { project_id: project.project_id, composition_id: id, state_version: createHash('sha256').update(reviewState(project)).digest('hex'), coordinate_space: 'timeline', media_hashes:Object.fromEntries(source.slice(0,PACKET_LIMITS.clips).flatMap(l=>'media' in l.params ? [[l.params.media,project.media_pool[l.params.media]?.file_hash_blake3 ?? null]] : [])), evidence_class: 'AUTHORITATIVE_STATE' },
-    project: { duration_us: comp.duration_us, width: comp.width, height: comp.height, fps: comp.fps, layer_count: allLayers.length, indexed_range_us:[range.start_us,range.end_us] },
+    project: { duration_us: comp.duration_us, duration_seconds:comp.duration_us/1e6, time_units:'Tool times are microseconds; 1000000us = 1 second', width: comp.width, height: comp.height, fps: comp.fps, layer_count: allLayers.length, layer_counts_by_kind:countKinds(allLayers), indexed_layer_counts_by_kind:countKinds(layers), indexed_range_us:[range.start_us,range.end_us], clip_index_scope:'clips indexes only source-backed VideoClip and Audio layers in this range. Empty clips is not an empty composition: other authored layer kinds are counted separately. These counts do not prove enabled coverage, visible pixels, audible signal or brief satisfaction; inspect the actual result and judge against the brief.' },
     tracks: comp.tracks.slice(0,12).map(t => ({id:t.id, enabled:t.enabled, role:t.role, layers:t.layers.length})),
     clips: source.slice(0,PACKET_LIMITS.clips).map(l => ({ layer_id:l.id, kind:l.params.kind, timeline_range_us:[l.t_start_us,l.t_end_us], source_range_us:(l.params.kind==='VideoClip'||l.params.kind==='Audio') ? [l.params.src_in_us,l.params.src_out_us] : null, media_id:'media' in l.params ? l.params.media : null, ...(l.params.kind==='VideoClip'?{speed:l.params.speed,transform:compactTransform(l.params.transform)}: {}) })),
     relationships: rel.slice(0,PACKET_LIMITS.relationships), speech,

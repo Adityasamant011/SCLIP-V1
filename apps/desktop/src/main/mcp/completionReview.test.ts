@@ -32,7 +32,9 @@ async function fixture() {
  const backend={mcpCatalog:async()=>'{"tools":[],"resources":[]}',mcpCallTool:vi.fn(async()=>{throw new Error('Unexpected native tool in offline fixture')})} as any
  const provider=vi.fn(),reviewer=new BackgroundReviewer(ts,undefined,1,undefined,undefined,provider)
  const activeWindow={isDestroyed:()=>false,webContents:{executeJavaScript:async()=>({pngBase64:Buffer.from('offline frame').toString('base64'),tUs:500000})}} as any
- const host=await startMcpHost(backend,{getTsHost:()=>ts,getActiveWindow:()=>activeWindow,getReviewerSummary:()=>reviewer.getSummary()})
+ const host=await startMcpHost(backend,{getTsHost:()=>ts,getActiveWindow:()=>activeWindow,getReviewerSummary:()=>reviewer.getSummary(),
+ // This transport fixture has synthetic media and PNG bytes; decode is an injected I/O seam. Real compositor/decode proof is covered independently.
+ verifyCompletionOutput:async project=>({valid:true,decoded:true,has_video:true,has_audio:false,duration_us:project.compositions[project.root_id].duration_us})})
  const clients:Client[]=[]
  async function connect(){const c=new Client({name:'offline-Hermes-decision',version:'1'},{});await c.connect(new StreamableHTTPClientTransport(new URL(host.getInfo().url),{requestInit:{headers:{Authorization:`Bearer ${host.getInfo().bearer_token}`}}}));clients.push(c);return c}
  const client=await connect(),call=async(n:string,a:Record<string,unknown>={})=>client.callTool({name:n,arguments:a}) as Promise<any>
@@ -45,9 +47,60 @@ async function fixture() {
    expect(r.isError).not.toBe(true)
    return actor.snapshot().compositions[actor.snapshot().root_id].tracks.flatMap(t=>t.layers).find(l=>l.params.kind==='VideoClip')!.id
  }
- return {actor,ts,provider,reviewer,host,call,connect,assemble,async close(){for(const c of clients)await c.close();reviewer.dispose();agent.stop();await host.close()}}
+ return {actor,ts,provider,reviewer,host,call,connect,assemble,activeWindow,async close(){for(const c of clients)await c.close();reviewer.dispose();agent.stop();await host.close()}}
 }
 describe('Normal completion: critique -> Hermes choice -> actor -> fresh evidence',()=>{
+ it('rejects unsupported envelope fields without history changes and permits the correct parameter tool',async()=>{
+  const f=await fixture();try{
+   const id=await f.assemble(),before=f.actor.snapshot(),history=f.actor.historyStatus()
+   const rejected=await f.call('update_layer',{layer_id:id,patch:{label:'Not committed',x:960}})
+   expect(rejected.isError).toBe(true);expect(f.actor.snapshot()).toBe(before);expect(f.actor.historyStatus()).toEqual(history)
+   expect(JSON.stringify(rejected)).toContain('update_layer_params')
+   expect((await f.call('update_layer_params',{layer_id:id,patch:{kind:'VideoClip',x:960}})).isError).not.toBe(true)
+  }finally{await f.close()}
+ })
+ it('refuses a new ordinary mutation from a cancelled native turn while another client can still edit',async()=>{
+  const f=await fixture();let native:Client|undefined
+  try{
+   const id=await f.assemble(),project=f.actor.snapshot()
+   const lease=f.host.registerHermesTerminal(project.project_id,'cancelled-turn',()=>{})
+   lease.start!({kind:'start',turn_id:'cancelled-turn',user_message:'Review this draft.'})
+   const url=new URL(f.host.getInfo().url);url.searchParams.set('native_terminal',lease.url.split('/').at(-1)!)
+   native=new Client({name:'native-after-cancel',version:'1'})
+   await native.connect(new StreamableHTTPClientTransport(url,{requestInit:{headers:{Authorization:'Bearer offline-token'}}}))
+   lease.cancel!();const before=f.actor.snapshot(),history=f.actor.historyStatus()
+   const rejected:any=await native.callTool({name:'update_layer',arguments:{layer_id:id,patch:{label:'Expired request'}}})
+   expect(rejected.isError).toBe(true);expect(f.actor.snapshot()).toBe(before);expect(f.actor.historyStatus()).toEqual(history)
+   expect((await f.call('update_layer',{layer_id:id,patch:{label:'Unrelated valid client'}})).isError).not.toBe(true)
+   lease.close()
+  }finally{await native?.close();await f.close()}
+ })
+ it.each(['ABA','opening','request'] as const)('refuses an in-flight receipt after %s changes, then permits an unchanged inspection',async change=>{
+  const f=await fixture();try{
+   const id=await f.assemble();await f.call('end_agent_session')
+   let begun!:()=>void,release!:()=>void
+   const started=new Promise<void>(r=>begun=r),gate=new Promise<void>(r=>release=r)
+   const original=f.activeWindow.webContents.executeJavaScript
+   f.activeWindow.webContents.executeJavaScript=async()=>{begun();await gate;return original()}
+   const before=reviewState(f.actor.snapshot()),pending=f.call('vision_inspect',{timeline_t_us:500000,question:'Synthetic current frame'}).then(result=>({result}),error=>({error}))
+   await started
+   if(change==='ABA'){
+    f.actor.mcpCall('update_layer_params',JSON.stringify({layer_id:id,patch:{kind:'VideoClip',scale_x:2,scale_y:2}}))
+    f.actor.mcpCall('update_layer_params',JSON.stringify({layer_id:id,patch:{kind:'VideoClip',scale_x:1,scale_y:1}}))
+    expect(reviewState(f.actor.snapshot())).toBe(before)
+   }
+   if(change==='opening')f.actor.replaceState(structuredClone(f.actor.snapshot()))
+   if(change==='request')f.host.setEditingBrief('Make a 2-second video.')
+   release();const outcome=await pending
+   if ('result' in outcome){expect(outcome.result.isError).toBe(true);expect(receipt(outcome.result)).toBeUndefined()}
+   else {expect(change).toBe('opening');expect(outcome.error).toBeTruthy()}
+   f.activeWindow.webContents.executeJavaScript=original
+   // Same-ID reopening requires a new client, not permission to reuse old bindings.
+   const freshClient=change==='opening'?await f.connect():undefined
+   const fresh=freshClient?await freshClient.callTool({name:'vision_inspect',arguments:{timeline_t_us:500000,question:'Current unchanged frame'}}):await f.call('vision_inspect',{timeline_t_us:500000,question:'Current unchanged frame'})
+   expect(receipt(fresh)).toBeTruthy()
+  }finally{await f.close()}
+ })
  it('delivers current framing findings at completion, permits agent-selected repair, blocks premature resolution, then verifies and finishes once',async()=>{
   const f=await fixture()
   try{
@@ -77,6 +130,7 @@ describe('Normal completion: critique -> Hermes choice -> actor -> fresh evidenc
    expect(f.provider).not.toHaveBeenCalled()
   }finally{await f.close()}
  })
+ it('keeps review open when a no-repair conclusion omits requested rendered speech',async()=>{const f=await fixture();try{await f.assemble();await f.call('end_agent_session');f.host.setEditingBrief('Create a video with speech.');const seen=await f.call('vision_inspect',{timeline_t_us:500000,question:'Observe the current frame'});const conclusion=await f.call('revision_control',{action:'conclude_no_repair',evidence_id:receipt(seen).id,reason:'Only visuals have been inspected'});expect(conclusion.isError).toBe(true);expect(conclusion.content[0].text).toContain('requested speech');expect(body(await f.call('revision_control',{action:'status'})).phase).toBe('initial')}finally{await f.close()}})
  it('allows intentional no repair after actual rendered evidence and survives reconnect without resetting budgets',async()=>{
   const f=await fixture();try{
    await f.assemble();const pending=body(await f.call('end_agent_session'))
@@ -155,4 +209,30 @@ print(json.dumps({'native_skill_preload':'PASS','native_mcp_result':'PASS','mode
    expect(result.stdout).toContain('"native_mcp_result": "PASS"')
   }finally{fs.rmSync(home,{recursive:true,force:true});await f.close()}
  },60000)
+})
+
+describe('explicit submitted duration completion',()=>{
+ it('returns grounded correction opportunities and never certifies an unmet duration',async()=>{
+  const f=await fixture();try{
+   await f.assemble();f.host.setEditingBrief('Create a 20-second cut.')
+   const first=body(await f.call('end_agent_session'))
+   expect(first.completion).toBe('correction_required')
+   expect(first.current_output.duration_us).toBe(2000000)
+   expect(first.current_output.source_layers[0].source_duration_us).toBe(5000000)
+   expect(body(await f.call('end_agent_session')).completion).toBe('correction_required')
+   expect(body(await f.call('end_agent_session')).completion).toBe('incomplete')
+   expect(f.host.reviewDisposition().status).toBe('incomplete')
+  }finally{await f.close()}
+ })
+ it('permits Hermes-chosen correction, then still requires fresh rendered review',async()=>{
+  const f=await fixture();try{
+   const id=await f.assemble();f.host.setEditingBrief('Create a 4-second cut.')
+   expect(body(await f.call('end_agent_session')).completion).toBe('correction_required')
+   expect((await f.call('trim_layer',{layer_id:id,edge:'out',new_t_us:4000000})).isError).not.toBe(true)
+   expect(body(await f.call('end_agent_session')).completion).toBe('review_required')
+   const frame=await f.call('vision_inspect',{timeline_t_us:500000,question:'Inspect current corrected output'})
+   await f.call('revision_control',{action:'conclude_no_repair',evidence_id:receipt(frame).id,reason:'Current output is intentionally retained'})
+   expect(body(await f.call('end_agent_session')).completion).toBe('reviewed')
+  }finally{await f.close()}
+ })
 })

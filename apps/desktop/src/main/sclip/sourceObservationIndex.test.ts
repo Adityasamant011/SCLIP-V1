@@ -54,8 +54,8 @@ describe('SourceObservationIndex', () => {
     expect(second.cached).toBe(true)
     expect(second.observations).toHaveLength(1)
     expect(analyze).toHaveBeenCalledTimes(2)
-    const cache = await readFile(path.join(cacheDir, 'source-observations', 'hash-1-v2-vision-sidecar+audio-analyzer+transcript-cache-0-40000000.json'), 'utf8')
-    expect(cache).toContain('"analysis_version": 2')
+    const cache = await readFile(path.join(cacheDir, 'source-observations', 'hash-1-v3-vision-sidecar+audio-analyzer+transcript-cache-0-40000000.json'), 'utf8')
+    expect(cache).toContain('"analysis_version": 3')
     expect(cache).toContain('"source_t_us"')
 
     const secondWindow = await index.retrieve(media, 20_000_000, 40_000_000, 1)
@@ -63,4 +63,27 @@ describe('SourceObservationIndex', () => {
     expect(analyze).toHaveBeenCalledTimes(4)
     expect(analyzeAudio).toHaveBeenCalledTimes(2)
   })
+})
+
+ it('retains capped vision generation and unknown confidence through persisted cache and bounded map', async () => {
+  const cacheDir = await mkdtemp(path.join(os.tmpdir(), 'sclip-observation-metadata-'))
+  const analyze = vi.fn(async () => ({ok:true,description:'x'.repeat(300),model:'test-vlm',confidence:null,latencyMs:1,visibleContent:[],outputTokens:96,outputLimitReached:true}))
+  const options={cacheDir,visionSidecar:{analyze} as never,frameExtractor:async (_s:string,_t:number,out:string)=>{await import('node:fs/promises').then(f=>f.writeFile(out,'frame'))}}
+  const first=await new SourceObservationIndex(options).retrieve(media,0,1_000_000,1,true)
+  expect(first.observations[0]).toMatchObject({generation:{output_tokens:96,max_tokens:96,output_limit_reached:true},confidence:null})
+  const cached=await new SourceObservationIndex(options).retrieve(media,0,1_000_000,1,true)
+  expect(cached.cached).toBe(true);expect(analyze).toHaveBeenCalledTimes(1)
+  expect(cached.observations[0]).toEqual(first.observations[0])
+  const {buildSourceUnderstanding}=await import('./sourceUnderstanding')
+  const map=buildSourceUnderstanding(media,[cached],null)
+  expect(map.observations[0]).toMatchObject({generation:{output_tokens:96,max_tokens:96,output_limit_reached:true},confidence:null,description_clipped:true})
+  expect(map.truncation.size_limited).toBe(false)
+ })
+
+it('reacquires visual evidence after a missing model recovers rather than permanently caching unavailable output', async()=>{
+ const cacheDir=await mkdtemp(path.join(os.tmpdir(),'sclip-source-model-recovery-'));let ready=false
+ const analyze=vi.fn(async()=>ready?{ok:true,description:'Recovered local visible evidence',model:'test-vlm',confidence:null,latencyMs:1,visibleContent:[]}:{ok:false,description:'',model:'test-vlm',confidence:null,latencyMs:1,visibleContent:[],error:'Model unavailable'})
+ const options={cacheDir,visionSidecar:{analyze} as never,frameExtractor:async(_s:string,_t:number,out:string)=>{await import('node:fs/promises').then(f=>f.writeFile(out,'frame'))}}
+ const missing=await new SourceObservationIndex(options).retrieve(media,0,1000000,1,true);expect(missing.status).toBe('insufficient_evidence');expect(missing.observations).toEqual([])
+ ready=true;const recovered=await new SourceObservationIndex(options).retrieve(media,0,1000000,1,true);expect(recovered.cached).toBe(false);expect(recovered.observations[0]?.description).toBe('Recovered local visible evidence');expect(analyze).toHaveBeenCalledTimes(2)
 })

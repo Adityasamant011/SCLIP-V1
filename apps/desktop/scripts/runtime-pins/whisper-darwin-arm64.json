@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "whisper_version": "1.9.1",
+  "ggml_version": "0.15.2",
+  "minimum_macos": "13.0",
+  "sources": [
+    {"name":"whisper.cpp","version":"1.9.1","url":"https://github.com/ggml-org/whisper.cpp/archive/refs/tags/v1.9.1.tar.gz","sha256":"147267177eef7b22ec3d2476dd514d1b12e160e176230b740e3d1bd600118447"},
+    {"name":"ggml","version":"0.15.2","url":"https://github.com/ggml-org/ggml/archive/refs/tags/v0.15.2.tar.gz","sha256":"298e958817a126c44bb8e97c97d5d53d00bd15eca22bebf805f278223fe29e07"}
+  ]
+}

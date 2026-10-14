@@ -41,6 +41,40 @@ describe('Source understanding is evidence, not a story generator',()=>{
   expect(sourceSpeechContext(media,{...transcript,source_hash:'replaced'},0,1_000_000).status).toBe('not_generated')
   expect(buildSourceUnderstanding(media,[index],null).identity).toMatchObject({media_id:media.id,source_hash:media.file_hash_blake3,evidence_origin:'SOURCE_MEDIA'})
  })
+ it('distinguishes untranscribed surrounding time from silence and exposes ASR word intersections',()=>{
+  const cache={...transcript,in_us:9_000_000,out_us:12_000_000,is_full_source:false}
+  const p=sourceSpeechContext(media,cache,10_500_000,11_500_000,2_000_000,3_000_000) as any
+  expect(p.coverage.cached_range_us).toEqual([9_000_000,12_000_000])
+  expect(p.coverage.before).toBe('partial');expect(p.coverage.selected).toBe('covered');expect(p.coverage.after).toBe('partial')
+  expect(p.boundaries.start.crossing_words.map((w:any)=>w.text)).toEqual(['complete'])
+  expect(p.boundaries.end.crossing_words).toEqual([])
+  expect(p.boundaries.end.crossing_segments[0].t_end_us).toBe(12_000_000)
+  expect(p.boundaries.start.evidence_class).toBe('MODEL_TRANSCRIPTION')
+  expect(p.selection_duration_seconds_at_speed_1).toBe(1)
+  expect(p.boundaries.end).not.toHaveProperty('sentence_complete')
+ })
+ it('keeps absent word timing and legacy cache coverage unknown rather than certifying clean cuts',()=>{
+  const p=sourceSpeechContext(media,{...transcript,segments:[{text:'No timed words.',t_start_us:9_000_000,t_end_us:12_000_000}]},10_000_000,11_000_000) as any
+  expect(p.coverage.selected).toBe('unknown')
+  expect(p.boundaries.start.word_timing_available).toBe(false)
+  expect(p.boundaries.start.crossing_words).toBeNull()
+  expect(p.boundaries.end.crossing_words).toBeNull()
+ })
+ it('keeps an empty cached recognition distinct from unavailable evidence and respects zero padding',()=>{
+  const empty=sourceSpeechContext(media,{source_hash:media.file_hash_blake3,in_us:0,out_us:12_000_000,segments:[]},10_000_000,11_000_000,0,0)
+  expect(empty.status).toBe('cached');expect(empty.coverage.selected).toBe('covered')
+  expect(empty.before).toEqual([]);expect(empty.after).toEqual([])
+  expect(empty.boundaries.start.crossing_words).toBeNull()
+  const noPadding=sourceSpeechContext(media,transcript,10_200_000,10_800_000,0,0)
+  expect(noPadding.before).toEqual([]);expect(noPadding.after).toEqual([])
+ })
+ it('does not borrow valid words from another segment to certify an untimed edge',()=>{
+  const mixed={source_hash:media.file_hash_blake3,in_us:0,out_us:12_000_000,word_timing:'none',segments:[{text:'Untimed opening.',t_start_us:0,t_end_us:5_000_000},...transcript.segments]}
+  const p=sourceSpeechContext(media,mixed,2_000_000,10_500_000,0,1_000_000)
+  expect(p.boundaries.start.word_timing_available).toBe(false);expect(p.boundaries.start.crossing_words).toBeNull()
+  expect(p.boundaries.end.crossing_words?.[0].text).toBe('complete')
+  expect(p.timing_status.producer_word_timing).toBe('none')
+ })
  it('preserves contradictory frames and bounds huge observation/text inputs',()=>{
   const many={...index,observations:Array.from({length:500},(_,i)=>({...observation,source_t_us:10_000_000+i,description:(i%2?'No person visible.':'Person visible.')+' x'.repeat(5000)}))}
   const p=buildSourceUnderstanding(media,[many],transcript)
@@ -62,11 +96,14 @@ describe('Source understanding is evidence, not a story generator',()=>{
   const analyze=vi.fn(async()=>({ok:true,description:'Observed setting.',model:'local',confidence:null,latencyMs:0,visibleContent:[]})), audio=vi.fn()
   const idx=new SourceObservationIndex({cacheDir,visionSidecar:{analyze,analyzeAudio:audio} as never,frameExtractor:async()=>{},readTranscript:async()=>transcript})
   const first=await idx.coarseUnderstanding(media);expect(analyze).toHaveBeenCalledTimes(6);expect(audio).not.toHaveBeenCalled()
-  expect(first.observations.filter(x=>x.kind==='visual')).toHaveLength(6)
+  expect(first.structure.cells.reduce((n,c)=>n+c.visual.sample_times_total,0)).toBe(6)
+  expect(first.observations.length+first.truncation.observations_omitted).toBe(first.truncation.observations_total)
+  if(first.truncation.observations_omitted)expect(first.truncation.size_limited).toBe(true)
   await idx.coarseUnderstanding(media);expect(analyze).toHaveBeenCalledTimes(6)
   const reimported=await idx.coarseUnderstanding({...media,id:'another-project-import'})
   expect(reimported.identity.media_id).toBe('another-project-import')
-  expect(reimported.observations.filter(x=>x.kind==='visual')).toHaveLength(6)
+  expect(reimported.structure.cells.reduce((n,c)=>n+c.visual.sample_times_total,0)).toBe(6)
+  expect(reimported.observations).toEqual(first.observations)
   expect(Buffer.byteLength(JSON.stringify(reimported))).toBeLessThanOrEqual(SOURCE_MAP_LIMITS.bytes)
   expect(analyze).toHaveBeenCalledTimes(6)
   const newTranscript={segments:[{text:'New speech cache',t_start_us:25_000_000,t_end_us:27_000_000}]}

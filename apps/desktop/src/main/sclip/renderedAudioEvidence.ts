@@ -74,7 +74,11 @@ export async function inspectRenderedAudio(project:Project,args:Record<string,un
     // reuse identical bytes/range/state; native Whisper owns its engine cache.
     const key=[state,hash,args.start_us,args.end_us].join(':')
     const hit=cache.get(key) as any
-    const pcm=hit&&!args.include_understanding?undefined:await deps.decode(rendered.path,signal)
+    const decoded=hit&&!args.include_understanding?undefined:await deps.decode(rendered.path,signal)
+    // AAC may decode extra samples from its final codec frame. Evidence is
+    // for the requested timeline window, not that encoder padding.
+    const sampleBytes=Math.floor((Number(args.end_us)-Number(args.start_us))/1e6*SAMPLE_RATE)*4
+    const pcm=decoded?.subarray(0,sampleBytes)
     const hasAudio=!!hit||!!pcm
     const start=Number(args.start_us)
     const facts=hit??(pcm?measureRenderedPcm(pcm,start):null)
@@ -84,7 +88,7 @@ export async function inspectRenderedAudio(project:Project,args:Record<string,un
         if(result.isError)throw new Error(result.content?.[0]?.text??'Local transcription failed')
         const data=typeof result.segments!=='undefined'?result:JSON.parse(result.content.find((c:any)=>c.type==='text').text)
         if(!Array.isArray(data.segments))throw new Error('Malformed local transcript')
-        transcript={status:'available',evidence_class:'MODEL_OBSERVATION',backend:data.backend,word_timing:data.word_timing,language:data.language,segments:data.segments}
+        transcript={status:'available',evidence_class:'MODEL_OBSERVATION',backend:data.backend,word_timing:data.word_timing,language:data.language,segments:data.segments,timing_adjustments:data.timing_adjustments??[],timing_adjustment_coordinate_space:data.timing_adjustment_coordinate_space,timing_adjustment_source_start_us:data.timing_adjustment_source_start_us}
       }catch(error){transcript={status:'unavailable',evidence_class:'MODEL_OBSERVATION',segments:[],error:String(error)}}
     }
     signal?.throwIfAborted()

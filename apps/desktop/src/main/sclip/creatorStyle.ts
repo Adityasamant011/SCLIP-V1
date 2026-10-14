@@ -213,7 +213,7 @@ export class CreatorStyleStore {
     const response = () => {
       this.assertControlFloor()
       const enabled=this.enabled(projectId),selected=this.selection(projectId,typeof args.request==='string'?args.request.slice(0,1000):'')
-      return {binding:this.binding(projectId),generation:this.doc.generation,revision:this.doc.revision,context:enabled?selected.context:'',
+      return {binding:this.binding(projectId),learning_enabled:enabled,generation:this.doc.generation,revision:this.doc.revision,context:enabled?selected.context:'',
         preferences:enabled?selected.payload.preferences.map(p=>({id:p.id,version:p.version,status:p.status,scope:p.scope})):[],
         evidence:enabled?selected.payload.recent_evidence.map(e=>({id:e.id,kind:e.kind,authority:e.authority,projectId:e.projectId})):[],
         omitted_evidence:enabled?selected.payload.omitted_evidence:0,omitted_preferences:enabled?selected.payload.omitted_preferences:0,

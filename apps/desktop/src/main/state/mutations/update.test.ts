@@ -36,6 +36,12 @@ describe('applyUpdateLayer', () => {
   it('throws LayerNotFound for a missing layer', () => {
     expectCmd(() => applyUpdateLayer(one(), 'ghost', { enabled: false }), 'LayerNotFound')
   })
+  it('rejects unsupported transform fields before applying any envelope fields', () => {
+    const p = one()
+    const before = structuredClone(p)
+    expectCmd(() => applyUpdateLayer(p, 'a', { label: 'changed', x: 960 } as never), 'InvalidArgument')
+    expect(p).toEqual(before)
+  })
   it('throws TrackLocked when the layer is on a locked track (ungated by corpus)', () => {
     const p = one(); root(p).tracks[0].locked = true
     expectCmd(() => applyUpdateLayer(p, 'a', { t_end_us: 2_000_000 }), 'TrackLocked')

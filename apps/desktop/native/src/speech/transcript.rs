@@ -59,6 +59,49 @@ pub struct Transcript {
 }
 
 impl Transcript {
+    /// Validate model timing against decoded audio. Boundary intersections are
+    /// explicit observations, never claimed to be exact engine timestamps.
+    /// Entirely out-of-window segments are refused rather
+    /// than moved into the window or silently discarded.
+    pub fn validate_audio_bounds(
+        &mut self,
+        duration_us: i64,
+    ) -> Result<Vec<serde_json::Value>, super::error::SpeechError> {
+        let mut adjustments = Vec::new();
+        for (i, seg) in self.segments.iter_mut().enumerate() {
+            if seg.t_start_us < 0 || seg.t_end_us <= seg.t_start_us || seg.t_start_us >= duration_us
+            {
+                return Err(super::error::SpeechError::Parse(format!("segment {i} has invalid/out-of-audio timing [{}, {}] for {duration_us}us; recognition is not usable", seg.t_start_us, seg.t_end_us)));
+            }
+            if seg.t_end_us > duration_us {
+                adjustments.push(serde_json::json!({"segment":i,"original_end_us":seg.t_end_us,"bounded_end_us":duration_us}));
+                seg.t_end_us = duration_us;
+            }
+            if seg.words.iter().any(|w| w.t_end_us <= w.t_start_us || w.t_start_us < seg.t_start_us || w.t_start_us >= seg.t_end_us) {
+                adjustments.push(serde_json::json!({"segment":i,"reason":"unusable_word_timing","original_words":seg.words,"retained_text":seg.text}));
+                // Unusable token offsets cannot support a cut interval. Retain the full
+                // recognized text and segment span, but do not invent word times.
+                seg.words.clear();
+            }
+            for (j, word) in seg.words.iter_mut().enumerate() {
+                if word.t_start_us < seg.t_start_us
+                    || word.t_end_us <= word.t_start_us
+                    || word.t_start_us >= seg.t_end_us
+                {
+                    return Err(super::error::SpeechError::Parse(format!("word {i}:{j} has invalid/out-of-segment timing [{}, {}]; recognition is not usable", word.t_start_us, word.t_end_us)));
+                }
+                if word.t_end_us > seg.t_end_us {
+                    adjustments.push(serde_json::json!({"segment":i,"word":j,"original_end_us":word.t_end_us,"bounded_end_us":seg.t_end_us}));
+                    word.t_end_us = seg.t_end_us;
+                }
+            }
+        }
+        if !adjustments.is_empty() {
+            self.word_timing = WordTiming::None;
+        }
+        Ok(adjustments)
+    }
+
     /// Shift every segment and word timestamp forward by `offset_us` (the
     /// slice's timeline-absolute start), clamping at zero so a negative result
     /// never underflows. Shifts the parsed struct; a caller that needs a cue
@@ -102,6 +145,8 @@ impl Transcript {
 /// Timestamps in `segments` are in **source-media relative time** (0 = start of source media).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CachedTranscript {
+    #[serde(default)]
+    pub timing_adjustments: Vec<serde_json::Value>,
     pub source_hash: String,
     pub is_full_source: bool,
     pub source_duration_us: Option<i64>,
@@ -114,6 +159,22 @@ pub struct CachedTranscript {
 }
 
 impl CachedTranscript {
+    /// Validate persisted observations too: older cache entries must not bypass
+    /// the same bounds policy applied to fresh recognition.
+    pub fn validated(mut self) -> Result<Self, super::error::SpeechError> {
+        let mut transcript = Transcript { segments: self.segments, language: self.language.clone(), word_timing: self.word_timing };
+        transcript.segments.retain(|s| s.text.trim() != "[BLANK_AUDIO]");
+        for seg in &mut transcript.segments {
+            seg.t_start_us -= self.in_us; seg.t_end_us -= self.in_us;
+            for w in &mut seg.words { w.t_start_us -= self.in_us; w.t_end_us -= self.in_us; }
+        }
+        let end = self.source_duration_us.map(|d| d.min(self.out_us)).unwrap_or(self.out_us);
+        self.timing_adjustments.extend(transcript.validate_audio_bounds(end - self.in_us)?);
+        transcript.shift(self.in_us);
+        self.segments = transcript.segments; self.word_timing = transcript.word_timing;
+        Ok(self)
+    }
+
     /// Slice segments and words to a requested sub-window `[req_in_us, req_out_us]`.
     /// Segments intersecting `[req_in_us, req_out_us]` are kept.
     pub fn slice_window(&self, req_in_us: i64, req_out_us: i64) -> Self {
@@ -121,7 +182,8 @@ impl CachedTranscript {
         for seg in &self.segments {
             if seg.t_end_us > req_in_us && seg.t_start_us < req_out_us {
                 let mut s = seg.clone();
-                s.words.retain(|w| w.t_end_us > req_in_us && w.t_start_us < req_out_us);
+                s.words
+                    .retain(|w| w.t_end_us > req_in_us && w.t_start_us < req_out_us);
                 if !seg.words.is_empty() && s.words.is_empty() {
                     continue;
                 }
@@ -149,6 +211,7 @@ impl CachedTranscript {
             }
         }
         CachedTranscript {
+            timing_adjustments: self.timing_adjustments.clone(),
             source_hash: self.source_hash.clone(),
             is_full_source: false,
             source_duration_us: self.source_duration_us,
@@ -191,6 +254,7 @@ pub fn transcript_cache_key(
     want_word_timing: bool,
 ) -> String {
     let mut h = blake3::Hasher::new();
+    h.update(b"audio-bounds-v2\0");
     h.update(source_hash.as_bytes());
     h.update(b"\0");
     match range {
@@ -318,6 +382,7 @@ mod tests {
     fn cached_transcript_roundtrip() {
         let t = sample();
         let cached = CachedTranscript {
+            timing_adjustments: Vec::new(),
             source_hash: "abcd1234ef".into(),
             is_full_source: true,
             source_duration_us: Some(10_000_000),
@@ -337,6 +402,7 @@ mod tests {
     fn cached_transcript_slice_window() {
         let t = sample();
         let cached = CachedTranscript {
+            timing_adjustments: Vec::new(),
             source_hash: "hash123".into(),
             is_full_source: true,
             source_duration_us: Some(10_000_000),
@@ -365,6 +431,7 @@ mod tests {
     #[test]
     fn cached_transcript_slice_window_drops_ghost_and_clamps_bounds() {
         let cached = CachedTranscript {
+            timing_adjustments: Vec::new(),
             source_hash: "hash123".into(),
             is_full_source: true,
             source_duration_us: Some(10_000_000),
@@ -409,12 +476,50 @@ mod tests {
     #[test]
     fn transcript_cache_key_differs_by_range_and_params() {
         let k_full = transcript_cache_key("hash", None, "openai", Some("en"), true);
-        let k_ranged = transcript_cache_key("hash", Some((0, 5_000_000)), "openai", Some("en"), true);
+        let k_ranged =
+            transcript_cache_key("hash", Some((0, 5_000_000)), "openai", Some("en"), true);
         let k_whisper = transcript_cache_key("hash", None, "whisper_cpp", Some("en"), true);
         let k_no_words = transcript_cache_key("hash", None, "openai", Some("en"), false);
 
         assert_ne!(k_full, k_ranged);
         assert_ne!(k_full, k_whisper);
         assert_ne!(k_full, k_no_words);
+    }
+}
+
+#[cfg(test)]
+mod audio_bounds_tests {
+    use super::*;
+    fn transcript(start: i64, end: i64) -> Transcript {
+        Transcript { segments: vec![Segment {t_start_us:start,t_end_us:end,text:"A complete thought.".into(),words:vec![Word {t_start_us:start,t_end_us:end,text:"thought.".into()}]}],language:None,word_timing:WordTiming::Exact }
+    }
+    #[test]
+    fn boundary_word_retains_text_and_discloses_timing_adjustment() {
+        let mut t=transcript(14_010_000,15_040_000);
+        let adjustments=t.validate_audio_bounds(14_634_667).unwrap();
+        assert_eq!(t.segments[0].words[0].t_end_us,14_634_667);
+        assert_eq!(t.segments[0].text,"A complete thought.");
+        assert_eq!(adjustments.len(),2);
+        assert_eq!(t.word_timing,WordTiming::None);
+    }
+    #[test]
+    fn genuine_speech_outside_audio_is_refused_not_moved_or_erased() {
+        assert!(transcript(14_100_000,23_840_000).validate_audio_bounds(14_000_000).is_err());
+        assert!(transcript(-100,100).validate_audio_bounds(14_000_000).is_err());
+    }
+    #[test]
+    fn source_window_offsets_and_timeline_positions_remain_distinct() {
+        for (start,end,duration,source,timeline) in [(0,900_000,1_000_000,0,0),(300_000,900_000,1_000_000,0,0),(0,600_000,1_000_000,0,0),(0,100_000,100_000,0,0),(0,900_000,1_000_000,5_000_000,8_000_000),(0,900_000,1_000_000,2_000_000,0),(0,900_000,1_000_000,3_000_000,10_000_000)] {
+            let mut t=transcript(start,end);assert!(t.validate_audio_bounds(duration).unwrap().is_empty());t.shift(source);
+            let cached=CachedTranscript {timing_adjustments:vec![],source_hash:"synthetic".into(),is_full_source:false,source_duration_us:Some(source+duration),in_us:source,out_us:source+duration,backend:"whisper_cpp".into(),language:None,word_timing:t.word_timing,segments:t.segments};
+            let mapped=cached.slice_window(source,source+duration).to_shifted_transcript(source,timeline);
+            assert_eq!(mapped.segments[0].t_start_us,timeline+start);assert_eq!(mapped.segments[0].t_end_us,timeline+end);
+        }
+    }
+    #[test]
+    fn point_token_does_not_invent_a_word_interval_or_lose_segment_text() {
+        let mut t=transcript(0,100_000);t.segments[0].words[0].t_end_us=0;
+        assert!(!t.validate_audio_bounds(100_000).unwrap().is_empty());
+        assert!(t.segments[0].words.is_empty());assert_eq!(t.segments[0].text,"A complete thought.");
     }
 }

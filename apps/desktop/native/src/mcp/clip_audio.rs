@@ -220,6 +220,19 @@ mod tests {
         }
     }
 
+    #[test]
+    fn default_audio_window_excludes_frame_rounded_source_overhang() {
+        let media = audio_media(PathBuf::from("synthetic.wav"), 575_710_839);
+        let mut layer = audio_layer(media.id, 7_000_000, 575_710_839);
+        layer.t_start_us = 7_000_000;
+        layer.t_end_us = 7_000_000 + 575_716_667;
+        let resolved = resolve_clip_audio_source(Some(&layer), Some(&media), layer.id, None, None).unwrap();
+        assert_eq!(resolved.source_out_us, 575_710_839);
+        assert_eq!(resolved.timeline_end_us, 7_000_000 + 575_710_839);
+        assert!(resolve_clip_audio_source(Some(&layer), Some(&media), layer.id, None, Some(layer.t_end_us)).is_err());
+        assert!(resolve_clip_audio_source(Some(&layer), Some(&media), layer.id, Some(resolved.timeline_end_us), None).is_err());
+    }
+
     fn args(
         layer: &Layer,
         media: &MediaItem,

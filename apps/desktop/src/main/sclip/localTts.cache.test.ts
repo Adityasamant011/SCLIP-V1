@@ -30,4 +30,27 @@ describe('local speech provenance/cache',()=>{
   const f=fixture();try{expect((await listLocalSpeechVoices(f.rt)).aliases.nova).toBe('af_nicole');expect(f.run).toHaveBeenCalledTimes(1);rmSync(f.rt.model);expect((await listLocalSpeechVoices(f.rt)).status).toBe('unavailable');expect(f.run).toHaveBeenCalledTimes(1)}finally{rmSync(f.dir,{recursive:true,force:true})}
  })
  it('terminates a stuck local subprocess',async()=>{await expect(runTtsCommand(process.execPath,['-e','setInterval(()=>{},1000)'],50)).rejects.toThrow('timed out')})
+ it('owned cancellation terminates a real subprocess and the next command succeeds',async()=>{
+  const abort=new AbortController(),work=runTtsCommand(process.execPath,['-e','setInterval(()=>{},1000)'],10000,abort.signal)
+  setTimeout(()=>abort.abort(),30)
+  await expect(work).rejects.toMatchObject({name:'AbortError'})
+  expect(await runTtsCommand(process.execPath,['-e','process.stdout.write("recovered")'])).toBe('recovered')
+ })
+ it('cancellation after worker output cleans only private files and never publishes a partial cache or falls back',async()=>{
+  const f=fixture(),abort=new AbortController();try{
+   const run=f.run.getMockImplementation()!
+   f.run.mockImplementation(async(command,args)=>{const result=await run(command,args);abort.abort();return result})
+   await expect(synthesizeSpeechLocally({text:'Cancelled synthetic',engine:'auto'},f.dir,f.rt,abort.signal)).rejects.toMatchObject({name:'AbortError'})
+   expect(f.run).toHaveBeenCalledTimes(1);expect(readdirSync(join(f.dir,'voiceover'))).toEqual([])
+  }finally{rmSync(f.dir,{recursive:true,force:true})}
+ })
+ it('pre-cancelled requests preserve a shared verified cache and never run a worker',async()=>{
+  const f=fixture();try{
+   const saved=await synthesizeSpeechLocally({text:'Shared synthetic'},f.dir,f.rt),files=readdirSync(join(f.dir,'voiceover'))
+   f.run.mockClear();const abort=new AbortController();abort.abort()
+   await expect(synthesizeSpeechLocally({text:'Shared synthetic'},f.dir,f.rt,abort.signal)).rejects.toMatchObject({name:'AbortError'})
+   expect(f.run).not.toHaveBeenCalled();expect(readdirSync(join(f.dir,'voiceover'))).toEqual(files)
+   expect((await synthesizeSpeechLocally({text:'Shared synthetic'},f.dir,f.rt)).filePath).toBe(saved.filePath)
+  }finally{rmSync(f.dir,{recursive:true,force:true})}
+ })
 })

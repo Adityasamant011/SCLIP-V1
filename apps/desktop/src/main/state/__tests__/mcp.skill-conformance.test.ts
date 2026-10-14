@@ -33,7 +33,7 @@ const rust = JSON.parse(readFileSync(path.join(repoRoot, 'apps/desktop/fixtures/
   resources: Array<{ uri: string }>
   prompts: Array<{ name: string }>
 }
-const toolNames = new Set((await registeredMcpTools({ mcpCatalog: async () => JSON.stringify(rust) } as any, { sourceObservationIndex: {} as any, enableExternalMedia: true, listSpeechVoices: async () => ({}), evaluateSourcePassages: async () => ({}) })).map(t => t.name))
+const toolNames = new Set((await registeredMcpTools({ mcpCatalog: async () => JSON.stringify(rust) } as any, { sourceObservationIndex: {} as any, enableExternalMedia: true, listSpeechVoices: async () => ({}), audioUnderstanding: { status: () => ({ status: 'unavailable' }) } as any, evaluateSourcePassages: async () => ({}) })).map(t => t.name))
 const resourceUris = new Set([
   ...rust.resources.map((r) => r.uri),
   ...MOTIF_RESOURCE_DEFS.map((r) => r.uri),
@@ -41,7 +41,7 @@ const resourceUris = new Set([
 const promptNames = new Set(rust.prompts.map((p) => p.name))
 // Built-in Hermes discovery operations, enabled by the Sclip Hermes profile.
 // They are not WeftCut MCP tools and must not be counted in the MCP catalog.
-const HERMES_DISCOVERY_TOOLS = new Set(['tool_search', 'tool_describe', 'memory'])
+const HERMES_DISCOVERY_TOOLS = new Set(['tool_search', 'tool_describe', 'tool_call', 'memory'])
 
 // Backticked snake_case tokens in the skill sources that are NOT tool names:
 // manifest fields, props_schema variants, lifecycle identifiers, tool params.
@@ -49,7 +49,9 @@ const HERMES_DISCOVERY_TOOLS = new Set(['tool_search', 'tool_describe', 'memory'
 // with a live tool name (checked below).
 const KNOWN_NON_TOOLS = new Set([
   // SKILL.md — tool params
-  'from', 'request', 'start_us', 'end_us', 'limit', 't_us', 'estimated_duration_us', 'review_required', 'review_unavailable_reason', 'text', 'nova', 'af_nicole',
+  'from', 'request', 'start_us', 'end_us', 'limit', 't_us', 'estimated_duration_us', 'review_required', 'correction_required', 'incomplete', 'review_unavailable_reason', 'text', 'nova', 'af_nicole',
+  // Grounded protocol response fields, not additional tools/actions.
+  'review_next', 'tool_call_examples',
   // motif-authoring.md — manifest fields
   'id', 'version', 'name', 'size', 'default_duration_s', 'max_duration_s',
   'max_duration_prop', 'content_duration_s', 'settle_rafs', 'fonts',
@@ -123,4 +125,11 @@ describe('shipped skill sources ↔ MCP catalog (anti-drift gate)', () => {
     // apart from a tool reference. Rename one side.
     expect([...KNOWN_NON_TOOLS].filter((t) => toolNames.has(t))).toEqual([])
   })
+})
+
+// A framing helper supplies arithmetic; it must not prescribe every asset layout.
+it('keeps user-footage framing a choice rather than a universal cover instruction', () => {
+  const skill = readFileSync(path.resolve('../../skills/weftcut/SKILL.md'), 'utf8')
+  expect(skill).not.toContain('with `mode="cover"` for clean framing')
+  expect(skill).toContain('Choose framing from the brief and actual composition')
 })

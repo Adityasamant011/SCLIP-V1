@@ -24,7 +24,7 @@ export type ExportState =
   // showing one wired to a no-op).
   | { kind: "starting" }
   | { kind: "preparing"; labels: string[]; onCancel?: () => void }
-  | { kind: "progress"; progress: ExportProgress }
+  | { kind: "progress"; progress: ExportProgress; onCancel?: () => void }
   // The tail after the last frame is encoded: flush the native sink, render
   // audio, stream-copy mux. It used to be invisible — the panel sat frozen at
   // 100% with the Worker's stale fps for its whole duration, and an e2e
@@ -161,9 +161,9 @@ export function ExportPanel({
                 style={{ width: `${state.kind === "error" ? 100 : percent}%` }}
               />
             </div>
-            {((state.kind === "preparing" && state.onCancel) || dismissable) && (
+            {(((state.kind === "preparing" || state.kind === "progress") && state.onCancel) || dismissable) && (
               <div className="export-actions">
-                {state.kind === "preparing" && state.onCancel && (
+                {(state.kind === "preparing" || state.kind === "progress") && state.onCancel && (
                   <Button size="lg" onClick={state.onCancel}>
                     {t("export.preparing_cancel")}
                   </Button>

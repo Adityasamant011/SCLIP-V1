@@ -10,7 +10,7 @@ import type { MediaItem } from '../state/model.js'
 import type { AnalyzeResult, VisionSidecarManager } from './visionSidecar.js'
 
 const execFileAsync = promisify(execFile)
-export const SOURCE_OBSERVATION_ANALYSIS_VERSION = 2
+export const SOURCE_OBSERVATION_ANALYSIS_VERSION = 3
 const SOURCE_OBSERVATION_ANALYSIS_MODEL = 'vision-sidecar+audio-analyzer+transcript-cache'
 
 export interface SourceObservation {
@@ -20,6 +20,12 @@ export interface SourceObservation {
   model: string
   evidence: 'model_observation' | 'transcription' | 'verified_measurement'
   sample_window_us: [number, number]
+  generation?: {
+    output_tokens: number | null
+    max_tokens: number
+    output_limit_reached: boolean | null
+  }
+  confidence?: null
 }
 
 export interface SourceObservationIndexResult {
@@ -141,7 +147,9 @@ export class SourceObservationIndex {
       if (persisted.source_hash === sourceHash(media) &&
           persisted.analysis_version === SOURCE_OBSERVATION_ANALYSIS_VERSION &&
       persisted.analysis_model === SOURCE_OBSERVATION_ANALYSIS_MODEL &&
-      persisted.source_path === media.path_abs) {
+      persisted.source_path === media.path_abs &&
+      // A transient missing model must not become permanent cached absence.
+      (media.kind !== 'Video' || persisted.observations.some(o => o.kind === 'visual'))) {
         return this.select(persisted, startUs, requestedEnd, limit, true)
       }
     } catch {
@@ -173,6 +181,13 @@ export class SourceObservationIndex {
               description: result.description.trim(),
               model: result.model,
               evidence: 'model_observation',
+              generation: {
+                output_tokens: result.outputTokens ?? null,
+                max_tokens: 96,
+                output_limit_reached: result.outputLimitReached ?? null,
+              },
+              // Local model descriptions are observations, not calibrated confidence.
+              confidence: null,
               sample_window_us: [
                 Math.max(startUs, timeUs - halfWindow),
                 Math.min(requestedEnd, timeUs + halfWindow),

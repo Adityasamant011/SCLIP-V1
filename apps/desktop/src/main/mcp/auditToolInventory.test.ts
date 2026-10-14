@@ -108,6 +108,7 @@ describe('Legacy MCP handler fixture audit', () => {
     expect(addLayer3.ok).toBe(true)
 
     const agentSession = {
+      snapshot: () => ({workspace_id:'synthetic-opening',activities:[]}),
       begin: (reason: string) => ({ session_id: 'agent-sess-1', reason }),
       end: (who: string) => ({ ended: true, who }),
       lock: (reason: string) => ({ locked: true, reason }),

@@ -12,10 +12,24 @@ import os
 import sys
 import urllib.request
 
+# ORT 1DS uploader callbacks can outlive native teardown on macOS (the
+# historical crash is in HttpResponseDecoder -> DebugEventSource mutex).
+# Disable the uploader before the first ONNX import, not only session events
+# after initialization. This does not change the model or synthesis choices.
+os.environ["ORT_DISABLE_TELEMETRY"] = "1"
+
 MODEL_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.int8.onnx"
 VOICES_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin"
 
 def ensure_model_files(model_arg: str | None, voices_arg: str | None) -> tuple[str, str]:
+    # Explicit configured files are authoritative. A missing/corrupt selection
+    # must not silently choose other weights or trigger legacy provisioning.
+    for label, selected in (("model", model_arg), ("voices", voices_arg)):
+        if selected is not None:
+            if not os.path.isfile(selected):
+                raise FileNotFoundError(f"Configured Kokoro {label} file is missing: {selected}")
+            if os.path.getsize(selected) <= 1000:
+                raise ValueError(f"Configured Kokoro {label} file is empty or corrupt: {selected}")
     home = os.path.expanduser("~")
     model_dir = os.path.join(home, "Library", "Application Support", "Sclip", "models", "kokoro")
     os.makedirs(model_dir, exist_ok=True)

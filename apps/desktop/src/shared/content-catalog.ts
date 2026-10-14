@@ -136,6 +136,14 @@ export const CONTENT_CATALOG: readonly ContentItem[] = [
     },
     speech: { backend: "whisper_cpp" },
     platforms: {
+      "darwin-arm64": {
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-base.bin?download=true",
+        sha256: "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
+        bytes: 147951465,
+        archive: "none",
+        entryPath: "ggml-base.bin",
+        fields: { model: "ggml-base.bin" },
+      },
       // Multilingual Base — neither ggml-base.en.bin nor a quantized variant
       // (ADR 0039). Byte-identical on every platform; listed per-platform so
       // coverage stays an explicit decision as other OSes phase in.

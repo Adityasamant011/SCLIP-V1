@@ -1,6 +1,7 @@
 // src/main/state/mutations/update.ts
 import type { Project, Uuid } from '../model'
 import { checkTrackLock, requireSameComposition } from './helpers'
+import { CommandFailure } from '../errors'
 
 /** LayerPatch. null/absent = "don't touch". */
 export interface LayerPatch {
@@ -16,6 +17,12 @@ export interface LayerPatch {
  *  Does NOT autofit: a t_end edit here never moves composition.duration_us. */
 export function applyUpdateLayer(p: Project, id: Uuid, patch: LayerPatch): void {
   const { layer } = checkTrackLock(p, id) // throws LayerNotFound (missing) or TrackLocked (locked track)
+  const allowed = new Set(['label', 't_start_us', 't_end_us', 'enabled', 'locked'])
+  const unsupported = Object.keys(patch).filter((key) => !allowed.has(key))
+  if (unsupported.length) {
+    throw new CommandFailure({ error: 'InvalidArgument', field: 'patch',
+      detail: `update_layer accepts only label, t_start_us, t_end_us, enabled and locked. Unsupported fields: ${unsupported.join(', ')}. No changes applied. For kind-specific parameters use update_layer_params with patch.kind matching the layer (${layer.params.kind}); for position use set_position. Discover the target tool schema before calling it.` })
+  }
   if (typeof patch.label === 'string') layer.label = patch.label
   if (typeof patch.t_start_us === 'number') layer.t_start_us = patch.t_start_us
   if (typeof patch.t_end_us === 'number') layer.t_end_us = patch.t_end_us

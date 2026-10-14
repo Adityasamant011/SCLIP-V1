@@ -40,3 +40,12 @@ describe('add_effect description', () => {
     expect(description).toContain('STATIC ONLY')
   })
 })
+
+describe('full-source media placement contract',()=>{
+  const tool=MCP_TOOL_DEFS.find(d=>d.name==='add_media_layer')!
+  const valid={media_id:'00000000-0000-0000-0000-000000000001',track_id:'00000000-0000-0000-0000-000000000002',t_start_us:0}
+  it('refuses supplied source/timeline trim fields rather than silently ignoring them',()=>{
+    expect(()=>tool.parseDedicated!({...valid,src_in_us:0,src_out_us:3_000_000,t_end_us:3_000_000})).toThrow(/add_video_layer|trim_layer/)
+    expect(tool.parseDedicated!(valid)).toEqual(valid)
+  })
+})

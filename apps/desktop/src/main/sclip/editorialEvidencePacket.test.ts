@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { blankProject } from '../state/model'
 import { uuidV7Gen } from '../state/ids'
 import { videoClipParams, audioParams } from '../state/mutations/media'
+import { textParamsDefault } from '../state/mutations/add'
 import { RevisionLoopGuard } from './revisionLoopGuard'
 import {reviewState} from './evidenceCoordinates'
 import { createActor } from '../state/actor'
@@ -19,6 +20,27 @@ function fixture() {
   return {p,v,a,ids,loader}
 }
 describe('Compact editorial evidence and agency',()=>{
+  it('distinguishes an empty source-clip index from authored generated content without certifying its appearance',()=>{
+    const ids=uuidV7Gen(),actor=createActor({initial:blankProject(ids,'Generated content'),idGen:ids,clock:()=> 'now'})
+    const track=actor.snapshot().compositions[actor.snapshot().root_id].tracks[0].id
+    actor.dispatch('add_layer',{track,kind:'color',t_start_us:0,t_end_us:3000000})
+    const p=structuredClone(actor.snapshot()),comp=p.compositions[p.root_id],color=comp.tracks[0].layers[0]
+    comp.tracks[0].layers.push({...structuredClone(color),id:ids(),params:textParamsDefault('A generated title',comp)})
+    comp.duration_us=6000000
+    const before=reviewState(p),packet=buildEditorialEvidencePacket(p)
+    expect(packet.clips).toEqual([])
+    expect(packet.project).toMatchObject({layer_count:2,layer_counts_by_kind:{Color:1,Text:1},indexed_layer_counts_by_kind:{Color:1,Text:1}})
+    expect(packet.project.clip_index_scope).toContain('VideoClip and Audio')
+    expect(packet.project.clip_index_scope).toContain('not an empty composition')
+    expect(packet.observed_dimensions).not.toContain('visual')
+    expect(packet.visuals).toMatchObject({status:'not_observed'})
+    expect(reviewState(p)).toBe(before)
+    const empty=buildEditorialEvidencePacket(blankProject(ids,'Empty'))
+    expect(empty.project.layer_counts_by_kind).toEqual({})
+    const outside=buildEditorialEvidencePacket(p,{range:{start_us:3000000,end_us:6000000}})
+    expect(outside.project.indexed_layer_counts_by_kind).toEqual({})
+    expect(outside.project.layer_counts_by_kind).toEqual({Color:1,Text:1})
+  })
   it('maps each edited video AND audio range with current state and source word context',()=>{
     const {p,v,a,loader}=fixture(),packet=buildEditorialEvidencePacket(p,{transcriptLoader:loader})
     expect(packet.clips[0]).toMatchObject({layer_id:v.id,timeline_range_us:[0,60000000],source_range_us:[100000000,160000000]})

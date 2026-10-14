@@ -43,6 +43,11 @@ impl TranscriptParser for WhisperJsonParser {
         let mut any_token_words = false;
         for seg in &full.transcription {
             let seg_text = seg.text.trim().to_string();
+            // Whisper emits this non-speech sentinel for padded/silent input.
+            // It is not a spoken word or a caption, regardless of its offsets.
+            if seg_text == "[BLANK_AUDIO]" {
+                continue;
+            }
             let mut words = group_tokens_into_words(&seg.tokens);
             if words.is_empty() {
                 // Fallback: some whisper builds omit the token array
@@ -269,5 +274,15 @@ mod tests {
             .parse("{not json")
             .expect_err("should fail");
         assert!(matches!(err, SpeechError::Parse(_)));
+    }
+}
+
+#[cfg(test)]
+mod blank_audio_regression {
+    use super::*;
+    #[test]
+    fn historical_blank_audio_marker_is_not_speech() {
+        let raw=r#"{"transcription":[{"text":"[BLANK_AUDIO]","offsets":{"from":13840,"to":23840},"tokens":[{"text":"[BLANK_AUDIO]","offsets":{"from":13970,"to":23430}}]}]}"#;
+        assert!(WhisperJsonParser.parse(raw).unwrap().segments.is_empty());
     }
 }

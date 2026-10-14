@@ -1,3 +1,6 @@
+import type { Project } from '../state/model.js'
+import { validateOutputState, requiredRenderedDimensions, sourceFingerprint, deliveryProofValid, verifyDelivery, type DeliveryProof } from '../sclip/finalOutput.js'
+import { currentOutput } from '../sclip/editingBrief.js'
 import type { AudioUnderstandingBackend } from '../sclip/audioUnderstanding'
 import { completionReview, completionDisposition, outputState, hasAuthoredOutput, type CompletionReview } from '../sclip/completionReview.js'
 import { currentCritique } from '../sclip/reviewer/currentCritique.js'
@@ -25,6 +28,7 @@ import { captureMotifFrameB64 } from '../motif/capture.js'
 import { routeMcpTool, HYBRID_TOOLS } from './mutationTools.js'
 import { shapeMotifMcpResult } from './motifResult.js'
 import { runHybrid } from '../state/hybrids.js'
+import { reviewProgress } from '../sclip/reviewProgress.js'
 import { CLIP_SLICE_TOOLS, resolveClipSliceArgs, resolvePauseComputeArgs, TWO_SLICE_TOOLS, resolveTwoSliceArgs } from '../state/clip-slice-forward.js'
 import { serveProjectResource, buildResourceInjection } from '../state/resource-views.js'
 import type { TsActorHost } from '../state/ts-actor-host.js'
@@ -58,6 +62,7 @@ import { downloadExternalMediaCandidate } from '../media/external/downloader.js'
 import { buildAttributionObligation, attachAttributionMetadata } from '../media/external/attribution.js'
 import type { VisualIntent } from '../media/external/types.js'
 import { CREATOR_STYLE_TOOL } from '../sclip/creatorStyleTool.js'
+import { creatorMemoryGuidance } from '../sclip/creatorMemoryGuidance.js'
 import type { CreatorStyleStore } from '../sclip/creatorStyle.js'
 
 type Backend = import('@weftcut/core').Backend
@@ -158,7 +163,7 @@ const GET_TIMELINE_CRITIQUE_TOOL = {
 } as const
 
 const GET_SOURCE_UNDERSTANDING_TOOL = { name: 'get_source_understanding',description:'Compact source-wide coverage map and provenance. cached reads existing observations; coarse performs at most six local sampled-frame observations spread across the entire source, cached for reuse. Sampling cells are not scenes or continuous visual coverage. Missing speech/audio/text remains unknown; no editorial ranking or edit is generated.',inputSchema:{type:'object',properties:{media_id:{type:'string'},detail:{type:'string',enum:['cached','coarse']}},required:['media_id'],additionalProperties:false}} as const
-const GET_SOURCE_SPEECH_CONTEXT_TOOL = { name: 'get_source_speech_context',description:'Read cached transcript and word timing in SOURCE time with bounded before/selected/after context. Does not transcribe or choose a cut. If unavailable, transcribe_clip on a Hermes-selected timeline layer then reacquire. Spoken-story/sentence/continuity claims cannot be established by visual samples alone.',inputSchema:{type:'object',properties:{media_id:{type:'string'},start_us:{type:'integer',minimum:0},end_us:{type:'integer',minimum:1},before_us:{type:'integer',minimum:0,maximum:10000000},after_us:{type:'integer',minimum:0,maximum:10000000}},required:['media_id','start_us','end_us'],additionalProperties:false}} as const
+const GET_SOURCE_SPEECH_CONTEXT_TOOL = { name: 'get_source_speech_context',description:'Read cached transcript and word timing in SOURCE time with bounded before/selected/after context. Reports cached-window coverage, ASR word/segment intersections and selection duration at speed 1. Missing surrounding text or word timing stays unknown, not certified silence or sentence completeness. Does not transcribe or choose a cut. If unavailable, transcribe_clip on a Hermes-selected timeline layer then reacquire. Spoken-story/sentence/continuity claims cannot be established by visual samples alone.',inputSchema:{type:'object',properties:{media_id:{type:'string'},start_us:{type:'integer',minimum:0},end_us:{type:'integer',minimum:1},before_us:{type:'integer',minimum:0,maximum:10000000},after_us:{type:'integer',minimum:0,maximum:10000000}},required:['media_id','start_us','end_us'],additionalProperties:false}} as const
 const SOURCE_UNDERSTANDING_TOOLS = [GET_SOURCE_UNDERSTANDING_TOOL, GET_SOURCE_SPEECH_CONTEXT_TOOL] as const
 
 const GET_SOURCE_OBSERVATIONS_TOOL = {
@@ -426,6 +431,7 @@ export async function handleCallTool(
   enableExternalMedia?: boolean,
   signal?: AbortSignal,
   audioUnderstanding?: AudioUnderstandingBackend,
+  assertAuthority?: () => void,
 ): Promise<ServerResult> {
   // Final delivery belongs to the user, including for clients with an old
   // cached catalog. Short temporary QA rendering remains available below.
@@ -928,7 +934,12 @@ export async function handleCallTool(
     if (route === 'hybrid') {
       // Native-compute → TS-write. import_media returns the new media
       // id; shape it as the Rust tool does (ToolResult::text(id) → text content).
-      const result = await runHybrid(name, args, tsHost.mcpHybridDeps)
+      const opening = tsHost.agent?.snapshot().workspace_id
+      const result = await runHybrid(name, args, tsHost.mcpHybridDeps, {signal, assertAuthority: () => {
+        assertAuthority?.()
+        if (getTsHost() !== tsHost || tsHost.agent?.snapshot().workspace_id !== opening)
+          throw new Error('SPEECH_PROJECT_CHANGED: original project opening is no longer current.')
+      }})
       return { content: [{ type: 'text', text: String(result) }] } as unknown as ServerResult
     }
     if (route === 'motif') {
@@ -1218,6 +1229,8 @@ export const AUDIO_UNDERSTANDING_STATUS_TOOL = {name:'get_audio_understanding_st
  *  positionals: `log` is the fourth and every one of them is optional, and each
  *  omitted seam must keep the behaviour it had before it existed. */
 export interface McpServerOptions {
+  /** Native connection only: acquire a lease for its current request/turn. */
+  captureRequestAuthority?: () => import('../sclip/completionCheckpoint.js').RequestAuthority
   audioUnderstanding?: AudioUnderstandingBackend
   listSpeechVoices?: () => Promise<unknown>
   triageToolFailure?: (name: string, args: Record<string, unknown>, result: ServerResult, state: string) => Promise<unknown>
@@ -1251,6 +1264,8 @@ export interface McpServerOptions {
   reviewProjectId?: string
   /** Shared normal-completion lifecycle; explicit review uses its existing guard. */
   completionReviews?: Map<string, CompletionReview>
+  observeCompletion?: () => void
+  verifyCompletionOutput?: (project: Project, requirements: CompletionReview['requirements'], signal?: AbortSignal) => Promise<DeliveryProof>
   reviewAtCompletion?: (signal?: AbortSignal) => Promise<import('../sclip/reviewer/reviewerTypes.js').TimelineReviewSummary>
   /** Real-time summary from background audio/visual reviewer. */
   getReviewerSummary?: (immediate?: boolean) => import('../sclip/reviewer/reviewerTypes.js').TimelineReviewSummary
@@ -1344,12 +1359,25 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
   const connectionId = opts.connectionId ?? randomUUID()
   const track: typeof withLog = (method, handler, deps, client) => withLog(method, (req, extra) => {
     const service = getTsHost()?.agent
-    if (!service) return handler(req, extra)
     const params = (req.params ?? {}) as Record<string, unknown>
     const tool = method === 'tools/call' ? String(params.name ?? '') : method
     const read = method !== 'tools/call' || tool === 'creator_style_memory' || tool === 'evaluate_source_passages' || tool === 'video_search_external_media' || tool === 'resolve_visual_intents' || /^(get_|list_|read_|ping$|view_|inspect_|analyze_|describe_|transcribe_|compare_|detect_)/.test(tool)
-    return service.run(connectionId, clientInfo()?.name ?? 'MCP', tool,
-      method === 'tools/call' ? params.arguments ?? {} : params, read, () => handler(req, extra))
+    const execute = async () => {
+      const result=await handler(req,extra)
+      const ts=getTsHost(),snapshot=ts?.actor.snapshot()
+      if(method==='tools/call'&&snapshot&&snapshot.project_id===initialProjectId&&
+          (revisionGuard.status.phase!=='idle'||['end_agent_session','revision_control','record_issue','withdraw_issue'].includes(tool))&&Array.isArray((result as any).content)){
+        // Do not publish a new opening's guidance to an expired native lease.
+        try {
+          const authority=opts.captureRequestAuthority?.();try{authority?.()}finally{authority?.release()}
+          const failure=(result as any).isError?(result as any).content.find((c:any)=>c.type==='text')?.text:undefined
+          ;(result as any).content.push({type:'text',text:JSON.stringify({review_next:reviewProgress(revisionGuard,snapshot,completionSessions.get(snapshot.project_id),ts?.agent?.snapshot().workspace_id,failure)})})
+        }catch{/* Original failure remains visible; expired owners receive no new project context. */}
+      }
+      return result
+    }
+    return service ? service.run(connectionId, clientInfo()?.name ?? 'MCP', tool,
+      method === 'tools/call' ? params.arguments ?? {} : params, read, execute) : execute()
   }, deps, client)
 
   // Every handler goes through withLog: the funnel is what keeps a newly added
@@ -1362,16 +1390,35 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
     try {
       const name = req.params.name
       const args = (req.params.arguments ?? {}) as Record<string, unknown>
+      opts.observeCompletion?.()
+      // Revoke admission for every tool, including early review/lifecycle
+      // branches. A cancelled terminal remains open for its next genuine turn.
+      const admission=opts.captureRequestAuthority?.()
+      try {(extra as {signal?:AbortSignal}).signal?.throwIfAborted();admission?.()}finally{admission?.release()}
       const snapshot = getTsHost()?.actor.snapshot()
       if (initialProjectId && snapshot?.project_id !== initialProjectId) return revisionToolError('Project changed; reconnect for current project evidence.')
       const completion = ordinaryCompletion && snapshot ? completionReview(snapshot, completionSessions) : undefined
       if (completion) revisionGuard = completion.guard
       const restartCompletion = name === 'begin_agent_session' && completion && (revisionGuard.status.phase === 'done' || completion.limitation)
       if (name === 'end_agent_session' && snapshot && completion) {
+        const validation=validateOutputState(snapshot,completion.requirements,completion.requirement)
+        const output=validation.current_output
+        if(!validation.valid && (completion.requirements || completion.started || hasAuthoredOutput(snapshot))){
+          completion.correctionRequests=(completion.correctionRequests??0)+1
+          const exhausted=completion.correctionRequests>2||typeof args.review_unavailable_reason==='string'
+          if(exhausted){
+            completion.limitation=validation.errors.join('; ')
+            delete completion.reviewedState
+            getTsHost()?.agent?.end('agent')
+          }else if(revisionGuard.status.phase==='done'){
+            completion.guard=revisionGuard=new RevisionLoopGuard();completion.started=false;delete completion.reviewedState
+          }
+          return {content:[{type:'text',text:JSON.stringify({completion:exhausted?'incomplete':'correction_required',current_output:output,validation,correction_opportunities_remaining:Math.max(0,2-completion.correctionRequests),instruction:exhausted?'Report the unmet brief accurately; no finished success is recorded.':'The actual output violates measurable requirements (duration, required media or source bounds). Inspect remaining layers and choose a correction, then verify current rendered output and end again. No edits were generated for you.'})}]} as ServerResult
+        }
         const state = reviewState(snapshot)
         if (completion.started && completion.reviewedState && completion.reviewedState !== state) return revisionToolError('Timeline changed after completion review. Start a deliberate current-state review; no success is recorded.')
         if (!completion.started && revisionGuard.status.phase === 'done' && revisionGuard.hasCurrentRenderedEvidence(state)) { completion.started = true; completion.reviewedState = state }
-        if (!completion.started && completion.baseline !== outputState(snapshot) && hasAuthoredOutput(snapshot)) {
+        if (!completion.started && (completion.baseline !== outputState(snapshot) || !!completion.requirements) && hasAuthoredOutput(snapshot)) {
           if (revisionGuard.status.phase === 'idle') revisionGuard.begin()
           completion.started = true
           let completionSummary: import('../sclip/reviewer/reviewerTypes.js').TimelineReviewSummary | undefined
@@ -1382,6 +1429,7 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
           const receipt = revisionGuard.recordEvidence('get_editorial_evidence_packet', 'timeline', range, state, packet.observed_dimensions, undefined, evidenceCoverage('get_editorial_evidence_packet', packet, range))
           emitReviewState(name)
           return { content: [{ type: 'text', text: JSON.stringify({ completion: 'review_required',
+            current_output: currentOutput(snapshot,completion.requirement),
             editorial_evidence_packet: packet, background_review: currentCritique(snapshot, completionSummary ? () => completionSummary! : opts.getReviewerSummary), evidence_receipt: receipt,
             review_session: revisionGuard.status,
             instruction: 'Session remains open. Inspect actual current rendered output using relevant senses. Judge these potential findings for the brief. Choose a justified issue/repair or no repair. Use existing revision_control, then call end_agent_session again. If inspection is unavailable, report review_unavailable_reason; that records an unreviewed limitation, never success.' }) }] } as ServerResult
@@ -1397,9 +1445,24 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
           return revisionToolError('Completion review is pending. Inspect relevant current rendered evidence, decide/repair/verify, and conclude with revision_control. force does not bypass review. Report review_unavailable_reason if inspection cannot finish.')
         }
         if (completion.started) {
+          const epoch=completion.epoch??0,sources=sourceFingerprint(snapshot)
+          if(completion.renderedEpoch!==epoch || completion.renderedSources!==sources || !revisionGuard.hasCurrentRenderedEvidence(state,requiredRenderedDimensions(snapshot,completion.requirements)))return revisionToolError('Completion requires fresh current rendered evidence in every relevant requested modality. Inspect the current video/audio/speech, then decide again.')
+          if(Object.values(revisionGuard.status.outcomes).includes('unresolved')){completion.limitation='Hermes review retains unresolved issues';getTsHost()?.agent?.end('agent');return {content:[{type:'text',text:JSON.stringify({completion:'incomplete',limitation:completion.limitation})}]} as ServerResult}
+          const critique=currentCritique(snapshot,opts.getReviewerSummary)
+          if(critique.availability!=='available')return revisionToolError('Current critique is unavailable; no finished-media success is recorded.')
+          const authority=opts.captureRequestAuthority?.(),serial=completion.requestSerial,verifyingHost=getTsHost(),opening=verifyingHost?.agent?.snapshot().workspace_id
+          const sdkSignal=(extra as {signal?:AbortSignal}).signal
+          const signal=authority?AbortSignal.any([authority.signal,...(sdkSignal?[sdkSignal]:[])]):sdkSignal
+          let proof: DeliveryProof
+          try {proof=await (opts.verifyCompletionOutput ? opts.verifyCompletionOutput(snapshot,completion.requirements,signal) : verifyDelivery(snapshot,completion.requirements,opts.getActiveWindow??(()=>null),signal))}finally{authority?.release()}
+          signal?.throwIfAborted();authority?.()
+          if(serial!==completion.requestSerial||verifyingHost!==getTsHost()||opening!==getTsHost()?.agent?.snapshot().workspace_id)return revisionToolError('Original completion request/project opening is no longer current; no completed status recorded.')
+          if(state!==reviewState(getTsHost()?.actor.snapshot())||epoch!==(completion.epoch??0)||sources!==sourceFingerprint(getTsHost()!.actor.snapshot()))return revisionToolError('Project/sources changed during complete render validation. Reacquire current evidence.')
+          if(!deliveryProofValid(snapshot,completion.requirements,proof)){completion.limitation=`Output render/decode unverified: ${proof.reason}`;delete completion.reviewedState;getTsHost()?.agent?.end('agent');return {content:[{type:'text',text:JSON.stringify({completion:'incomplete',delivery:proof})}]} as ServerResult}
+          completion.delivery={state,epoch,sources,proof};completion.reviewedEpoch=epoch
           getTsHost()?.agent?.end('agent')
           completion.baseline = outputState(snapshot)
-          return { content: [{ type: 'text', text: JSON.stringify({ completion: 'reviewed', review_session: revisionGuard.status }) }] } as ServerResult
+          return { content: [{ type: 'text', text: JSON.stringify({ completion: 'reviewed', delivery:proof, review_session: revisionGuard.status }) }] } as ServerResult
         }
       }
       if (name === 'end_agent_session' && !completion?.started && !['idle', 'done'].includes(revisionGuard.status.phase)) {
@@ -1411,8 +1474,15 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
         const currentCreatorKey = opts.creatorStyleStore.sessionKey(projectId)
         creatorSessionKey ??= currentCreatorKey
         if (creatorSessionKey !== currentCreatorKey) throw new Error('Creator memory/session changed; reconnect with current creator context')
-        const result = opts.creatorStyleStore.agent(projectId, args)
-        return { content: [{ type: 'text', text: JSON.stringify(result) }] } as ServerResult
+        try {
+          const result = opts.creatorStyleStore.agent(projectId, args)
+          return { content: [{ type: 'text', text: JSON.stringify({ ...result, creator_memory_next: creatorMemoryGuidance(result) }) }] } as ServerResult
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          let guidance: unknown
+          try { guidance = creatorMemoryGuidance(opts.creatorStyleStore.agent(projectId, { action: 'context' }), message) } catch { /* Preserve fail-closed memory/control errors. */ }
+          return { isError: true, content: [{ type: 'text', text: message }, ...(guidance ? [{ type: 'text' as const, text: JSON.stringify({ creator_memory_next: guidance }) }] : [])] } as ServerResult
+        }
       }
       if (opts.reviewProjectId && getTsHost()?.actor.snapshot().project_id !== opts.reviewProjectId) return revisionToolError('Review project changed; start a new deliberate review for the current project.')
       const externalEnabled = opts.enableExternalMedia ?? (process.env.SCLIP_ENABLE_EXTERNAL_BROLL === '1')
@@ -1439,8 +1509,8 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
         return { content: [{ type: 'text', text: JSON.stringify(result) }] } as ServerResult
       }
       if (name === 'revision_control') {
-        if (completion?.started && ['complete', 'conclude_no_repair', 'finalize'].includes(String(args.action)) && !revisionGuard.hasCurrentRenderedEvidence(reviewState(snapshot))) {
-          return revisionToolError('Completion requires current rendered evidence, not layout/state alone. Inspect the actual result; if unavailable, report review_unavailable_reason at end_agent_session without claiming success.')
+        if (completion?.started && ['complete', 'conclude_no_repair', 'finalize'].includes(String(args.action)) && (!snapshot || !revisionGuard.hasCurrentRenderedEvidence(reviewState(snapshot),requiredRenderedDimensions(snapshot,completion.requirements)))) {
+          return revisionToolError('Completion requires current rendered evidence in every relevant requested modality before concluding. Inspect the actual video, audio and requested speech; if unavailable, report review_unavailable_reason at end_agent_session without claiming success.')
         }
         let status: ReturnType<RevisionLoopGuard['begin']>
         switch (args.action) {
@@ -1459,6 +1529,7 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
         if (auditDir) { try { fs.mkdirSync(auditDir, { recursive: true }); fs.writeFileSync(path.join(auditDir, `${Date.now()}-${randomUUID()}.json`), JSON.stringify({ tool: name, args, review_session: status })) } catch {} }
         if (completion?.started && status.phase === 'done') {
           completion.reviewedState = reviewState(getTsHost()?.actor.snapshot())
+          completion.reviewedEpoch=completion.epoch??0
           completion.decision = { action:String(args.action), ...(typeof args.reason === 'string' ? {reason:args.reason.slice(0,1000)} : {}) }
         }
         emitReviewState(name)
@@ -1490,9 +1561,30 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
         return {content: [{type: 'text', text: JSON.stringify(await opts.listSpeechVoices())}]} as ServerResult
       }
       const evidenceState = reviewState(getTsHost()?.actor.snapshot())
+      const evidenceHost = getTsHost(), evidenceActor = evidenceHost?.actor
+      const evidenceOpening = evidenceHost?.agent?.snapshot().workspace_id
+      const evidenceEpoch = completion?.epoch, evidenceSerial = completion?.requestSerial
+      const evidenceGuard = revisionGuard
+      const evidenceMedia = typeof args.media_id === 'string' ? [args.media_id] : []
+      const inspection = REVISION_INSPECTION_TOOLS.has(name)
+      const assertAuthority = opts.captureRequestAuthority?.()
+      const sdkSignal = (extra as {signal?:AbortSignal}).signal
+      const requestSignal = assertAuthority ? AbortSignal.any([assertAuthority.signal, ...(sdkSignal ? [sdkSignal] : [])]) : sdkSignal
+      const evidenceSources = inspection && evidenceActor ? sourceFingerprint(evidenceActor.snapshot(), evidenceMedia) : undefined
+      let changedDuringInspection = false
+      // A monotonic observation of authored changes catches A→B→A even in
+      // explicit review sessions without CompletionCheckpoint's epoch observer.
+      const unsubscribeInspection = inspection ? evidenceActor?.subscribe(() => {
+        if (reviewState(evidenceActor.snapshot()) !== evidenceState) changedDuringInspection = true
+      }) : undefined
       const auditBefore = mutation ? getTsHost()?.actor.snapshot() : undefined
       const before = mutation ? reviewState(getTsHost()?.actor.snapshot()) : null
-      const result = await handleCallTool(backend, getTsHost, name, args, getPreferredEngine, getVlm, peaksPathFor, opts.getActiveWindow, opts.getReviewerSummary, opts.sourceObservationIndex, opts.externalMediaService, externalEnabled, (extra as {signal?:AbortSignal}).signal, opts.audioUnderstanding)
+      let result: ServerResult
+      try {
+        requestSignal?.throwIfAborted()
+        assertAuthority?.()
+        result = await handleCallTool(backend, getTsHost, name, args, getPreferredEngine, getVlm, peaksPathFor, opts.getActiveWindow, opts.getReviewerSummary, opts.sourceObservationIndex, opts.externalMediaService, externalEnabled, requestSignal, opts.audioUnderstanding, assertAuthority)
+      } finally { unsubscribeInspection?.(); assertAuthority?.release() }
       if (restartCompletion && completion && !('isError' in result && result.isError)) {
         completion.baseline = outputState(getTsHost()!.actor.snapshot())
         completion.guard = revisionGuard = new RevisionLoopGuard()
@@ -1514,6 +1606,7 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
           const notes = changedAVRelationships(auditBefore, afterSnapshot)
           if (notes.length) (result as any).content.push({type:'text',text:JSON.stringify({relationship_changes:notes,interpretation:'Observed relative source mappings; offsets can be intentional. Hermes decides whether these support its claim.'})})
         }
+        if(afterSnapshot)(result as any).content.push({type:'text',text:JSON.stringify({current_output:currentOutput(afterSnapshot,completion?.requirement)})})
         revisionGuard.mutationCommitted(reviewState(afterSnapshot))
         getVisionRuntime().clearCache?.()
 
@@ -1529,7 +1622,15 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
       }
       if (name === 'checkpoint' && !('isError' in result && result.isError)) revisionGuard.checkpointCreated()
       if (REVISION_INSPECTION_TOOLS.has(name) && !('isError' in result && result.isError)) {
-        if (evidenceState !== reviewState(getTsHost()?.actor.snapshot())) return revisionToolError('Timeline changed while gathering evidence. Reacquire current evidence before diagnosis or repair.')
+        ;(extra as {signal?:AbortSignal}).signal?.throwIfAborted()
+        assertAuthority?.()
+        if (changedDuringInspection || getTsHost() !== evidenceHost ||
+            evidenceOpening !== getTsHost()?.agent?.snapshot().workspace_id ||
+            evidenceEpoch !== completion?.epoch || evidenceSerial !== completion?.requestSerial ||
+            evidenceGuard !== revisionGuard || completion && completion.guard !== evidenceGuard ||
+            evidenceState !== reviewState(getTsHost()?.actor.snapshot()) ||
+            evidenceActor && evidenceSources !== sourceFingerprint(evidenceActor.snapshot(), evidenceMedia))
+          return revisionToolError('INSPECTION_BINDING_CHANGED: timeline epoch, project opening, source or owning request changed during inspection. Reacquire current evidence; returning to equal content does not make this receipt current.')
         if (revisionGuard.status.phase !== 'idle') {
           const body = (result as any).content?.find((c: any) => c.type === 'text')
           let data: any = {}; try { data = body ? JSON.parse(body.text) : {} } catch {}
@@ -1539,6 +1640,7 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
           const t = data.timeline_t_us ?? args.timeline_t_us ?? args.t_us
           const range: [number, number] = timeline ? typeof t === 'number' ? [t, t] : [Number(args.start_us ?? 0), Number(args.end_us ?? comp?.duration_us ?? 0)] : [Number(args.source_t_us ?? args.start_us ?? 0), Number(args.source_t_us ?? args.end_us ?? 0)]
           const receipt = revisionGuard.recordEvidence(name, space, range, reviewState(getTsHost()?.actor.snapshot()), toolDimensions(name, data), undefined, evidenceCoverage(name,data,range))
+          if(completion&&space==='timeline'&&['vision_inspect','inspect_timeline_frame','inspect_timeline_range_visuals','inspect_timeline_temporal_window','inspect_rendered_audio','render_timeline_range'].includes(name)&&revisionGuard.hasCurrentRenderedEvidence(reviewState(getTsHost()?.actor.snapshot()))){completion.renderedEpoch=evidenceEpoch??0;completion.renderedSources=evidenceSources}
           revisionGuard.inspectionCompleted(name, args)
           ;(result as any).content.push({ type: 'text', text: JSON.stringify({ evidence_receipt: receipt }) })
         }

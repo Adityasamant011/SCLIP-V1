@@ -13,6 +13,13 @@ should go.
 
 ## Session etiquette
 
+Tool names below are WeftCut server names. In Hermes, use the callable name
+and argument schema returned by `tool_search` / `tool_describe`; deferred tools
+run through `tool_call` with that full name. Do not invoke an undiscovered bare
+server name as a native Hermes function. This includes `end_agent_session`:
+discover and invoke it through the same MCP route as your editing tools, then
+read its result before reporting completion.
+
 1. Read `project://current` before your first mutation — never write against a
    guessed state.
 2. Call `checkpoint` before your first edit, so the user has a one-step
@@ -52,6 +59,26 @@ There is no required transcribe → rough cut → captions → review pipeline.
 Your finite interaction budget serves the whole request, not endless refinement
 of one cosmetic variable. Before declaring completion, consider whether the
 actual result addresses the request and honestly report remaining uncertainty.
+Check actual composition duration, not source duration or the sum of selected
+ranges. Rough-cut assembly inserts chosen ranges; it does not remove an original
+layer you placed for inspection. Inspect remaining source layers and remove or
+retain them deliberately. Mutation receipts include current output facts. An
+`end_agent_session` result of `correction_required` leaves bounded work pending;
+use its grounded unmet requirement, choose your correction, then verify.
+`incomplete` is an honest unfinished outcome and must not be presented as ready.
+
+Review replies include `review_next`: the current stage, legal actions, missing
+rendered modalities, actual receipt/issue IDs and `tool_call_examples`. Use the
+discovered full tool names and that legal argument shape; replace judgment text
+with your own observed reasoning. A flat `record_issue` already registers its
+diagnosis: select its returned ID, checkpoint, make your chosen repair, inspect
+the changed result, `revision_control(action="finish_issue")`, then
+`revision_control(action="complete")` and `end_agent_session`.
+This flat path does not need another nested review or
+`revision_control(action="finalize")`. For a valid current result, choose a
+grounded `revision_control(action="conclude_no_repair")`. Terminal echo and prose
+cannot invoke these tools. A registered subjective issue remains your judgment,
+not a host-certified technical defect.
 
 ## Source understanding before editorial claims
 
@@ -311,7 +338,7 @@ Tool choices below are options, not stages or creative recipes:
 - Creator Footage & Visual Sourcing:
   - Check creator/user footage first: always inspect local project media (`get_source_observations`, transcripts, visual observations) to find relevant visual coverage, reaction shots, or cutaways.
   - Editorial purpose: visual cutaways must have an editorial reason (visual proof, cutaway, explanation, atmosphere). No B-roll is always a valid editorial decision when the primary footage is compelling.
-  - User-provided assets: user-imported videos, still images, and audio in the project media pool are first-class assets. Use `get_source_observations` and `calculate_video_fit` with `mode="cover"` for clean framing.
+  - User-provided assets: user-imported videos, still images, and audio in the project media pool are first-class assets. Use `get_source_observations`; when useful, `calculate_video_fit` supplies cover/contain arithmetic. Choose framing from the brief and actual composition.
   - Sclip V1 focuses on autonomous editing quality with creator media, cutting/pacing/structure, captions/overlays/effects, and self-correction. External web/stock discovery is an experimental background capability that is disabled by default in V1.
 
 

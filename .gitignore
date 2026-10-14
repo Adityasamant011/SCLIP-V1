@@ -83,5 +83,8 @@ apps/desktop/e2e/bench-results/
 # Local spec-related docs
 .scratch/
 
+# Durable local acceptance binaries/media; reports belong in docs/implementation.
+acceptance-artifacts/
+
 # Sclip runtime/session state (Electron userData only, never project source)
 sclip_hermes_sessions.json

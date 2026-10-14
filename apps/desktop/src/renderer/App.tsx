@@ -545,22 +545,36 @@ export function App({ onCloseProject }: AppProps) {
   // MCP's composed QA/export adapter calls the exact same export callback as
   // the UI. It may write only the destination chosen by the authenticated main
   // process; this renderer bridge adds no compositor or export implementation.
+  const inspectionExports = useRef(new Map<string, AbortController>());
   useEffect(() => {
     const target = window as typeof window & { __sclipExportRange?: (request: {
       projectId: string; outputPath: string; startUs: number; endUs: number;
-      resolutionHeight?: number; fps?: number; audioOnly?: boolean;
-    }) => Promise<void> };
+      resolutionHeight?: number; fps?: number; audioOnly?: boolean; requestId?: string;
+    }) => Promise<void>; __sclipCancelExportRange?: (requestId: string) => boolean };
+    target.__sclipCancelExportRange = requestId => {
+      const controller = inspectionExports.current.get(requestId);
+      controller?.abort();
+      return !!controller;
+    };
     target.__sclipExportRange = async (request) => {
+      const requestId = request.requestId ?? crypto.randomUUID();
+      if (inspectionExports.current.has(requestId)) throw new Error('Export request already exists');
+      const controller = new AbortController();
+      inspectionExports.current.set(requestId, controller);
+      try {
       const summary = await projectSummary();
+      controller.signal.throwIfAborted();
       if (!summary || summary.project_id !== request.projectId) throw new Error('Project changed before export');
       if (exportState && exportState.kind !== 'complete' && exportState.kind !== 'error') throw new Error('An export is already running');
       await runExportWithSettings({ ...DEFAULT_EXPORT_SETTINGS,
         includeVideo: request.audioOnly ? false : DEFAULT_EXPORT_SETTINGS.includeVideo,
         resolutionHeight: request.resolutionHeight ?? null,
         fps: request.fps ?? null,
-      }, request.outputPath, { startUs: request.startUs, endUs: request.endUs }, "inspection");
+      }, request.outputPath, { startUs: request.startUs, endUs: request.endUs }, "inspection", controller.signal);
+      controller.signal.throwIfAborted();
+      } finally { inspectionExports.current.delete(requestId); }
     };
-    return () => { delete target.__sclipExportRange; };
+    return () => { delete target.__sclipExportRange; delete target.__sclipCancelExportRange; };
   }, [runExportWithSettings, exportState]);
 
   // ---- Menu-bar action handlers ----

@@ -1283,6 +1283,7 @@ export const PixiPreview = forwardRef<PixiPreviewHandle, Props>(function PixiPre
 /// pixiPreviewFlag.ts, which most of them are threaded straight into.
 async function handlePixiExport(
   opts: {
+    signal?: AbortSignal;
     onProgress?: (encoded: number, total: number) => void;
     encoderConfig?: VideoEncoderConfig;
     outputFps?: { num: number; den: number };
@@ -1317,6 +1318,7 @@ async function handlePixiExport(
       summary,
       mediaById: store.mediaById,
       writeChunk: opts.writeChunk,
+      ...(opts.signal ? { signal: opts.signal } : {}),
       // Conditional spreads: under exactOptionalPropertyTypes an optional
       // field may be absent but not explicitly `undefined`.
       ...(opts.onProgress ? { onProgress: opts.onProgress } : {}),

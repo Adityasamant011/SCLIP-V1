@@ -116,6 +116,10 @@ export async function listProjectSessions(projectId: string): Promise<{ activeSe
 }
 
 export async function createProjectSession(projectId: string, name: string): Promise<HermesSessionView> {
+  const runtime = bridge().getRuntimeStatus?.()
+  if (runtime && runtime.state !== 'ready') {
+    throw new Error(`HERMES_NOT_READY: ${safeText(runtime.detail ?? `Hermes runtime is ${runtime.state}`)}`)
+  }
   const createdAt = new Date().toISOString()
   const session: SclipSession = {
     id: `sclip-${projectId}-${randomUUID()}`,

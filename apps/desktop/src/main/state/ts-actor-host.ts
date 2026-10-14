@@ -252,6 +252,7 @@ export function createTsActorHost(deps: TsActorHostDeps): TsActorHost {
     workspaceDir: deps.workspaceDir,
     readFile: deps.readFile,
     snapshotComposition: () => rootComposition(actor.snapshot()),
+    projectOpening: () => agent.snapshot().workspace_id,
   }
   const mcpHybridDeps: HybridDeps = {
     ...hybridDeps,
