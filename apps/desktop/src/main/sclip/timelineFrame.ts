@@ -11,6 +11,7 @@ export interface TimelineFrameOptions {
   getActiveWindow?: () => any | null
   /** MCP must not present the reduced FFmpeg fallback as a composed frame. */
   requireLiveCompositor?: boolean
+  passive?: boolean
   resourcesPath?: string
 }
 
@@ -73,7 +74,7 @@ export async function inspectTimelineFrame(
   let liveCaptureError: string | undefined
   if (win && !win.isDestroyed()) {
     try {
-      const code = `window.__weftcutPreview ? window.__weftcutPreview.captureFrameAt(${typeof t_us === 'number' && Number.isFinite(t_us) ? Math.trunc(t_us) : 'undefined'}, ${JSON.stringify(compId)}) : null`
+      const code = `window.__weftcutPreview ? window.__weftcutPreview.captureFrameAt(${typeof t_us === 'number' && Number.isFinite(t_us) ? Math.trunc(t_us) : 'undefined'}, ${JSON.stringify(compId)}, ${options.passive === true}) : null`
       const capture = await win.webContents.executeJavaScript(code)
       if (capture && typeof capture.pngBase64 === 'string') {
         const base64 = capture.pngBase64

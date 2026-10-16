@@ -20,6 +20,7 @@ import { resolveAnimated, resolveAnimatedColor } from "./animated";
 import { DEFAULT_ANCHOR } from "./anchorPivot";
 import { evaluatePosition, previewPosition } from './position';
 import { evaluateMotionPath } from '../eval';
+import { captionRevealEnd } from '../../shared/captionTiming';
 
 /// The transform tracks every visual view resolves, so a new one can't be added
 /// to some kinds and forgotten on others.
@@ -63,6 +64,7 @@ export interface ResolvedTextView
   extends Omit<TextView, TransformTrackKey | "color" | "scale_linked">,
     ResolvedTransform {
   color: Rgba;
+  caption_reveal_end?: number | undefined;
 }
 export interface ResolvedColorView extends Omit<ColorView, "color"> {
   color: Rgba;
@@ -117,6 +119,7 @@ export function resolveTextView(v: TextView, tInLayerUs: number): ResolvedTextVi
     ...v,
     ...resolveTransform(v, tInLayerUs),
     color: resolveAnimatedColor(v.color, tInLayerUs, WHITE),
+    ...(v.caption_reveal ? { caption_reveal_end: captionRevealEnd(v.content, v.caption_reveal, tInLayerUs) } : {}),
   };
 }
 

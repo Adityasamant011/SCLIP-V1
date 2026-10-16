@@ -5,6 +5,7 @@ import path from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import { hermesBaseEnvironment, redactHermesSecrets } from './hermesSecrets.js'
 import { validateHermesProfile } from './hermesSettings.js'
+import { pythonArgsWithoutBytecode } from '../pythonRuntime.js'
 
 export interface HermesRuntimeStatus {
   state: 'stopped' | 'starting' | 'ready' | 'failed'
@@ -83,6 +84,7 @@ export class HermesRuntime {
         API_SERVER_KEY: token,
         SCLIP_MCP_URL: mcp.url,
         SCLIP_MCP_TOKEN: mcp.bearer_token,
+        PYTHONDONTWRITEBYTECODE: '1',
       }
       delete env.TERMINAL_CWD
       const child = spawn(launch.command, launch.args, {
@@ -147,7 +149,9 @@ export class HermesRuntime {
     if (this.options.isPackaged) {
       const executable = path.join(this.options.resourcesPath, 'hermes', process.platform === 'win32' ? 'hermes.exe' : 'hermes')
       if (!fs.existsSync(executable)) throw new Error('Bundled Hermes runtime is missing')
-      return { command: executable, args: ['gateway', 'run', '--external-supervisor', '--replace'], cwd: path.dirname(executable) }
+      const cwd = path.join(this.options.userDataPath, 'hermes-workspace')
+      fs.mkdirSync(cwd, { recursive: true, mode: 0o700 })
+      return { command: executable, args: ['gateway', 'run', '--external-supervisor', '--replace'], cwd }
     }
     const explicit = this.options.executableOverride?.trim()
     if (explicit) {
@@ -164,7 +168,7 @@ export class HermesRuntime {
       if (this.options.isPackaged) throw new Error('Bundled Hermes runtime is missing')
       throw new Error('Hermes development virtual environment is missing')
     }
-    return { command: python, args: ['-m', 'hermes_cli.main', 'gateway', 'run', '--external-supervisor', '--replace'], cwd: source }
+    return { command: python, args: pythonArgsWithoutBytecode(['-m', 'hermes_cli.main', 'gateway', 'run', '--external-supervisor', '--replace']), cwd: source }
   }
 
   getPort(): number { return this.port }
@@ -267,7 +271,8 @@ export function writeHermesProfile(
   const previousPrompt = typeof previous.agent?.system_prompt === 'string' ? previous.agent.system_prompt : ''
   const discoveryGuidance = 'Deferred MCP calls: invoke native tool_call with name and arguments at the top level. Its JSON arguments have exactly the shape {"name":"mcp__weftcut__get_timeline_context","arguments":{}} for this no-argument example; discover the actual target with tool_search/tool_describe. For an edit, put only that target schema\'s fields inside arguments. Do not wrap the whole call in another arguments object, and do not put another name/arguments wrapper inside the target arguments. A missing name error means repair the outer tool_call shape; missing target fields means repair the inner arguments against tool_describe. An argument/schema error is not a lost MCP connection and the rejected tool was not invoked. Diagnose that call rather than editing MCP/provider configuration or replacing discovery with CLI workarounds. Do not launch another Hermes agent to do this editing task. Use this current native session and its tools; a proposed edit or memory entry is not an applied mutation. Confirm the mutation result and current state before claiming it happened.'
   const creatorRoutingGuidance = 'Creator style routing: creator corrections and preferences belong in the canonical mcp__weftcut__creator_style_memory tool. Discover its current schema, retrieve action=context and relevant evidence details before interpreting, and use the returned creator identity, fresh revision/version and actual evidence IDs for any justified hypothesis or maintenance write. YOU choose the meaning, scope, applicability, uncertainty and whether to learn; a single correction is not a universal rule, and your own output is not creator confirmation. Decline learning when the evidence is insufficient. Do not put creator style interpretations into generic memory, USER.md or MEMORY.md: those entries bypass the canonical evidence and creator controls. Generic memory remains available for non-style facts. Current user instructions override remembered preferences. Never invent support, approve a candidate yourself, copy another creator\'s preferences or automatically apply a subjective correction.'
-  const systemPrompt = [previousPrompt, ...[capabilityGuidance, discoveryGuidance, creatorRoutingGuidance].filter(guidance => !previousPrompt.includes(guidance))].filter(Boolean).join('\n\n')
+  const identityGuidance = 'Sclip identity and purpose: You are Sclip Agent, the autonomous video-editing assistant inside the Sclip desktop editor, powered by the native Hermes agent framework from Nous Research. Sclip is the product; Hermes is the agent framework, and WeftCut is the editing engine exposed through MCP. Your primary purpose is to help creators understand footage, choose moments, shape stories, edit picture and sound, review actual results and learn supported creator preferences. You make the creative decisions from the user brief and observed evidence; no fixed creative pipeline is required. Introduce yourself simply as Sclip Agent. Do not attribute the Sclip product itself to Nous Research or describe this embedded editor as merely a generic CLI assistant. For capability questions, distinguish the current project state, available editing tools, configured local sensing and optional external services. Consult the live catalog before naming specific tools; do not promise email, reminders, messaging integrations or web access solely because upstream Hermes supports them. Keep internal composition IDs and implementation details out of ordinary greetings unless useful to the user. Ordinary conversation does not require an edit; never manufacture work or claim a finished video from a conversational response.'
+  const systemPrompt = [previousPrompt, ...[identityGuidance, capabilityGuidance, discoveryGuidance, creatorRoutingGuidance].filter(guidance => !previousPrompt.includes(guidance))].filter(Boolean).join('\n\n')
   const terminalCwd = typeof previous.terminal?.cwd === 'string' ? previous.terminal.cwd : '.'
 
   const modelLines = [

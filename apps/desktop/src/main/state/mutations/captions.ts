@@ -5,6 +5,8 @@ import { gridForLayerKind, snapOnGrid } from '../snap'
 import { quantizeExtentPx, quantizeParam } from '../quantize'
 import { applyAddLayer, defaultTransform } from './add'
 import { DEFAULT_CAPTION_FONT_FAMILY } from '../../../shared/fonts'
+import { CAPTION_DISPLAY_KEY, type CaptionDisplay } from '../../../shared/captionTiming'
+import { CommandFailure } from '../errors'
 
 /** subtitles/mod.rs CueStyle — per-cue style hints (all optional; absent ⇒
  *  the default caption look applies). `align` is the ASS 9-grid (1..9). */
@@ -121,6 +123,7 @@ function alignFor(an: number): TextAlign {
  *  Text tool writes and a shadowless cue carries — one representation of "none",
  *  so the renderer's `o ? stroke : nothing` gate and the Panel's seed read agree. */
 export interface CaptionStylePatch {
+  caption_display?: CaptionDisplay
   font_family?: string | null
   font_size_px?: number | null
   color?: Rgba | null
@@ -194,6 +197,7 @@ function restyleTrackTextLayers(track: Track, patch: CaptionStylePatch): void {
   for (const layer of track.layers) {
     if (layer.params.kind !== 'Text') continue
     const tp = layer.params
+    if (patch.caption_display !== undefined) layer.metadata[CAPTION_DISPLAY_KEY] = patch.caption_display
     if (patch.font_family !== undefined && patch.font_family !== null) tp.font.family = patch.font_family
     if (patch.font_size_px !== undefined && patch.font_size_px !== null) tp.font.size_px = patch.font_size_px
     if (patch.color !== undefined && patch.color !== null) tp.color = { mode: 'Static', value: patch.color }
@@ -215,6 +219,9 @@ function restyleTrackTextLayers(track: Track, patch: CaptionStylePatch): void {
  *  hold zero caption tracks, in which case this is a no-op (commit's no-op guard
  *  then records nothing). */
 export function applyRestyleCaptions(p: Project, patch: CaptionStylePatch): void {
+  if (patch.caption_display !== undefined && !['phrase', 'word_reveal'].includes(patch.caption_display)) {
+    throw new CommandFailure({ error: 'InvalidArgument', field: 'caption_display', detail: 'Use phrase or word_reveal' })
+  }
   for (const track of captionTracks(p)) restyleTrackTextLayers(track, patch)
 }
 

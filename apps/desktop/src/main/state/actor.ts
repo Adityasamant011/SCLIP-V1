@@ -31,7 +31,7 @@ import { applyAttachMarker, applyDetachMarker, applyUpdateMarker, applyRemoveMar
 import { applyDeleteTrack, applyMoveTrack, applyRenameTrack } from './mutations/tracks'
 import { applyAddEffect, applyUpdateEffect, applyMoveEffect, applyRemoveEffect, type EffectPatch } from './mutations/effects'
 import { applyAddTransition, applyRemoveTransition, applyUpdateTransition, type TransitionBounce } from './mutations/transitions'
-import { videoClipParams, audioParams, imageOverlayParams, applySeparateAudio, mediaItemTemplate,
+import { videoClipParams, audioParams, imageOverlayParams, mediaPlacementTransform, applySeparateAudio, mediaItemTemplate,
   applySetMediaDerivatives, applySetMediaWorkspacePaths, applySetMediaHash, referencingLayers,
   type MediaDerivativesPatch, type WorkspacePaths } from './mutations/media'
 import type { MediaItem } from './model'
@@ -52,6 +52,7 @@ import { buildTimelineContext } from '../sclip/timelineContext'
 import { validateRoughCutReview } from '../sclip/roughCutReview'
 import { CORRECTION_SCRIPT_MAX, type TextCorrectionExpectation } from '../../shared/textCorrectionRequest'
 import type { TranscriptPayload } from '../../shared/captionTiming'
+import { syncCaptionSources } from './mutations/captionSourceSync'
 import type { PositionAnimation } from '../../shared/position'
 
 setAutoFreeze(true) // snapshots are frozen — accidental mutation throws.
@@ -204,6 +205,7 @@ export function createActor(opts: ActorOptions): ActorHandle {
     // produce: a throw inside the recipe aborts and discards the draft.
     const next = produce(current(), (draft) => {
       value = recipe(draft)
+      syncCaptionSources(current(), draft, idGen)
       droppedTransitions = reconcileTransitions(draft)
       droppedMarkers = reconcileMarkers(draft)
     })
@@ -791,6 +793,7 @@ export function createActor(opts: ActorOptions): ActorHandle {
           // dry-run of an edit that breaks a transition predicts the real
           // succeed-with-drop outcome instead of a spurious ValidationFailed.
           // Drop info is discarded: DryRunOutput has no vocabulary for it.
+          syncCaptionSources(scratch, d, idGen)
           reconcileTransitions(d)
         })
         runValidate(next)
@@ -835,14 +838,14 @@ export function createActor(opts: ActorOptions): ActorHandle {
           switch (kind) {
             case 'text': params = textParamsDefault('hello', into()); break
             case 'color': { const c = into(); params = colorParams({ r: 255, g: 0, b: 0, a: 255 }, c.width, c.height); break }
-            case 'video': params = videoClipParams(a.media as Uuid, parseNum(a.src_in_us, 'src_in_us'), parseNum(a.src_out_us, 'src_out_us')); break
+            case 'video': params = videoClipParams(a.media as Uuid, parseNum(a.src_in_us, 'src_in_us'), parseNum(a.src_out_us, 'src_out_us'), mediaPlacementTransform(current(), a.media as Uuid, into())); break
             // Optional `role` override (default 'music'): mirrors the add-layer-site
             // role stamp at actor.ts add_media_layer auto-pair (role:'dialogue') and the
             // synthesize_speech hybrid (role:'voiceover').
             case 'audio': params = a.role
               ? { ...audioParams(a.media as Uuid, parseNum(a.src_in_us, 'src_in_us'), parseNum(a.src_out_us, 'src_out_us')), role: a.role as AudioRole }
               : audioParams(a.media as Uuid, parseNum(a.src_in_us, 'src_in_us'), parseNum(a.src_out_us, 'src_out_us')); break
-            case 'image': params = imageOverlayParams(a.media as Uuid); break
+            case 'image': params = imageOverlayParams(a.media as Uuid, mediaPlacementTransform(current(), a.media as Uuid, into())); break
             case 'Motif': params = { kind: 'Motif', motif_id: a.motif_id as string, motif_version: a.motif_version as number, props: (a.props ?? {}) as Record<string, unknown>, src_in_us: 0, transform: defaultTransform(), opacity: { mode: 'Static', value: 1 } }; break
             default: return { ok: false, error: { error: 'InvalidArgument', field: 'kind', detail: `unknown kind ${kind}` } }
           }
@@ -1493,7 +1496,7 @@ export function createActor(opts: ActorOptions): ActorHandle {
           // layer (role=dialogue) on the SAME track and span, then links_create.
           const trackId = parseUuid(wireArgs.trackId, 'trackId')
           const t0 = parseNum(wireArgs.tStartUs, 'tStartUs')
-          const { params, durationUs, autoPairAudio } = prodMediaLayer(wireArgs, current())
+          const { params, durationUs, autoPairAudio } = prodMediaLayer(wireArgs, current(), requireTrack(current(), trackId).comp)
           const t1 = t0 + durationUs
           const videoId = commit(HISTORY_SUMMARY.layerAdd, layerRef, { kind: 'Coarse' }, (d) =>
             applyAddLayer(d, idGen, trackId, params, t0, t1))
@@ -1613,8 +1616,8 @@ export function createActor(opts: ActorOptions): ActorHandle {
         const srcIn = parseNum(spec.src_in_us, 'src_in_us')
         const srcOut = parseNum(spec.src_out_us, 'src_out_us')
         const params = current().media_pool[media]?.kind === 'Image'
-          ? imageOverlayParams(media)
-          : videoClipParams(media, srcIn, srcOut)
+          ? imageOverlayParams(media, mediaPlacementTransform(current(), media, requireTrack(current(), parseUuid(spec.track_id, 'track_id')).comp))
+          : videoClipParams(media, srcIn, srcOut, mediaPlacementTransform(current(), media, requireTrack(current(), parseUuid(spec.track_id, 'track_id')).comp))
         return { kind: 'AddLayer', track_id: parseUuid(spec.track_id, 'track_id'),
           params,
           t_start_us: parseNum(spec.t_start_us, 't_start_us'), t_end_us: parseNum(spec.t_end_us, 't_end_us') }
@@ -1696,10 +1699,10 @@ export function createActor(opts: ActorOptions): ActorHandle {
           const snap = current()
           const item = snap.media_pool[media]
           if (item?.kind === 'Image') {
-            const imageId = commit(HISTORY_SUMMARY.layerAdd, layerRef, { kind: 'Coarse' }, (d) => applyAddLayer(d, idGen, track, imageOverlayParams(media), t0, t1))
+            const imageId = commit(HISTORY_SUMMARY.layerAdd, layerRef, { kind: 'Coarse' }, (d) => applyAddLayer(d, idGen, track, imageOverlayParams(media, mediaPlacementTransform(snap, media, requireTrack(snap, track).comp)), t0, t1))
             return { ok: true, result: toolText(imageId) }
           }
-          const vParams = videoClipParams(media, srcIn, srcOut)
+          const vParams = videoClipParams(media, srcIn, srcOut, mediaPlacementTransform(snap, media, requireTrack(snap, track).comp))
           const shouldPair = (snap.settings.auto_pair_audio_on_import === true) && (item?.kind === 'Video') && (item.metadata.audio != null)
           if (!shouldPair) {
             const videoId = commit(HISTORY_SUMMARY.layerAdd, layerRef, { kind: 'Coarse' }, (d) => applyAddLayer(d, idGen, track, vParams, t0, t1))
@@ -2090,6 +2093,7 @@ export function createActor(opts: ActorOptions): ActorHandle {
                 operationResults.push({ requested_operation: specs[index], committed: true, affected_layer_ids: [op.id],
                   before: memberBefore, after: JSON.parse(JSON.stringify(requireLayer(draft, op.id).layer)) })
               }
+              syncCaptionSources(before, draft, idGen)
               reconcileTransitions(draft)
               reconcileMarkers(draft)
             })

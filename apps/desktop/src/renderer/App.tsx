@@ -547,9 +547,14 @@ export function App({ onCloseProject }: AppProps) {
   // process; this renderer bridge adds no compositor or export implementation.
   const inspectionExports = useRef(new Map<string, AbortController>());
   useEffect(() => {
+    const target = window as typeof window & { __sclipFeedbackCanObserve?: () => boolean };
+    target.__sclipFeedbackCanObserve = () => !exportDialogOpen && (!exportState || exportState.kind === 'complete' || exportState.kind === 'error') && inspectionExports.current.size === 0;
+    return () => { delete target.__sclipFeedbackCanObserve; };
+  }, [exportDialogOpen, exportState]);
+  useEffect(() => {
     const target = window as typeof window & { __sclipExportRange?: (request: {
       projectId: string; outputPath: string; startUs: number; endUs: number;
-      resolutionHeight?: number; fps?: number; audioOnly?: boolean; requestId?: string;
+      resolutionHeight?: number; fps?: number; audioOnly?: boolean; requestId?: string; background?: boolean;
     }) => Promise<void>; __sclipCancelExportRange?: (requestId: string) => boolean };
     target.__sclipCancelExportRange = requestId => {
       const controller = inspectionExports.current.get(requestId);
@@ -557,6 +562,7 @@ export function App({ onCloseProject }: AppProps) {
       return !!controller;
     };
     target.__sclipExportRange = async (request) => {
+      if (request.background && !(window as any).__sclipFeedbackCanObserve?.()) throw new Error("Background audio deferred to foreground work");
       const requestId = request.requestId ?? crypto.randomUUID();
       if (inspectionExports.current.has(requestId)) throw new Error('Export request already exists');
       const controller = new AbortController();
@@ -570,7 +576,7 @@ export function App({ onCloseProject }: AppProps) {
         includeVideo: request.audioOnly ? false : DEFAULT_EXPORT_SETTINGS.includeVideo,
         resolutionHeight: request.resolutionHeight ?? null,
         fps: request.fps ?? null,
-      }, request.outputPath, { startUs: request.startUs, endUs: request.endUs }, "inspection", controller.signal);
+      }, request.outputPath, { startUs: request.startUs, endUs: request.endUs }, request.background ? "background" : "inspection", controller.signal);
       controller.signal.throwIfAborted();
       } finally { inspectionExports.current.delete(requestId); }
     };

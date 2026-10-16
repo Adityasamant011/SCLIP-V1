@@ -9,7 +9,7 @@
 import { WorkspaceFailure } from '../../shared/workspaceErrors'
 import { SCHEMA_VERSION, type MediaItem, type Project } from './model'
 import { upgradeWire } from './migrate'
-import { serializeProject, parseProject, type GridRepair, type ParseProjectOptions } from './serialize'
+import { serializeProject, parseProject, type ParseProjectOptions } from './serialize'
 
 /** The on-disk project file name inside a workspace folder. */
 export const PROJECT_FILE = 'project.json'
@@ -115,10 +115,10 @@ export function clearSessionQuickProxies(p: Project): { project: Project; quickP
  *  path reconcile + quick-proxy clear. NOTE: stale-proxy invalidation (the
  *  Proxied route's `format_version`) is deliberately NOT done here — it rides the
  *  background jobs write-back. */
-export function loadProjectFromJson(text: string, opts: { dir: string; join: (...parts: string[]) => string; onGridRepair?: (repairs: readonly GridRepair[]) => void }): { project: Project; quickProxiesToDelete: string[]; upgradedFrom: number | null } {
+export function loadProjectFromJson(text: string, opts: { dir: string; join: (...parts: string[]) => string } & ParseProjectOptions): { project: Project; quickProxiesToDelete: string[]; upgradedFrom: number | null } {
   // Omitting the hook (tests) leaves `onGridRepair: undefined`, which parseProject
   // falls back to its console default for — the reporting default is unchanged.
-  const { project, upgradedFrom } = parseProjectJson(text, { onGridRepair: opts.onGridRepair })
+  const { project, upgradedFrom } = parseProjectJson(text, opts)
   const reconciled = reconcileMediaPaths(project, opts.dir, opts.join)
   return { ...clearSessionQuickProxies(reconciled), upgradedFrom }
 }

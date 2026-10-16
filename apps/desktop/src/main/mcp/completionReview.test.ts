@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+import type { LiveFeedbackSnapshot } from '../../shared/liveFeedback'
 import { describe, it, expect, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -32,7 +34,8 @@ async function fixture() {
  const backend={mcpCatalog:async()=>'{"tools":[],"resources":[]}',mcpCallTool:vi.fn(async()=>{throw new Error('Unexpected native tool in offline fixture')})} as any
  const provider=vi.fn(),reviewer=new BackgroundReviewer(ts,undefined,1,undefined,undefined,provider)
  const activeWindow={isDestroyed:()=>false,webContents:{executeJavaScript:async()=>({pngBase64:Buffer.from('offline frame').toString('base64'),tUs:500000})}} as any
- const host=await startMcpHost(backend,{getTsHost:()=>ts,getActiveWindow:()=>activeWindow,getReviewerSummary:()=>reviewer.getSummary(),
+ let liveFeedback: LiveFeedbackSnapshot | undefined, feedbackFailure = false
+ const host=await startMcpHost(backend,{getTsHost:()=>ts,getActiveWindow:()=>activeWindow,getReviewerSummary:()=>{if(feedbackFailure)throw new Error('Synthetic optional observation failure');return {...reviewer.getSummary(),live_feedback:liveFeedback}},
  // This transport fixture has synthetic media and PNG bytes; decode is an injected I/O seam. Real compositor/decode proof is covered independently.
  verifyCompletionOutput:async project=>({valid:true,decoded:true,has_video:true,has_audio:false,duration_us:project.compositions[project.root_id].duration_us})})
  const clients:Client[]=[]
@@ -41,15 +44,41 @@ async function fixture() {
  async function assemble(){
    await call('begin_agent_session',{reason:'Synthetic user requests an authored output'})
    const id='00000000-0000-0000-0000-000000000001'
-   // Supply real metadata via actor state; the chosen source is deliberately undersized.
+   // Supply real metadata; explicitly author an inset below, since new media now fills the canvas.
    const track=actor.snapshot().compositions[actor.snapshot().root_id].tracks[0].id
    const r=await call('add_video_layer',{track_id:track,media_id:id,t_start_us:0,t_end_us:2000000,src_in_us:0,src_out_us:2000000})
    expect(r.isError).not.toBe(true)
-   return actor.snapshot().compositions[actor.snapshot().root_id].tracks.flatMap(t=>t.layers).find(l=>l.params.kind==='VideoClip')!.id
+   const layerId=actor.snapshot().compositions[actor.snapshot().root_id].tracks.flatMap(t=>t.layers).find(l=>l.params.kind==='VideoClip')!.id
+   // These tests exercise review of a deliberately bad authored transform, not
+   // the insertion default. Keep the actual inset and A->B->A race unchanged.
+   expect((await call('update_layer_params',{layer_id:layerId,patch:{kind:'VideoClip',x:0,y:0,scale_x:1,scale_y:1}})).isError).not.toBe(true)
+   return layerId
  }
- return {actor,ts,provider,reviewer,host,call,connect,assemble,activeWindow,async close(){for(const c of clients)await c.close();reviewer.dispose();agent.stop();await host.close()}}
+ return {actor,ts,provider,reviewer,host,call,connect,assemble,activeWindow,setFeedback:(value?:LiveFeedbackSnapshot)=>{liveFeedback=value},failFeedback:()=>{feedbackFailure=true},async close(){for(const c of clients)await c.close();reviewer.dispose();agent.stop();await host.close()}}
 }
 describe('Normal completion: critique -> Hermes choice -> actor -> fresh evidence',()=>{
+ it.each(['hi','What can you do with video?','Explain how to make a 30-second video.'])('ending read-only work on %s does not demand a media deliverable',async brief=>{
+  const f=await fixture();try{
+   f.host.setEditingBrief(brief)
+   const r=await f.call('end_agent_session')
+   expect(r.isError).not.toBe(true);expect(body(r).completion).toBeUndefined()
+   expect(JSON.stringify(r)).not.toContain('correction_required')
+   expect(JSON.stringify(f.host.reviewDisposition())).not.toContain('current_review_and_media_verified')
+  }finally{await f.close()}
+ })
+ it('an actual failed editing attempt cannot fall through as conversation',async()=>{
+  const f=await fixture();try{
+   f.host.setEditingBrief('Adjust this.')
+   expect((await f.call('trim_layer',{layer_id:'00000000-0000-0000-0000-000000000099',edge:'out',new_t_us:1000000})).isError).toBe(true)
+   const r=body(await f.call('end_agent_session'));expect(r.completion).toBe('correction_required');expect(r.validation.errors).toContain('EMPTY_OUTPUT')
+  }finally{await f.close()}
+ })
+ it('an explicit editing session without a submitted brief still cannot certify empty output',async()=>{
+  const f=await fixture();try{
+   await f.call('begin_agent_session',{reason:'Create an editing deliverable'})
+   const r=body(await f.call('end_agent_session'));expect(r.completion).toBe('correction_required');expect(r.validation.errors).toContain('EMPTY_OUTPUT')
+  }finally{await f.close()}
+ })
  it('rejects unsupported envelope fields without history changes and permits the correct parameter tool',async()=>{
   const f=await fixture();try{
    const id=await f.assemble(),before=f.actor.snapshot(),history=f.actor.historyStatus()
@@ -233,6 +262,32 @@ describe('explicit submitted duration completion',()=>{
    const frame=await f.call('vision_inspect',{timeline_t_us:500000,question:'Inspect current corrected output'})
    await f.call('revision_control',{action:'conclude_no_repair',evidence_id:receipt(frame).id,reason:'Current output is intentionally retained'})
    expect(body(await f.call('end_agent_session')).completion).toBe('reviewed')
+  }finally{await f.close()}
+ })
+})
+
+
+describe('background feedback transport is observational and bounded',()=>{
+ it('delivers current observations once per epoch without receipts or history edits',async()=>{
+  const f=await fixture();try{
+   await f.assemble(); const project=f.actor.snapshot(),history=f.actor.historyStatus()
+   const state_version=createHash('sha256').update(reviewState(project)).digest('hex')
+   f.setFeedback({project_id:project.project_id,state_version,epoch:1,enabled:true,status:'available',updated_at:1,
+    observation:{timeline_range_us:[0,1000000],visual:{status:'observed',description:'Synthetic local observation'},audio:{status:'measured',signal:{rms:.1,peak:.2,clipping_sample_count:0,silence_spans_us:[]}},limitations:'Partial, no verdict',provider_calls:0}})
+   const first=await f.call('get_timeline_context'),second=await f.call('get_timeline_context')
+   expect(JSON.stringify(first)).toContain('background_feedback')
+   expect(JSON.stringify(second)).not.toContain('background_feedback')
+   expect(receipt(first)).toBeFalsy();expect(f.actor.snapshot()).toBe(project);expect(f.actor.historyStatus()).toEqual(history)
+   f.setFeedback({project_id:project.project_id,state_version:'old',epoch:2,enabled:true,status:'available',updated_at:2})
+   expect(JSON.stringify(await f.call('get_timeline_context'))).not.toContain('background_feedback')
+  }finally{await f.close()}
+ })
+ it('optional feedback failure cannot turn an applied edit into a failed tool response',async()=>{
+  const f=await fixture();try{
+   const id=await f.assemble();f.failFeedback()
+   const response=await f.call('update_layer',{layer_id:id,patch:{label:'Verified committed label'}})
+   expect(response.isError).not.toBe(true)
+   expect(f.actor.snapshot().compositions[f.actor.snapshot().root_id].tracks.flatMap(t=>t.layers).find(l=>l.id===id)?.label).toBe('Verified committed label')
   }finally{await f.close()}
  })
 })

@@ -13,6 +13,7 @@ import type {
 import { CONCURRENCY_LIMITS } from './types.js'
 import { getVisionSidecar } from '../../sclip/visionSidecar.js'
 import { computeLexicalOverlap } from './cheapFilter.js'
+import { pythonArgsWithoutBytecode, pythonEnvWithoutBytecode } from '../../pythonRuntime.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -161,8 +162,9 @@ export async function createContactSheet(
   const outPath = path.join(THUMBNAIL_CACHE_DIR, id)
 
   try {
-    await execFileAsync(PYTHON_BIN, [CONTACT_SHEET_SCRIPT, outPath, ...validPaths], {
+    await execFileAsync(PYTHON_BIN, pythonArgsWithoutBytecode([CONTACT_SHEET_SCRIPT, outPath, ...validPaths]), {
       timeout: 5000,
+      env: pythonEnvWithoutBytecode(process.env),
     })
     if (fs.existsSync(outPath) && fs.statSync(outPath).size > 0) {
       return outPath

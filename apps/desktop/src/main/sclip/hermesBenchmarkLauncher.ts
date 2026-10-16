@@ -15,6 +15,7 @@ import { createHermesOutputRedactor, hermesBaseEnvironment } from './hermesSecre
 import { installSkills, refreshHermesWeftcutSkill } from '../mcp/skillsInstall.js'
 import { startAutonomousReview, initialEditorialEvidence, stageEditorialEvidence } from './autonomousReview.js'
 import { DESKTOP_PRODUCT_NAME } from '../appIdentity.js'
+import { pythonArgsWithoutBytecode, pythonEnvWithoutBytecode } from '../pythonRuntime.js'
 
 // Set identity before awaiting stdin or Electron readiness: macOS safeStorage
 // selects its Keychain entry from the application name at initialization.
@@ -76,6 +77,7 @@ async function main(): Promise<void> {
   const stagedEvidence=stageEditorialEvidence(home,packet)
   const env = {
     ...hermesBaseEnvironment(), ...providerEnv,
+    PYTHONDONTWRITEBYTECODE: '1',
     HERMES_HOME: home,
     SCLIP_MCP_URL: review?.url ?? request.mcpUrl,
     SCLIP_MCP_TOKEN: request.mcpToken,
@@ -83,14 +85,14 @@ async function main(): Promise<void> {
     SCLIP_PROJECT_ID: request.projectId,
     SCLIP_TRANSCRIPTS_DIR: request.transcriptsDir,
   }
-  const args = [
+  const args = pythonArgsWithoutBytecode([
     '-m', 'hermes_cli.main', 'chat', '--toolsets', request.toolsets ?? 'terminal,file,web,vision,skills,todo,memory,clarify,weftcut',
     '--skills', `weftcut,${stagedEvidence.name}`,
     '--provider', profile.provider, '-m', profile.model,
     '--yolo', '--max-turns', String(maxTurns), '-q', request.prompt,
-  ]
+  ])
   process.stdout.write(`HERMES_RESOLVED ${JSON.stringify({ provider: profile.provider, model: profile.model, maxTurns })}\n`)
-  const child = spawn(request.python, args, { cwd: request.cwd, env: env as NodeJS.ProcessEnv })
+  const child = spawn(request.python, args, { cwd: request.cwd, env: pythonEnvWithoutBytecode(env) as NodeJS.ProcessEnv })
   const secrets = [...Object.values(providerEnv), request.mcpToken]
   const stdout = createHermesOutputRedactor(secrets)
   const stderr = createHermesOutputRedactor(secrets)

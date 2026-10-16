@@ -1,0 +1,24 @@
+import { describe, expect, it } from 'vitest'
+import { createActor } from '../actor'
+import { blankProject } from '../model'
+import { parseProject, serializeProject } from '../serialize'
+import { seededGen } from '../ids'
+import { mediaItemTemplate } from '../mutations/media'
+import { root, withGroup } from './fixtures/project'
+const MID='11111111-1111-4111-8111-111111111111'
+function fixture(w=1920,h=1080,kind:'Video'|'Image'='Video',nested=false){
+ const idGen=seededGen();let initial=blankProject(idGen,'placement');root(initial).width=w;root(initial).height=h
+ const item=mediaItemTemplate(MID,kind,4_000_000,true);item.metadata.video={width:1280,height:720,fps_num:30,fps_den:1,codec:'h264',pix_fmt:'yuv420p',start_pts_us:0,nb_frames:120,color_matrix:null,color_range:null,color_primaries:null,color_transfer:null};initial.media_pool[MID]=item
+ let comp=root(initial)
+ if(nested){const g=withGroup(initial,idGen);initial=g.p;comp=initial.compositions[g.groupId];comp.width=1080;comp.height=1920}
+ return {actor:createActor({initial,idGen,clock:()=>'<TS>'}),track:comp.tracks[0].id,compId:comp.id,w:comp.width,h:comp.height}
+}
+function covers(f:ReturnType<typeof fixture>){const c=f.actor.snapshot().compositions[f.compId];const l=c.tracks.flatMap(t=>t.layers).find(l=>l.params.kind==='VideoClip'||l.params.kind==='ImageOverlay')!;const p=l.params;if(p.kind!=='VideoClip'&&p.kind!=='ImageOverlay')throw Error('visual expected');const t=p.transform;expect(t.position.mode).toBe('XY');if(t.position.mode!=='XY')throw Error('xy expected');const x=(t.position.x as {value:number}).value,y=(t.position.y as {value:number}).value,s=(t.scale_x as {value:number}).value;expect(s).toBe((t.scale_y as {value:number}).value);expect(x).toBeLessThanOrEqual(0);expect(y).toBeLessThanOrEqual(0);expect(x+1280*s).toBeGreaterThanOrEqual(f.w);expect(y+720*s).toBeGreaterThanOrEqual(f.h);expect(Math.abs(x+1280*s/2-f.w/2)).toBeLessThanOrEqual(.051);expect(Math.abs(y+720*s/2-f.h/2)).toBeLessThanOrEqual(.051);return l}
+describe('new visual media is centered and covers its own canvas',()=>{
+ for(const [w,h]of [[1920,1080],[1080,1920],[1001,1001]])it(`renderer placement ${w}x${h}`,()=>{const f=fixture(w,h);expect(f.actor.command('add_media_layer',{mediaId:MID,trackId:f.track,tStartUs:0}).ok).toBe(true);covers(f);expect(f.actor.snapshot().compositions[f.compId].tracks.flatMap(t=>t.layers).some(l=>l.params.kind==='Audio')).toBe(true)})
+ it('MCP placement uses the nested canvas, including images',()=>{const f=fixture(1920,1080,'Image',true);expect(f.actor.mcpCall('add_video_layer',JSON.stringify({media_id:MID,track_id:f.track,src_in_us:0,src_out_us:1_000_000,t_start_us:0,t_end_us:1_000_000})).ok).toBe(true);covers(f)})
+ it('rough-cut placement uses the same default',()=>{const f=fixture(1080,1920);const plan={version:1,brief:{goal:'test chosen range',audience:'test',target_duration_us:1_000_000,tone:['test']},source_summary:'Known dimensions',editorial_thesis:'Hermes chooses',sections:[{id:'s',purpose:'chosen',clips:[{media_id:MID,source_start_us:0,source_end_us:1_000_000,action:'keep',reason:'chosen'}]}],removed_ranges:[],estimated_duration_us:1_000_000,uncertainties:[]};const dry=f.actor.mcpCall('apply_rough_cut_plan',JSON.stringify({plan,dry_run:true}));expect(dry.ok,JSON.stringify(dry)).toBe(true);expect(f.actor.snapshot().compositions[f.compId].tracks.flatMap(t=>t.layers)).toHaveLength(0);const wet=f.actor.mcpCall('apply_rough_cut_plan',JSON.stringify({plan}));expect(wet.ok,JSON.stringify(wet)).toBe(true);covers(f)})
+ it('explicit later framing and existing layers survive other insertions',()=>{const f=fixture();f.actor.command('add_media_layer',{mediaId:MID,trackId:f.track,tStartUs:0});const l=covers(f);expect(f.actor.dispatch('update_layer_params',{layer:l.id,patch:{kind:'VideoClip',x:123,y:45,scale_x:.5,scale_y:.5}}).ok).toBe(true);const before=f.actor.snapshot().compositions[f.compId].tracks.flatMap(t=>t.layers).find(x=>x.id===l.id);f.actor.command('add_media_layer',{mediaId:MID,trackId:f.track,tStartUs:5_000_000});expect(f.actor.snapshot().compositions[f.compId].tracks.flatMap(t=>t.layers).find(x=>x.id===l.id)).toEqual(before)})
+ it('MCP paired insertion undoes/redoes atomically and retains fit on save/reopen',()=>{const f=fixture(1080,1920);expect(f.actor.mcpCall('add_video_layer',JSON.stringify({media_id:MID,track_id:f.track,src_in_us:0,src_out_us:1_000_000,t_start_us:0,t_end_us:1_000_000})).ok).toBe(true);const l=covers(f);f.actor.dispatch('undo',{});expect(f.actor.snapshot().compositions[f.compId].tracks.flatMap(t=>t.layers)).toHaveLength(0);f.actor.dispatch('redo',{});expect(covers(f).params).toEqual(l.params);const reopened=parseProject(serializeProject(f.actor.snapshot()));expect(reopened.compositions[f.compId]).toEqual(f.actor.snapshot().compositions[f.compId])})
+
+})

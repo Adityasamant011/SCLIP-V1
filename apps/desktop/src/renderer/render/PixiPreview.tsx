@@ -913,7 +913,8 @@ export const PixiPreview = forwardRef<PixiPreviewHandle, Props>(function PixiPre
       // Sclip Phase 2D: Expose read-only timeline frame inspection bridge
       (window as any).__weftcutPreview = {
         getPlayheadUs: () => engine.positionUs(),
-        captureFrameAt: async (tUs?: number, compId?: string) => {
+        isPlaying: () => engine.isPlaying(),
+        captureFrameAt: async (tUs?: number, compId?: string, passive = false) => {
           if (compId && compId !== previewRenderTargetId()) {
             throw new Error('The requested composition is not the active preview target');
           }
@@ -921,6 +922,7 @@ export const PixiPreview = forwardRef<PixiPreviewHandle, Props>(function PixiPre
           const targetUs = typeof tUs === 'number' && Number.isFinite(tUs) && tUs >= 0 ? Math.trunc(tUs) : restoreUs;
           const isAtPlayhead = targetUs === restoreUs;
           const wasPlaying = engine.isPlaying();
+          if (passive && (wasPlaying || !isAtPlayhead || !(window as any).__sclipFeedbackCanObserve?.())) throw new Error("Background capture deferred to foreground work");
           if (wasPlaying) engine.pause();
           try {
             const { width: W, height: H } = logicalSize();
@@ -937,7 +939,7 @@ export const PixiPreview = forwardRef<PixiPreviewHandle, Props>(function PixiPre
               // decoder agree on one target during asynchronous frame arrival.
               // Restore the user's prior playhead in finally below.
               if (!isAtPlayhead) engine.seek(targetUs);
-              compositor.compositeFrame(targetUs);
+              if (!passive) compositor.compositeFrame(targetUs);
               // A seek can paint before the decoder binds its target frame.
               // Wait on the compositor's actual bound-frame identity.
               const deadline = performance.now() + 8_000;
@@ -952,15 +954,17 @@ export const PixiPreview = forwardRef<PixiPreviewHandle, Props>(function PixiPre
                     && probe.boundFramePtsUs <= clipTargetUs
                     && clipTargetUs < probe.boundFramePtsUs + probe.boundFrameDurationUs;
                 });
+                if (passive && (!isAtPlayhead || engine.positionUs() !== targetUs || engine.isPlaying())) throw new Error("Playhead changed during background capture");
                 if (ready) break;
                 if (performance.now() >= deadline) {
                   // Never present a stale/failed decode as pixels at the requested time.
                   throw new Error('Inspection frame unavailable: decoder did not bind the requested timeline frame');
                 }
                 await new Promise<void>((resolve) => setTimeout(resolve, 30));
-                compositor.compositeFrame(targetUs);
+                if (!passive) compositor.compositeFrame(targetUs);
               }
             }
+            if (passive && (engine.positionUs() !== targetUs || engine.isPlaying())) throw new Error("Playhead changed during background capture");
             app.renderer.render(app.stage);
             const out = app.renderer.extract.pixels({
               target: app.stage,

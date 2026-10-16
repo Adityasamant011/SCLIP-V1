@@ -24,6 +24,16 @@ describe('Sclip composed inspection adapters', () => {
     await expect(inspectTimelineFrame(project, { t_us: 0, requireLiveCompositor: true })).rejects.toThrow('live Sclip preview')
   })
 
+  it('requests a passive current-frame capture for background sensing and refuses failed captures', async () => {
+    const actor = freshActor()
+    actor.mcpCall('add_color_layer', JSON.stringify({ track_id: aRollId(actor), color: { r: 0, g: 0, b: 0, a: 255 }, t_start_us: 0, t_end_us: 1000000 }))
+    const executeJavaScript = vi.fn(async (code: string) => {
+      expect(code).toContain(', true) : null')
+      throw new Error('Background capture deferred to foreground work')
+    })
+    await expect(inspectTimelineFrame(actor.snapshot(), { t_us: 0, passive: true, requireLiveCompositor: true, getActiveWindow: () => ({ isDestroyed: () => false, webContents: { executeJavaScript } }) })).rejects.toThrow('deferred to foreground')
+  })
+
   it('inspects current live playhead frame when t_us is omitted', async () => {
     const actor = freshActor()
     actor.mcpCall('add_color_layer', JSON.stringify({ track_id: aRollId(actor), color: { r: 20, g: 30, b: 40, a: 255 }, t_start_us: 0, t_end_us: 60_000_000 }))

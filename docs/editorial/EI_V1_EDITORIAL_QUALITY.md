@@ -1,0 +1,29 @@
+# Editorial Intelligence V1: frozen-baseline diagnosis
+
+Reference: `36987a59e5a0e3bc226fde07bf4ae241594b8f8e`, tag `sclip-core-v1-baseline`. Experiment branch only. No production, native engine or creative skill changes. Durable evidence: `acceptance-artifacts/editorial-intelligence-v1/`.
+
+## Observed cohort
+
+| Case | Native trusted completion | Requests / seconds | Actual selections | Output and findings |
+|---|---|---|---|---|
+| A: landscape tutorial | PASS technically | 24 / 230.106 | source 30–75s, paired original audio | `A-baseline/finished.mp4`; decoded. 1280×720 image occupies upper-left of 1920×1080, 55.56% unused canvas. Context-dependent opening; transcript ends before the promised alternative is explained. Native review nonetheless claimed complete ending and suitable framing. |
+| B: portrait tutorial | FAIL to complete | 39 / 215.82 | source 0–35s, original audio, 15 caption layers | `B-baseline/independent-qa-partial.mp4`; decoded partial state. Subject visible in upper region, large unused lower canvas; caption fragments rather than concise sentence grouping. Spoken passage introduces what will be explained rather than delivering that explanation. No legitimate final rendered review. |
+| C: interview highlight | FAIL to complete | 31 / 202.974 | source 0–60.016s video / 0–60s audio | `C-independent-qa/independent-qa-partial.mp4`; decoded unchanged partial state. 640×360 upper-left in 1920×1080 (88.89% canvas outside video bounds). Intro/context then guest explanation; final transcript ends “That's the way that organic matter is.” No current Hermes rendered review. |
+
+Three actual independent native trials; two source identities, not three distinct footage sets. Technical trusted completion 1/3. No demonstrated creator-usable finished success: A has material faults, B/C never delivered trusted completion. This small diagnostic sample does not establish a production reliability percentage. Actual provider receipts for these 94 primary requests report cost zero. Full usage receipts and live pricing checks are retained. No paid or auxiliary model calls.
+
+B/C independent exports are QA observations, never credited as native completion. C's original driver failed an overly strict comparison of a derived quick-proxy pointer; authored timeline and stable source identity were unchanged. A separate read-only QA run verified reopen/export/decode. Failed original run remains retained. Source-aware word-cut accuracy and subjective audio quality require listening/human review; transcripts alone do not certify them.
+
+A's brief mentions an audience learning to edit, while the uploaded tutorial discusses entrepreneurship/affiliate training. Retain this test-design limitation; do not blame source/brief mismatch on tool execution or silently rewrite the frozen brief. Structural framing and incomplete-thought findings remain observable. Public interviews are published conversational recordings, not raw multicamera rushes. Held-out Wozniak footage remains reserved and uninspected.
+
+## Three dominant causes, ranked
+
+1. **Selection before sufficient semantic source evidence.** A chose its passage from source observations that explicitly lacked a generated transcript. B/C retained the first exact-duration chunk. Source ranges, native calls and final speech show little evidence of comparing complete candidate ideas or surrounding sentence context. This is missing requested evidence plus creative reasoning, not proof that Whisper is disconnected.
+2. **Review does not ground claims in contradictory evidence.** A received full rendered transcript and deterministic unused-canvas facts, yet claimed complete thought and appropriate framing. Local Qwen described the subject as centered despite the actual composition. The audio payload was not truncated; do not attribute the mistake to missing transport data. Perception error and ignored evidence are distinct.
+3. **Schema/execution and completion progression consume effort without delivery.** B/C made malformed calls or stopped without required current review. The separate style-transfer trial spent 66 requests on a malformed Motif and left an unrenderable layer. These are tool-contract use, recovery and self-review failures. Successful discovery and some applied edits do not certify completion.
+
+## First proposed experiment; no implementation yet
+
+A small evidence/claim ledger in the existing Hermes workflow: before selecting, retrieve semantic candidate speech with surrounding source context; before final review, present compact actual opening/ending transcript, source/timeline joins, video bounds and beginning/middle/ending observations alongside the original brief. Hermes chooses passages, framing, pacing, revisions and whether to abstain. Host records evidence/authority and checks mechanical correctness only. No automatic crop, sentence selection, genre template or subjective approval.
+
+Run unchanged A/B/C twice per condition with the same baseline and model limits. Preserve every failure. Then run the reserved D baseline and experimental condition, plus additional unseen authorized footage before broader claims. Proposed success criteria: genuine native trusted delivery; no opening/ending incomplete idea according to independent review; accurately framed subject consistent with brief; meaning preserved; duration within existing approximate tolerance; correctly report uncertain evidence; no safety/ownership regression. Use blinded consenting editor ratings (rubric in protocol), separately from state/media checks. Require measurable improvement in usable-output fraction and evidence-grounded review, not merely fewer tool errors. No held-out prompt tuning. The experiment requires user review before major changes; advanced editorial changes remain unimplemented.

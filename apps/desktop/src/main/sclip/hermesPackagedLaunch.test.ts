@@ -10,6 +10,28 @@ it('packaged gateway and terminal refuse developer overrides and require the bun
   const gateway=new HermesRuntime({...common,getGatewayToken:()=> 'synthetic'}),terminal=new HermesTerminalRuntime({...common,assertSession:async()=>{},onOutput:()=>{},onExit:()=>{}})
   for(const runtime of [gateway,terminal])expect(()=> (runtime as any).resolveLaunch()).toThrow('Bundled Hermes runtime is missing')
   const bundled=path.join(common.resourcesPath,'hermes','hermes');fs.mkdirSync(path.dirname(bundled),{recursive:true});fs.writeFileSync(bundled,'unused bundled fixture')
-  for(const runtime of [gateway,terminal])expect((runtime as any).resolveLaunch().command).toBe(bundled)
+  const gatewayLaunch = (gateway as any).resolveLaunch()
+  expect(gatewayLaunch.command).toBe(bundled)
+  expect(gatewayLaunch.cwd).toBe(path.join(common.userDataPath, 'hermes-workspace'))
+  expect(fs.statSync(gatewayLaunch.cwd).mode & 0o777).toBe(0o700)
+
+  const terminalA = (terminal as any).resolveLaunch('project-a', 'session-a', 'creator-a')
+  const terminalB = (terminal as any).resolveLaunch('project-b', 'session-a', 'creator-a')
+  const terminalNewCreator = (terminal as any).resolveLaunch('project-a', 'session-a', 'creator-b')
+  const terminalNewSession = (terminal as any).resolveLaunch('project-a', 'session-b', 'creator-a')
+  expect(terminalA.command).toBe(bundled)
+  expect(terminalA.cwd).not.toContain(common.resourcesPath)
+  expect(new Set([terminalA.cwd, terminalB.cwd, terminalNewCreator.cwd, terminalNewSession.cwd]).size).toBe(4)
+  for (const launch of [terminalA, terminalB, terminalNewCreator, terminalNewSession]) {
+   expect(fs.statSync(launch.cwd).isDirectory()).toBe(true)
+  }
+  const hermesSource = path.join(dir, 'hermes-source')
+  const python = path.join(hermesSource, '.venv', 'bin', 'python')
+  fs.mkdirSync(path.dirname(python), { recursive: true }); fs.writeFileSync(python, 'python fixture')
+  const devCommon = { ...common, isPackaged: false, sourceOverride: hermesSource, executableOverride: undefined }
+  const devGateway = (new HermesRuntime({ ...devCommon, getGatewayToken: () => 'synthetic' }) as any).resolveLaunch()
+  const devTerminal = (new HermesTerminalRuntime({ ...devCommon, assertSession: async () => {}, onOutput: () => {}, onExit: () => {} }) as any).resolveLaunch('p', 's', 'c')
+  expect(devGateway.args).toContain('-B')
+  expect(devTerminal.args).toContain('-B')
  }finally{fs.rmSync(dir,{recursive:true,force:true})}
 })

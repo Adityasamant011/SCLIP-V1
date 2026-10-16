@@ -22,6 +22,8 @@ export default function afterPack(context) {
     if (!existsSync(worker)) throw new Error(`afterPack(vision): local vision worker missing at ${worker}`)
     const ttsWorker = join(context.packager.getResourcesDir(context.appOutDir), 'vision', 'sidecar', 'kokoro_tts_worker.py')
     if (!existsSync(ttsWorker)) throw new Error(`afterPack(vision): local Kokoro TTS worker missing at ${ttsWorker}`)
+    const generationWorker = join(context.packager.getResourcesDir(context.appOutDir), 'vision', 'sidecar', 'generation_worker.py')
+    if (!existsSync(generationWorker)) throw new Error('afterPack(generation): optional generation worker missing')
   }
 
 }

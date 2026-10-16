@@ -29,3 +29,8 @@ explicit. `get_audio_understanding_status` does not load a model.
 References: [SenseVoice](https://github.com/QwenAudio/SenseVoice),
 [Sherpa SenseVoice](https://k2-fsa.github.io/sherpa/onnx/sense-voice/pretrained.html),
 [model license](https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE).
+
+2026-10-16: [ADR 0079](0079-background-feedback-is-bounded-local-observation.md)
+extends scheduling to bounded creator-requested background observations. The
+original explicit tool remains; interpretation, process bounds and local-only
+constraints are unchanged.

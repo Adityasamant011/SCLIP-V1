@@ -1735,7 +1735,7 @@ export class CompositionNode {
         withTransformOverride(layer.id, resolveTextView(layer.params, tInLayerUs)),
       ),
     );
-    text.sprite.text.zIndex = z;
+    text.sprite.displayObject.zIndex = z;
   }
 
   // ============================================================

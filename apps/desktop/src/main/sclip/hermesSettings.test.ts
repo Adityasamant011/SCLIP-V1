@@ -41,6 +41,11 @@ describe('secure Hermes settings', () => {
       writeHermesProfile(dir, 1234, base)
       const saved = readFileSync(path.join(dir, 'config.yaml'), 'utf8')
       expect(saved).toContain('Use concise replies.')
+      expect(saved).toContain('You are Sclip Agent, the autonomous video-editing assistant inside the Sclip desktop editor')
+      expect(saved).toContain('Sclip is the product; Hermes is the agent framework')
+      expect(saved).toContain('no fixed creative pipeline is required')
+      expect(saved).toContain('Do not attribute the Sclip product itself to Nous Research')
+      expect(saved).toContain('Ordinary conversation does not require an edit')
       expect(saved).toContain('current deferred tool_search/tool_describe catalog')
       expect(saved).toContain('installed skills are not proof of availability')
       expect(saved).toContain('Deferred MCP calls:')
@@ -51,6 +56,7 @@ describe('secure Hermes settings', () => {
       writeHermesProfile(dir, 5678)
       expect(readFileSync(path.join(dir, 'config.yaml'), 'utf8').split('Capability reporting:')).toHaveLength(2)
       expect(readFileSync(path.join(dir, 'config.yaml'), 'utf8').split('Deferred MCP calls:')).toHaveLength(2)
+      expect(readFileSync(path.join(dir, 'config.yaml'), 'utf8').split('Sclip identity and purpose:')).toHaveLength(2)
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
   it('uses the existing Hermes max_turns setting, migrating only the old Sclip default', () => {

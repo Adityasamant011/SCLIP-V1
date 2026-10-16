@@ -2252,6 +2252,10 @@ const enUS = {
     transition_delete: "Delete transition",
   },
   captions: {
+    display_label: "Word display",
+    display_phrase: "Whole phrase",
+    display_word_reveal: "Reveal with speech",
+    display_hint: "Uses available word timing, which may be estimated. Missing or stale timing keeps the whole phrase visible.",
     title: "Captions",
     empty: "Import a subtitle file or transcribe a clip to create captions.",
     style_heading: "Style",

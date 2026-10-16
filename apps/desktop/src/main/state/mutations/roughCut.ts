@@ -5,7 +5,7 @@ import type { IdGen } from '../ids'
 import { CommandFailure } from '../errors'
 import { scopeComposition, applyDurationAutofit, dropLayerFromLinks } from './helpers'
 import { applyAddLayer } from './add'
-import { videoClipParams, audioParams } from './media'
+import { videoClipParams, audioParams, mediaPlacementTransform } from './media'
 import { applyLinksCreate } from './links'
 import { gridForLayerKind, snapOnGrid, snapDownOnGrid } from '../snap'
 import { validateRoughCutPlan, type RoughCutPlanInput, type ValidationResult } from '../../sclip/roughCutPlan'
@@ -238,7 +238,7 @@ export function compileRoughCutTimeline(
 
       if (!isDryRun) {
         if (media.kind === 'Video') {
-          const vParams = videoClipParams(clip.media_id, actualSrcIn, actualSrcOut)
+          const vParams = videoClipParams(clip.media_id, actualSrcIn, actualSrcOut, mediaPlacementTransform(draft, clip.media_id, composition))
           videoLayerId = applyAddLayer(draft, nextId, targetTrack.id, vParams, actualTStartUs, actualTEndUs)
 
           if (hasAudio) {

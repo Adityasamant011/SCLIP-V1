@@ -8,19 +8,41 @@ import {completionReview,completionDisposition,type CompletionReview} from './co
 import {sourceFingerprint} from './finalOutput'
 import {reviewState} from './evidenceCoordinates'
 vi.mock('electron',()=>({app:{isPackaged:true}}))
-function fixture() {
+function fixture(empty=false) {
  const ids=uuidV7Gen(),p=blankProject(ids,'lifecycle'),actor=createActor({initial:p,idGen:ids}),sessions=new Map<string,CompletionReview>()
- expect(actor.dispatch('add_layer',{track:p.compositions[p.root_id].tracks[0].id,kind:'color',color:{r:20,g:80,b:120,a:255},t_start_us:0,t_end_us:30e6}).ok).toBe(true)
+ if(!empty)expect(actor.dispatch('add_layer',{track:p.compositions[p.root_id].tracks[0].id,kind:'color',color:{r:20,g:80,b:120,a:255},t_start_us:0,t_end_us:30e6}).ok).toBe(true)
  let opening='opening-1',pending=false,proofValid=true
  const verify=vi.fn(async()=>({valid:proofValid,decoded:proofValid,has_video:proofValid,duration_us:30e6,reason:proofValid?undefined:'real export refused'})),end=vi.fn()
  const controller=new CompletionCheckpoint(sessions,{current:()=>({actor,opening,pending}),review:()=>({availability:'available',project_id:p.project_id,state_version:createHash('sha256').update(reviewState(actor.snapshot())).digest('hex'),issues:[],total_issues:0,critical_count:0,warning_count:0,suggestion_count:0,status:'clean',commit_id:'current',updated_at:0}),verify,endWork:end})
  const binding=controller.bind(p.project_id,'native-session')
- function start(turn='t1',brief='Make a 30-second video.') {controller.start(binding,{kind:'start',turn_id:turn,user_message:brief})}
+ function start(turn='t1',brief='Make a 30-second video.',editing=true) {controller.start(binding,{kind:'start',turn_id:turn,user_message:brief});if(editing)completionReview(actor.snapshot(),sessions).deliveryRequested=true}
  function reviewed() {const e=completionReview(actor.snapshot(),sessions),state=reviewState(actor.snapshot());if(e.guard.status.phase==='idle')e.guard.begin();const r=e.guard.recordEvidence('inspect_timeline_frame','timeline',[0,0],state,['visual']);e.guard.concludeNoRepair('Keep the intentionally authored image',r.id,state);e.started=true;e.reviewedState=state;e.reviewedEpoch=e.renderedEpoch=e.epoch;e.renderedSources=sourceFingerprint(actor.snapshot());e.decision={action:'conclude_no_repair',reason:'Intentional authored composition'}}
  const normal=(turn='t1'):HermesTurnEvent=>({kind:'end',turn_id:turn,completed:true,failed:false,interrupted:false,turn_exit_reason:'text_response(stop)',background_jobs_pending:false})
  return {actor,sessions,controller,binding,start,reviewed,normal,verify,end,setPending:(b:boolean)=>pending=b,setProof:(b:boolean)=>proofValid=b,reopen:()=>opening='opening-2',close:()=>controller.close()}
 }
 describe('Structured native termination and authoritative completion checkpoint',()=>{
+ it.each(['hi','What can you help me with?','Explain how to make a 30-second video.','Make a 30-second video.'])('a no-work response to %s never manufactures or certifies an editing task',async brief=>{
+  const f=fixture(true);try{
+   f.start('t1',brief,false);const r=await f.controller.finish(f.binding,f.normal(),true)
+   expect(r.status).toBe('response_only');expect(r.readiness).toBe('unverified');expect(r.followup).toBeUndefined()
+   expect(JSON.stringify(r)).not.toContain('EMPTY_OUTPUT');expect(f.verify).not.toHaveBeenCalled();expect(f.end).toHaveBeenCalledOnce()
+  }finally{f.close()}
+ })
+ it('read-only discussion of existing video does not enroll a new review',async()=>{
+  const f=fixture();try{f.start('t1','What does this video contain?',false);expect((await f.controller.finish(f.binding,f.normal(),true)).status).toBe('response_only');expect(f.verify).not.toHaveBeenCalled()}finally{f.close()}
+ })
+ it('actual output changes require verification without a duration or declared session',async()=>{
+  const f=fixture(true);try{f.start('t1','Change it',false);const p=f.actor.snapshot();f.actor.dispatch('add_layer',{track:p.compositions[p.root_id].tracks[0].id,kind:'color',color:{r:0,g:0,b:0,a:255},t_start_us:0,t_end_us:1e6});const r=await f.controller.finish(f.binding,f.normal(),true);expect(r.status).toBe('review_required');expect(r.followup).toContain('CURRENT_HERMES_RENDERED_REVIEW_REQUIRED')}finally{f.close()}
+ })
+ it('an explicitly undertaken task with no output still fails honestly',async()=>{
+  const f=fixture(true);try{f.start('t1','Make a video.');const r=await f.controller.finish(f.binding,f.normal(),true);expect(r.status).toBe('review_required');expect(r.followup).toContain('EMPTY_OUTPUT')}finally{f.close()}
+ })
+ it('a new actual edit after conversation cannot inherit response-only completion',async()=>{
+  const f=fixture();try{f.start('t1','hi',false);await f.controller.finish(f.binding,f.normal(),true);f.start('t2');const r=await f.controller.finish(f.binding,f.normal('t2'),true);expect(r.status).toBe('review_required');expect(f.verify).toHaveBeenCalledOnce()}finally{f.close()}
+ })
+ it('cancellation and unknown background work never become response-only success',async()=>{
+  const f=fixture(true);try{f.start('t1','hi',false);expect((await f.controller.finish(f.binding,{...f.normal(),background_jobs_pending:true},true)).status).toBe('incomplete')}finally{f.close()}
+ })
  it('continuation retains the original brief and includes a directly callable missing-evidence action',async()=>{
   const f=fixture();try{
    f.start('t1','Make a 30-second video.');const r=await f.controller.finish(f.binding,f.normal(),true)

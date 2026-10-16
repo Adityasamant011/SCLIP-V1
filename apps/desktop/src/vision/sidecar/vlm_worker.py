@@ -73,6 +73,7 @@ class AnalyzeRequest(BaseModel):
     context:      Optional[str] = None
     resolution:   Optional[str] = "auto"  # "auto" | "low" (512) | "high" (768) | "original"
     max_tokens:   Optional[int] = None
+    local_only: bool = False
 
 
 class AnalyzeResponse(BaseModel):
@@ -163,7 +164,16 @@ def _scale_image(image_path: str, target_long: int) -> tuple[str, bool]:
 
 
 # ── Model lifecycle ───────────────────────────────────────────────────────────
-def _ensure_model_loaded(hf_id: str):
+def _local_model_path(hf_id: str) -> str:
+    if os.path.isdir(hf_id):
+        return hf_id
+    from huggingface_hub import snapshot_download
+    return snapshot_download(repo_id=hf_id, local_files_only=True,
+                             allow_patterns=["*.json", "*.jsonl", "*.safetensors", "*.py",
+                                             "*.model", "*.tiktoken", "*.txt", "*.jinja"])
+
+
+def _ensure_model_loaded(hf_id: str, local_only: bool = False):
     global _model, _processor, _model_id, _state, _error_detail
     if _model is not None and _model_id == hf_id:
         _state = ModelState.LOADED
@@ -178,7 +188,7 @@ def _ensure_model_loaded(hf_id: str):
     t0 = time.time()
     try:
         from mlx_vlm import load
-        _model, _processor = load(hf_id)
+        _model, _processor = load(_local_model_path(hf_id) if local_only else hf_id)
         _model_id = hf_id
         _state = ModelState.LOADED
         elapsed = time.time() - t0
@@ -225,7 +235,7 @@ def _run_inference(
         full_question = f"Context: {context}\n\n{question}"
 
     try:
-        config = load_config(_model_id or MODEL_HF_ID)
+        config = load_config(getattr(_model, "model_path", None) or _model_id or MODEL_HF_ID)
         prompt = apply_chat_template(_processor, config, full_question, num_images=len(image_paths))
     except Exception as e:
         log.warning(f"apply_chat_template failed: {e}, falling back to raw question")
@@ -411,7 +421,7 @@ def analyze(req: AnalyzeRequest):
         with _model_lock:
             _last_used = time.time()
             try:
-                _ensure_model_loaded(MODEL_HF_ID)
+                _ensure_model_loaded(MODEL_HF_ID, local_only=req.local_only)
             except Exception as e:
                 log.error(f"Model load failed: {e}")
                 raise HTTPException(status_code=503, detail=f"Model load failed: {e}")

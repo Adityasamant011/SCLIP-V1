@@ -480,3 +480,20 @@ describe("blockAnchorInBox", () => {
     expect(bogus).toEqual(known);
   });
 });
+
+it('reveals words with a mask without replacing the phrase or changing glyph layout/style',()=>{
+  const s=new TextSprite({layerId:'caption'})
+  const view={...plain,content:'One two three',box_w:300}
+  s.update(view)
+  const before=s.text.getLocalBounds(),anchor={x:s.text.anchor.x,y:s.text.anchor.y},size=s.text.style.fontSize
+  s.update({...view,caption_reveal_end:3})
+  expect(s.text.text).toBe(view.content)
+  expect(s.text.style.fontSize).toBe(size)
+  expect(s.text.anchor.x).toBe(anchor.x);expect(s.text.anchor.y).toBe(anchor.y)
+  expect(s.text.getLocalBounds().width).toBe(before.width)
+  expect(s.text.mask).toBeTruthy()
+  s.update({...view,caption_reveal_end:0});expect(s.text.visible).toBe(false)
+  s.update({...view,caption_reveal_end:7});expect(s.text.visible).toBe(true)
+  s.update(view);expect(s.text.mask == null).toBe(true);expect(s.text.visible).toBe(true)
+  s.dispose()
+})

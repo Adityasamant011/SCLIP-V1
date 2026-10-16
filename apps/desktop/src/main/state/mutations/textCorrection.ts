@@ -30,7 +30,7 @@ export function applyTranscripts(p: Project, ids: IdGen, transcripts: Transcript
       if (end <= start) continue
       const timing: CaptionTiming = { version: 1, text: s.text, duration_us: end - start, provenance: t.word_timing,
         words: s.words.map(w => ({ text: w.text, start_us: Math.max(0, w.t_start_us - start), end_us: Math.max(0, w.t_end_us - start) })),
-        ...(source ? { source: { id: source.id, signature: sourceSignature(source) } } : {}) }
+        ...(source ? { source: { id: source.id, signature: sourceSignature(source), caption_start_us: start, caption_end_us: end } } : {}) }
       cues.push({ text: s.text, start_us: start, end_us: end, style: { bold: true }, metadata: readCaptionTiming(timing) ? { [CAPTION_TIMING_KEY]: timing } : undefined })
     }
   }
@@ -175,7 +175,7 @@ function resegment(p: Project, c: Composition, track: Track, group: Layer[], ids
       words: ws.map(w => ({ text: w.text.trim(), start_us: Math.max(0, w.start_us - start), end_us: Math.max(0, w.end_us - start) })) }
     // Groups only combine timing from the same source; keep its invalidation guard.
     const source = timingFor(p, first)?.source
-    if (source) meta.source = source
+    if (source) meta.source = { ...source, caption_start_us: start, caption_end_us: end }
     replacement.metadata[CAPTION_TIMING_KEY] = meta
     replacements.push(replacement)
   }

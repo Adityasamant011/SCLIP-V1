@@ -1999,6 +1999,10 @@ const zhCN: Resources = {
     completed: "文字校正完成，修改了 {{count}} 条字幕",
   },
   captions: {
+    display_label: "逐词显示",
+    display_phrase: "完整短句",
+    display_word_reveal: "随语音逐词显示",
+    display_hint: "使用现有词级时间，部分时间可能为估算值。时间缺失或过期时显示完整短句。",
     title: "字幕",
     empty: "导入字幕文件，或转写片段语音，即可创建字幕。",
     style_heading: "样式",

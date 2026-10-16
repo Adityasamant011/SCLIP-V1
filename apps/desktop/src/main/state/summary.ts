@@ -4,6 +4,8 @@ import type { Animated, Composition, Effect, Link, Layer, LayerParams, Marker, M
 import type { HistoryStatus } from './history'
 import { hasSourceWindow } from './mutations/helpers'
 import type { DecodeRoute } from '../../shared/decode-route'
+import { captionDisplay, CAPTION_TIMING_KEY, readCaptionTiming, type CaptionTiming, type CaptionDisplay } from '../../shared/captionTiming'
+import { sourceSignature } from './mutations/textCorrection'
 
 // ── per-kind view structs — the layer-params projection the renderer reads
 //    (renderer/ipc/index.ts declares the same shapes; keep the two in step) ──
@@ -20,6 +22,8 @@ export interface ImageOverlayView {
   fade_in_us: number; fade_out_us: number
 }
 export interface TextView {
+  caption_display?: CaptionDisplay
+  caption_reveal?: CaptionTiming
   kind: 'Text'; content: string; font_family: string; font_size_px: number; weight: number; italic: boolean
   color: Animated<Rgba>; align: TextAlign; position?: PositionAnimation; path_progress?: Animated<number>; x: Animated<number>; y: Animated<number>; scale_x: Animated<number>; scale_y: Animated<number>; scale_linked: boolean; rotation_deg: Animated<number>; anchor_x: Animated<number>; anchor_y: Animated<number>
   opacity: Animated<number>; shadow: Shadow | null; outline: Outline | null
@@ -187,6 +191,21 @@ export function mediaLabel(item: MediaItem): string {
   const slash = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'))
   const base = slash >= 0 ? p.slice(slash + 1) : p
   return base.length > 0 ? base : p
+}
+
+function captionParamsView(layer: Layer, project: Project): LayerParamsView {
+  const view = layerParamsView(layer.params, project.media_pool, project.compositions)
+  const display = captionDisplay(layer.metadata)
+  if (view.kind !== 'Text' || (display !== 'phrase' && display !== 'word_reveal')) return view
+  const result: TextView = { ...view, caption_display: display }
+  if (display !== 'word_reveal') return result
+  const timing = readCaptionTiming(layer.metadata[CAPTION_TIMING_KEY])
+  if (!timing || timing.text !== view.content || timing.duration_us !== layer.t_end_us - layer.t_start_us) return result
+  if (timing.source) {
+    const source = Object.values(project.compositions).flatMap(c => c.tracks.flatMap(t => t.layers)).find(l => l.id === timing.source!.id)
+    if (!source || sourceSignature(source) !== timing.source.signature) return result
+  }
+  return { ...result, caption_reveal: timing }
 }
 
 function mediaLabelFor(id: Uuid, pool: Record<Uuid, MediaItem>): string {
@@ -414,7 +433,7 @@ export function buildProjectSummary(p: Project, history: HistoryStatus, fileExis
       layers: t.layers.map((l: Layer): LayerSummary => ({
         id: l.id, label: l.label, t_start_us: l.t_start_us, t_end_us: l.t_end_us, kind: layerKind(l.params),
         color_hint: layerColorHint(l), enabled: l.enabled, locked: l.locked,
-        params: layerParamsView(l.params, p.media_pool, p.compositions), effects: l.effects,
+        params: captionParamsView(l, p), effects: l.effects,
       })),
     })),
     markers: c.markers.map((m: Marker): MarkerSummary => ({

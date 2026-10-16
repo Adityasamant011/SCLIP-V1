@@ -14,8 +14,9 @@ import type { IdGen } from './ids'
 import type { Project } from './model'
 import { blankProject, rootComposition } from './model'
 import { loadProjectFromJson, serializeProjectToJson, PROJECT_FILE, preUpgradeBackupFile } from './persistence'
+import { randomUUID } from 'node:crypto'
 import { relinkMissingMedia, type RelinkDeps, type RelinkReport } from './relink'
-import { serializeProject, type GridRepair } from './serialize'
+import { serializeProject, type GridRepair, type KeyframeIdRepair } from './serialize'
 
 /** The Rust-native workspace bookkeeping, exposed over napi (Backend methods
  *  commit_workspace / push_recent / set_last_new_project_parent). */
@@ -42,6 +43,9 @@ export interface OrchestratorFs {
   mkdirp(dir: string): void
   /** Best-effort delete (stale quick proxies); must not throw on a missing file. */
   rm(path: string): void
+  readdir?(dir: string): string[]
+  /** Byte-preserving copy; required for damaged-file recovery. */
+  copyFile?(from: string, to: string): void
 }
 
 export interface OrchestratorDeps {
@@ -66,10 +70,14 @@ export interface OrchestratorDeps {
    *  row so a silently-migrated project is visible. Same timing constraint as
    *  `onRelink`: fired AFTER commitWorkspace, never during the parse. */
   onGridRepair?: (repairs: readonly GridRepair[]) => void
+  onKeyframeIdRepair?: (repairs: readonly KeyframeIdRepair[]) => void
   /** Surfaced only when the migration chain moved the project to a newer schema
    *  version — the one on-open event that changes what the next save will write.
    *  Same timing constraint as the two reports above. */
   onSchemaUpgrade?: (report: SchemaUpgradeReport) => void
+  /** Surfaced when project.json was unreadable and a validated rolling snapshot
+   *  was opened. The exact damaged bytes must first be archived successfully. */
+  onBackupRecovery?: (report: ProjectBackupRecoveryReport) => void
 }
 
 export interface SchemaUpgradeReport {
@@ -83,9 +91,14 @@ export interface SchemaUpgradeReport {
   backupFile: string | null
 }
 
+export interface ProjectBackupRecoveryReport {
+  backupFile: string
+  preservedFile: string
+}
+
 /** project_open. Pre-checks → load (schema gate + migration chain) →
  *  delete stale quick proxies → preserve pre-upgrade bytes → relink heal →
- *  commit_workspace (pre-broadcast) → onGridRepair + onSchemaUpgrade reports →
+ *  commit_workspace (pre-broadcast) → load repair/recovery reports →
  *  replace_state → onRelink report → push_recent → (deferred) derivative
  *  re-fan-out. All three reports sit after commit_workspace because it rotates
  *  the per-workspace LogBus. */
@@ -106,6 +119,8 @@ export async function openProject(deps: OrchestratorDeps, dir: string): Promise<
   // `clearSessionQuickProxies` both spread into fresh objects, so a WeakMap keyed on
   // the parsed project is already dead by the time `replaceState` runs.
   let gridRepairs: readonly GridRepair[] = []
+  let keyframeIdRepairs: readonly KeyframeIdRepair[] = []
+  let backupRecovery: ProjectBackupRecoveryReport | null = null
   // The schema gate inside already refuses in the workspace vocabulary; what is
   // left to translate is everything below it — a JSON syntax error, a structural
   // cast failure — which would otherwise reach the launch surface as raw English
@@ -113,10 +128,80 @@ export async function openProject(deps: OrchestratorDeps, dir: string): Promise<
   // left to say, so it rides along as `detail` rather than being discarded.
   let loaded: ReturnType<typeof loadProjectFromJson>
   try {
-    loaded = loadProjectFromJson(text, { dir, join, onGridRepair: (r) => { gridRepairs = r } })
+    loaded = loadProjectFromJson(text, { dir, join, onGridRepair: (r) => { gridRepairs = r }, onKeyframeIdRepair: (r) => { keyframeIdRepairs = r } })
   } catch (e) {
-    if (isWorkspaceFailure(e)) throw e
-    throw new WorkspaceFailure({ error: 'ProjectFileUnreadable', detail: String(e) })
+    // An absent/invalid schema marker means this document cannot be interpreted
+    // by this loader, so it follows the damaged-file preservation path. A
+    // future schema version is different: an older app must never replace it
+    // with a potentially lossy backup.
+    if (isWorkspaceFailure(e) && e.err.error !== 'ProjectSchemaUnreadable') throw e
+    // Never silently substitute an older project: archive the exact unreadable
+    // bytes first, then try timestamped rolling snapshots newest-first. The
+    // successful recovery is reported after workspace log rotation below.
+    const backupsDir = join(dir, "Backups")
+    const recoveryId = randomUUID()
+    const preservedFile = `${PROJECT_FILE}.corrupt-${recoveryId}.json`
+    const preservedPath = join(dir, preservedFile)
+    try {
+      if (!fs.copyFile) throw new Error('Byte-preserving recovery copy is unavailable')
+      fs.copyFile(file, preservedPath)
+    } catch (preserveError) {
+      throw new WorkspaceFailure({
+        error: 'ProjectFileUnreadable',
+        detail: `Could not preserve the damaged project before recovery (${String(preserveError)}); original parse error: ${String(e)}`,
+      })
+    }
+
+    let recovered: ReturnType<typeof loadProjectFromJson> | null = null
+    let recoveredFrom: string | null = null
+    let tooNewBackup: WorkspaceFailure | null = null
+    let tooNewBackupName: string | null = null
+    let unreadableBackup: {name: string; error: unknown} | null = null
+    if (fs.exists(backupsDir) && fs.readdir) {
+      try {
+        // Autosave names are ISO timestamps with punctuation removed. Restrict
+        // recovery to that rolling-backup namespace; ignore unrelated JSON files.
+        const backups = fs.readdir(backupsDir)
+          .filter((name) => /^\d{8}T\d{6}(?:\d{3}Z)?\.json$/.test(name))
+          .sort((a, b) => a < b ? 1 : a > b ? -1 : 0)
+        for (const name of backups) {
+          try {
+            let backupText: string
+            try { backupText = fs.readFile(join(backupsDir, name)) } catch (error) { unreadableBackup = {name, error}; break }
+            recovered = loadProjectFromJson(backupText, {
+              dir, join, onGridRepair: (r) => { gridRepairs = r },
+              onKeyframeIdRepair: (r) => { keyframeIdRepairs = r },
+            })
+            recoveredFrom = name
+            break
+          } catch (backupError) {
+            if (isWorkspaceFailure(backupError) && backupError.err.error === 'ProjectSchemaTooNew') {
+              tooNewBackup = backupError
+              tooNewBackupName = name
+              break
+            }
+            /* newest snapshot can be corrupt; try the next older one */
+          }
+        }
+      } catch { /* preserve the original and refuse if backup enumeration fails */ }
+    }
+    if (unreadableBackup) {
+      throw new WorkspaceFailure({error: 'ProjectFileUnreadable', detail: `Could not read backup ${unreadableBackup.name}; refusing to substitute an older snapshot. Original bytes preserved at ${preservedFile}. ${String(unreadableBackup.error)}`})
+    }
+    if (tooNewBackup) {
+      throw new WorkspaceFailure({
+        error: 'ProjectFileUnreadable',
+        detail: `Recovery stopped because backup ${tooNewBackupName ?? '(unknown name)'} uses schema ${tooNewBackup.err.error === 'ProjectSchemaTooNew' ? tooNewBackup.err.found : '(unknown)'} which is newer than this app supports. Original bytes were preserved at ${preservedFile}; open this project with a newer SCLIP build before recovering from that backup.`,
+      })
+    }
+    if (!recovered || !recoveredFrom) {
+      throw new WorkspaceFailure({
+        error: 'ProjectFileUnreadable',
+        detail: `Original bytes preserved at ${preservedFile}; no valid rolling backup was available. Original parse error: ${String(e)}`,
+      })
+    }
+    loaded = recovered
+    backupRecovery = { backupFile: recoveredFrom, preservedFile }
   }
   let project = loaded.project
   const { quickProxiesToDelete } = loaded
@@ -162,6 +247,7 @@ export async function openProject(deps: OrchestratorDeps, dir: string): Promise<
   // project satisfy the backstop at all, so if the swap STILL fails validation this
   // row is the diagnostic that says what load already had to move.
   if (gridRepairs.length > 0) { try { deps.onGridRepair?.(gridRepairs) } catch { /* best-effort, never blocks the open */ } }
+  if (keyframeIdRepairs.length > 0) { try { deps.onKeyframeIdRepair?.(keyframeIdRepairs) } catch { /* best-effort */ } }
   // Before replace_state for the same reason as the grid-repair row: if the swap
   // fails validation, "this file was upgraded from v{n}" is the first thing worth
   // knowing about why.
@@ -178,6 +264,7 @@ export async function openProject(deps: OrchestratorDeps, dir: string): Promise<
       detail: isCommandFailure(e) ? JSON.stringify(e.err) : String(e),
     })
   }
+  if (backupRecovery) { try { deps.onBackupRecovery?.(backupRecovery) } catch { /* best-effort, never blocks the open */ } }
   // After commitWorkspace — see OrchestratorDeps.onRelink.
   if (relinkReport) { try { deps.onRelink?.(relinkReport) } catch { /* best-effort, never blocks the open */ } }
   await napi.pushRecent(dir, project.metadata.name)

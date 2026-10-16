@@ -5,7 +5,8 @@ import { captionFontFallback } from '../../../shared/fonts';
 // glyphs are actually drawn at when the box is too small for them.
 // See docs/render.md, ADR 0049.
 
-import { CanvasTextMetrics, Text, TextStyle, type Container, type TextStyleFontWeight } from "pixi.js";
+import { CanvasTextMetrics, Container, Graphics, Text, TextStyle, type TextStyleFontWeight } from "pixi.js";
+import { captionRevealRects } from '../captionMask';
 
 import { DEFAULT_CAPTION_FONT_FAMILY } from "../../../shared/fonts";
 import type { ResolvedTextView } from "../resolveView";
@@ -192,6 +193,9 @@ export class TextSprite implements StageableSprite {
   /// whether the layer is standing still this frame.
   private lastX = NaN;
   private lastY = NaN;
+  private readonly root = new Container();
+  private revealMask: Graphics | null = null;
+  private revealSignature = '';
 
   constructor(init: TextSpriteInit) {
     this.layerId = init.layerId;
@@ -204,10 +208,11 @@ export class TextSprite implements StageableSprite {
         fill: 0xffffff,
       }),
     });
+    this.root.addChild(this.text);
   }
 
   get displayObject(): Container {
-    return this.text;
+    return this.root;
   }
 
   /// A Text node has no EMPTY-placeholder phase — always ready.
@@ -358,10 +363,52 @@ export class TextSprite implements StageableSprite {
     }
     // Color alpha (Rgba.a) multiplies the layer's `opacity` field.
     this.text.alpha = view.opacity * (view.color.a / 255);
+    this.updateReveal(view, align);
+  }
+
+  private updateReveal(view: ResolvedTextView, align: keyof typeof ALIGN_FRAC): void {
+    const end = view.caption_reveal_end;
+    this.text.visible = end !== 0;
+    if (end === undefined || end === 0 || end >= view.content.length) {
+      this.text.mask = null;
+      if (this.revealMask) this.revealMask.visible = false;
+      return;
+    }
+    const signature = `${this.appliedSig}|${end}|${this.text.anchor.x},${this.text.anchor.y}`;
+    if (!this.revealMask) {
+      this.revealMask = new Graphics();
+      this.root.addChild(this.revealMask);
+    }
+    if (signature !== this.revealSignature) {
+      const metrics = CanvasTextMetrics.measureText(view.content, this.text.style);
+      const prefixStyle = this.text.style.clone();
+      prefixStyle.wordWrap = false;
+      prefixStyle.dropShadow = false;
+      prefixStyle.stroke = { color: 0, width: 0 };
+      const padding = (view.outline?.width ?? 0) + (view.shadow ? Math.hypot(view.shadow.offset_x, view.shadow.offset_y) + view.shadow.blur : 0) + 1;
+      const rects = captionRevealRects(view.content, end, metrics, this.text.getLocalBounds(), align, padding,
+        prefix => CanvasTextMetrics.measureText(prefix, prefixStyle).width);
+      if (rects === null) {
+        this.text.mask = null;
+        this.revealMask.visible = false;
+        return;
+      }
+      this.revealMask.clear();
+      for (const r of rects) this.revealMask.rect(r.x, r.y, r.width, r.height);
+      this.revealMask.fill(0xffffff);
+      this.revealSignature = signature;
+    }
+    this.revealMask.position.copyFrom(this.text.position);
+    this.revealMask.scale.copyFrom(this.text.scale);
+    this.revealMask.angle = this.text.angle;
+    this.revealMask.visible = true;
+    this.text.mask = this.revealMask;
   }
 
   dispose(): void {
     this.text.destroy({ children: true, texture: true });
+    this.revealMask?.destroy();
+    this.root.destroy();
   }
 }
 

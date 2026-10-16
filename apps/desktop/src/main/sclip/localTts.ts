@@ -3,6 +3,7 @@ import * as crypto from 'node:crypto'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import { pythonArgsWithoutBytecode, pythonEnvWithoutBytecode } from '../pythonRuntime.js'
 
 export interface LocalTtsArgs { text: string; voice?: string; speed?: number; engine?: 'kokoro' | 'auto' | 'openai' }
 export interface SpeechProvenance {
@@ -21,7 +22,12 @@ const first = (paths: string[]) => paths.find(p => fs.existsSync(p)) ?? null
 export function runTtsCommand(command: string, args: string[], timeoutMs = 120_000, signal?: AbortSignal): Promise<string> {
   signal?.throwIfAborted()
   return new Promise((resolve,reject) => {
-    const child = spawn(command,args,{stdio:['ignore','pipe','pipe']})
+    const isPy = command.includes('python')
+    const finalArgs = isPy ? pythonArgsWithoutBytecode(args) : args
+    const child = spawn(command, finalArgs, {
+      env: pythonEnvWithoutBytecode(process.env),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
     let stdout='',stderr='',done=false
     const finish = (error?: Error) => {if(done)return;done=true;clearTimeout(timer);signal?.removeEventListener('abort', abort);error?reject(error):resolve(stdout)}
     const abort = () => {child.kill('SIGKILL')}

@@ -166,6 +166,19 @@ export function CaptionPanel({ onMutated, selectedLayerId, onActivateCue }: Capt
           <Button variant="outline" disabled={!projectId} onClick={() => setCorrectionProject(projectId ?? null)}>{t('text_correction.title')}</Button>
         </div>
         <div className="captions-style-fields">
+          <label className="captions-style-control">
+            <span className="captions-style-label">{t('captions.display_label')}</span>
+            <select className="app-input" disabled={!cues.length}
+              aria-label={t('captions.display_label')} title={t('captions.display_hint')}
+              value={firstTextParams?.kind === 'Text' ? (firstTextParams.caption_display ?? 'phrase') : 'phrase'}
+              onChange={event => {
+                const caption_display = event.target.value as 'phrase' | 'word_reveal';
+                void tryMutate(() => restyleCaptions({caption_display}).then(onMutated), 'Change caption display');
+              }}>
+              <option value="phrase">{t('captions.display_phrase')}</option>
+              <option value="word_reveal">{t('captions.display_word_reveal')}</option>
+            </select>
+          </label>
           <div className="captions-style-control">
             <span className="captions-style-label">{t("captions.size_label")}</span>
             <AppNumberField

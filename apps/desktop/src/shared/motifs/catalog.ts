@@ -114,6 +114,11 @@ function validateProp(key: string, spec: PropSpec, value: unknown): void {
       }
       break;
     }
+    default: {
+      // Manifests are external JSON. A cast at the parse boundary cannot
+      // guarantee that a runtime prop type belongs to the TypeScript union.
+      throw new MotifPropError(`prop \`${key}\` has an unsupported type`);
+    }
   }
 }
 
@@ -359,11 +364,14 @@ export function parseManifestIsland(html: string): Manifest {
   const closeRel = html.indexOf("</script>", tagEnd);
   if (closeRel < 0) throw new MotifPropError("no motif-manifest island found in HTML");
   const json = html.slice(tagEnd, closeRel).trim();
+  let parsed: unknown;
   try {
-    return JSON.parse(json) as Manifest;
+    parsed = JSON.parse(json);
   } catch (e) {
     throw new MotifPropError(`manifest island is not valid JSON: ${String(e)}`);
   }
+  validateManifest(parsed as Manifest);
+  return parsed as Manifest;
 }
 
 /** Remove the existing manifest island (its owning <script>..</script>) if present. */
@@ -436,9 +444,23 @@ export function validateDefaultFor(key: string, spec: PropSpec): void {
 
 /** Semantic manifest validation beyond JSON shape. */
 export function validateManifest(m: Manifest): void {
-  if (m.name.trim() === "") throw new MotifPropError("name must not be empty");
+  if (!m || typeof m !== "object" || Array.isArray(m)) {
+    throw new MotifPropError("manifest must be an object");
+  }
+  if (typeof m.name !== "string" || m.name.trim() === "") {
+    throw new MotifPropError("name must not be empty");
+  }
+  if (typeof m.id !== "string" || m.id.trim() === "") {
+    throw new MotifPropError("id must not be empty");
+  }
+  if (!Number.isSafeInteger(m.version) || m.version < 1) {
+    throw new MotifPropError("version must be a positive safe integer");
+  }
+  if (!Array.isArray(m.size) || m.size.length !== 2) {
+    throw new MotifPropError("size must be [width, height]");
+  }
   const [w, h] = m.size;
-  if (w < 1 || h < 1 || w > MAX_DIMENSION || h > MAX_DIMENSION) {
+  if (!Number.isSafeInteger(w) || !Number.isSafeInteger(h) || w < 1 || h < 1 || w > MAX_DIMENSION || h > MAX_DIMENSION) {
     throw new MotifPropError(`size [${w},${h}] must be within [1,${MAX_DIMENSION}] on each axis`);
   }
   if (!(Number.isFinite(m.default_duration_s) && m.default_duration_s > 0)) {
@@ -452,13 +474,33 @@ export function validateManifest(m: Manifest): void {
       throw new MotifPropError(`${field} must be finite and > 0 when present`);
     }
   }
+  if (!m.props_schema || typeof m.props_schema !== "object" || Array.isArray(m.props_schema)) {
+    throw new MotifPropError("props_schema must be an object");
+  }
   const keys = Object.keys(m.props_schema);
   if (keys.length > MAX_PROPS) {
     throw new MotifPropError(`props_schema has ${keys.length} entries (max ${MAX_PROPS})`);
   }
   for (const key of keys) {
     const spec = m.props_schema[key]!;
+    if (!spec || typeof spec !== "object" || Array.isArray(spec)) {
+      throw new MotifPropError(`prop \`${key}\`: spec must be an object`);
+    }
+    if (spec.type === "enum" && (!Array.isArray(spec.options) || !spec.options.every(option => typeof option === "string"))) {
+      throw new MotifPropError(`prop \`${key}\`: options must be an array of strings`);
+    }
+    if (spec.type === "string") {
+      if (spec.max_length != null && (!Number.isSafeInteger(spec.max_length) || spec.max_length < 0)) {
+        throw new MotifPropError(`prop \`${key}\`: max_length must be a nonnegative safe integer`);
+      }
+      if (spec.multiline != null && typeof spec.multiline !== "boolean") {
+        throw new MotifPropError(`prop \`${key}\`: multiline must be boolean`);
+      }
+    }
     if (spec.type === "number") {
+      if ((spec.min != null && !Number.isFinite(spec.min)) || (spec.max != null && !Number.isFinite(spec.max))) {
+        throw new MotifPropError(`prop \`${key}\`: numeric bounds must be finite numbers`);
+      }
       if (spec.min != null && spec.max != null && spec.min > spec.max) {
         throw new MotifPropError(`prop \`${key}\`: min ${spec.min} > max ${spec.max}`);
       }

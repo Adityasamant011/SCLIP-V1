@@ -22,6 +22,8 @@ export interface RangeRenderOptions {
   signal?: AbortSignal
   /** Evidence/export modality only; does not change authored timeline state. */
   audioOnly?: boolean
+  /** Low-priority local feedback, preemptible by foreground exports. */
+  background?: boolean
 }
 
 export interface RangeRenderResult {
@@ -38,7 +40,7 @@ export interface RangeRenderResult {
 export async function exportThroughLiveCompositor(
   project: Project,
   window: { isDestroyed(): boolean; webContents: { executeJavaScript(code: string): Promise<unknown> } } | null,
-  request: { outputPath: string; startUs: number; endUs: number; resolutionHeight?: number; fps?: number; audioOnly?: boolean; signal?: AbortSignal },
+  request: { outputPath: string; startUs: number; endUs: number; resolutionHeight?: number; fps?: number; audioOnly?: boolean; background?: boolean; signal?: AbortSignal },
 ): Promise<void> {
   if (!window || window.isDestroyed()) throw new Error('Composed export requires an open Sclip desktop window')
   request.signal?.throwIfAborted()
@@ -52,6 +54,7 @@ export async function exportThroughLiveCompositor(
     resolutionHeight: request.resolutionHeight,
     fps: request.fps,
     audioOnly: request.audioOnly,
+    background: request.background,
   })}) : Promise.reject(new Error('Sclip export surface is not ready'))`
   let cancellation: Promise<unknown> | undefined
   const cancel = () => {
@@ -94,7 +97,7 @@ export async function renderComposedTimelineRange(
   const outputPath = path.join(outputDir, `${randomUUID()}.${options.audioOnly ? 'm4a' : 'mp4'}`)
   let hasAudio: boolean
   try {
-    await exportThroughLiveCompositor(project, options.getActiveWindow(), { outputPath, startUs: start_us, endUs: end_us, audioOnly: options.audioOnly, signal: options.signal })
+    await exportThroughLiveCompositor(project, options.getActiveWindow(), { outputPath, startUs: start_us, endUs: end_us, audioOnly: options.audioOnly, background: options.background, signal: options.signal })
     hasAudio = await renderedFileHasAudio(outputPath, resolveFfmpegPath(options.resourcesPath).replace(/ffmpeg(\.exe)?$/, 'ffprobe$1'), options.signal)
     options.signal?.throwIfAborted()
   } catch (error) {

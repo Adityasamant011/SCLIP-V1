@@ -10,3 +10,4 @@ it('does not certify an interrupted/incomplete edit; polls only local bookkeepin
 })
 
 it('shows trustworthy completion and explicit failure states without treating them as ready',()=>{expect(reviewStatusLabel('completed')).toContain('media verified');for(const status of ['running','review_required','incomplete','interrupted','cancelled'])expect(reviewStatusLabel(status)).toContain('unverified')})
+it('distinguishes a normal response from a verified edit',()=>{expect(reviewStatusLabel('response_only')).toBe('Response finished — no edit verified')})

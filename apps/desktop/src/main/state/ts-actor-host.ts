@@ -5,10 +5,10 @@ import { blankProject, eachLayer, rootComposition, type Project } from './model'
 import { buildProjectSummary } from './summary'
 import { routeChannel } from './router'
 import { createAutosave, type AutosaveController, type AutosaveFs } from './autosave'
-import { openProject, saveProjectAs, newWorkspace, makeEnqueueDerivatives, type WorkspaceNapi, type OrchestratorFs, type SchemaUpgradeReport } from './workspace-orchestrator'
+import { openProject, saveProjectAs, newWorkspace, makeEnqueueDerivatives, type WorkspaceNapi, type OrchestratorFs, type SchemaUpgradeReport, type ProjectBackupRecoveryReport } from './workspace-orchestrator'
 import type { RelinkFs, RelinkReport } from './relink'
 import { serializeProjectToJson } from './persistence'
-import { describeGridRepairs, type GridRepair } from './serialize'
+import { describeGridRepairs, type GridRepair, type KeyframeIdRepair } from './serialize'
 import { AgentActivityService } from '../agent/activity'
 import { AGENT_VIEW_EVENT } from '../../shared/agent-activity'
 import { runHybrid, type ComputeNapi, type HybridDeps } from './hybrids'
@@ -219,6 +219,15 @@ export function createTsActorHost(deps: TsActorHostDeps): TsActorHost {
       })
     } catch (err) { console.warn('[ts-actor-host] emitLog failed (grid repair)', err) }
   }
+  const onKeyframeIdRepair = (repairs: readonly KeyframeIdRepair[]): void => {
+    try {
+      deps.emitLog?.({
+        level: 'warn', category: { kind: 'Project' }, source: { kind: 'System' },
+        message: `Repaired ${repairs.length} invalid animation keyframe IDs on load; animation unchanged`,
+        details: { kind: 'KeyframeIdRepair', repairs: repairs.map(r => ({ ...r })) },
+      })
+    } catch (err) { console.warn('[ts-actor-host] emitLog failed (keyframe ID repair)', err) }
+  }
   // Load-time schema upgrade: the migration chain moved an older project.json
   // forward (migrate.ts). `warn` for the same reason as the grid repair — what the
   // next save writes is no longer what was opened — and the row names the
@@ -236,10 +245,21 @@ export function createTsActorHost(deps: TsActorHostDeps): TsActorHost {
       })
     } catch (err) { console.warn('[ts-actor-host] emitLog failed (schema upgrade)', err) }
   }
+  const onBackupRecovery = (report: ProjectBackupRecoveryReport): void => {
+    try {
+      deps.emitLog?.({
+        level: 'warn',
+        category: { kind: 'Project' },
+        source: { kind: 'System' },
+        message: `Project file was unreadable. Opened backup ${report.backupFile}; damaged original preserved as ${report.preservedFile}`,
+        details: { kind: 'ProjectBackupRecovery', backup: report.backupFile, preserved: report.preservedFile },
+      })
+    } catch (err) { console.warn('[ts-actor-host] emitLog failed (backup recovery)', err) }
+  }
   const relink = deps.relinkFs
     ? { fs: deps.relinkFs, join: deps.join, hashFile: (p: string) => deps.compute.hashMediaSource(p) }
     : undefined
-  const orchestratorDeps = { actor, napi: deps.napi, fs: deps.fs, join: deps.join, idGen, enqueueDerivatives, relink, onRelink, onGridRepair, onSchemaUpgrade }
+  const orchestratorDeps = { actor, napi: deps.napi, fs: deps.fs, join: deps.join, idGen, enqueueDerivatives, relink, onRelink, onGridRepair, onKeyframeIdRepair, onSchemaUpgrade, onBackupRecovery }
 
   // Hybrid orchestrator deps (native-compute → TS-write). enqueueDerivatives here
   // takes the inserted ITEMS (vs the orchestrator's whole-Project variant) and

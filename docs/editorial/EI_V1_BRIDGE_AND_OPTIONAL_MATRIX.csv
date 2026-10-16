@@ -1,0 +1,8 @@
+name,status,registered,callable,functional,end_to_end,reason,evidence
+tool_search,PASS,True,True,True,True,"Dynamic native MCP bridge, not part of101staticHermes registry; actual native discovery/descriptions/calls across ten sessions",actual-native-tool-records.json
+tool_describe,PASS,True,True,True,True,"Dynamic native MCP bridge, not part of101staticHermes registry; actual native discovery/descriptions/calls across ten sessions",actual-native-tool-records.json
+tool_call,PASS,True,True,True,True,"Dynamic native MCP bridge, not part of101staticHermes registry; actual native discovery/descriptions/calls across ten sessions",actual-native-tool-records.json
+video_search_external_media,BLOCKED,False,False,,False,External media flag0; intentionally not advertised in118activeMCP catalog. No optional service activated.,apps/desktop/src/main/mcp/server.ts:1275
+resolve_visual_intents,BLOCKED,False,False,,False,External media flag0; intentionally not advertised in118activeMCP catalog. No optional service activated.,apps/desktop/src/main/mcp/server.ts:1275
+import_external_media,BLOCKED,False,False,,False,External media flag0; intentionally not advertised in118activeMCP catalog. No optional service activated.,apps/desktop/src/main/mcp/server.ts:1275
+Jev typesafe/jev-1.13,BLOCKED,False,False,,False,Explicit flags disabled; paid input route not authorized; pinned model absent from current public models list; no inference/substitute.,capabilities/optional-provider-metadata.json

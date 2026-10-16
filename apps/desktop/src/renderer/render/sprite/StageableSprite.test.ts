@@ -38,9 +38,10 @@ describe("StageableSprite contract", () => {
     expect(s.stageReady).toBe(true);
   });
 
-  it("TextSprite: displayObject is the text; always stageReady", () => {
+  it("TextSprite: displayObject stages the full phrase and its optional mask; always stageReady", () => {
     const s = new TextSprite({ layerId: "L" });
-    expect(s.displayObject).toBe(s.text);
+    expect(s.displayObject.children).toContain(s.text);
+    expect(s.text.parent).toBe(s.displayObject);
     expect(s.stageReady).toBe(true);
   });
 });

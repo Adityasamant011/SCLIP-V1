@@ -116,6 +116,11 @@ describe("validateManifest", () => {
     expect(() => validateManifest({ ...base(), size: [99999, 100] })).toThrow();
   });
   it("rejects negative size", () => { expect(() => validateManifest({ ...base(), size: [-1, 100] })).toThrow(); });
+  it("rejects fractional dimensions and invalid id/version types", () => {
+    expect(() => validateManifest({ ...base(), size: [640.5, 480] })).toThrow();
+    expect(() => validateManifest({ ...base(), id: '' })).toThrow();
+    expect(() => validateManifest({ ...base(), version: 1.5 })).toThrow();
+  });
   it("rejects bad durations", () => {
     expect(() => validateManifest({ ...base(), default_duration_s: 0 })).toThrow();
     expect(() => validateManifest({ ...base(), content_duration_s: -1 })).toThrow();
@@ -123,6 +128,9 @@ describe("validateManifest", () => {
   it("rejects inverted number bounds and bad color default", () => {
     expect(() => validateManifest({ ...base(), props_schema: { n: { type: "number", default: 5, min: 10, max: 1 } } })).toThrow();
     expect(() => validateManifest({ ...base(), props_schema: { c: { type: "color", default: "not-a-hex" } } })).toThrow();
+  });
+  it("rejects unknown runtime prop types as MotifPropError", () => {
+    expect(() => validateManifest({ ...base(), props_schema: { enabled: { type: 'boolean', default: true } as never } })).toThrow(/enabled.*unsupported type/);
   });
 });
 

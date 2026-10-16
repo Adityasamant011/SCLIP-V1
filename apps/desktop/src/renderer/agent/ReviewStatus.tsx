@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { invoke } from '@/bridge/ipc'
 export function reviewStatusLabel(status?: string) {
+  if(status==='response_only')return 'Response finished — no edit verified'
   if(status==='completed')return 'Current edit reviewed; rendered media verified'
   if(status==='running')return 'Hermes is working — current edit unverified'
   if(status==='review_required')return 'Final verification required — current edit unverified'

@@ -43,8 +43,16 @@ describe('HermesTerminalRuntime', () => {
       expect(stageEditorialEvidence).toHaveBeenCalledWith(home,expect.anything(),'Creator B: minimal text. Current request overrides.')
       expect(spawnedArgs[spawnedArgs.indexOf('--skills')+1]).toContain('synthetic-evidence')
       expect(existsSync(path.join(home,'memories','USER.md'))).toBe(false)
-      runtime.stopAll();epoch='creator-b:2';await runtime.ensure('project','session')
+      epoch='creator-b:2'
+      await expect(runtime.input('project', 'session', 'this must not reach the old creator')).rejects.toThrow('Creator context changed')
+      expect(ptyWriteMock).not.toHaveBeenCalled()
+      expect(ptyKillMock).toHaveBeenCalledTimes(1)
+      epoch='creator-b:1'
+      await runtime.ensure('project','session')
+      expect(spawnedArgs[spawnedArgs.indexOf('--continue')+1]).toBe(first)
+      epoch='creator-b:2';await runtime.ensure('project','session')
       expect(spawnedArgs[spawnedArgs.indexOf('--continue')+1]).not.toBe(first)
+      expect(ptyKillMock).toHaveBeenCalledTimes(2)
       runtime.stopAll()
     } finally {rmSync(directory,{recursive:true,force:true})}
   })

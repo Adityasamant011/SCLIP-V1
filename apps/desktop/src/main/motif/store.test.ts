@@ -84,6 +84,28 @@ describe("UserMotifStore reads", () => {
     expect(s.readHtml("user-x")).toContain("motif.define");
     expect(s.getMotif("user-x")?.manifest.id).toBe("user-x");
   });
+  it("keeps a valid installed Motif readable and rejects the malformed prop type", () => {
+    const valid = new UserMotifStore(root);
+    valid.writeDraft('valid', composeMotifHtml(man('valid', 'Valid', 1), body));
+    valid.installDraft('valid', 'valid');
+    expect(valid.getMotif('valid')?.manifest.name).toBe('Valid');
+
+    const s = new UserMotifStore(root);
+    const malformed = [
+      { id: 'bad-prop-type', size: [640, 480], default_duration_s: 1, props_schema: { enabled: { type: 'boolean', default: true } } },
+      { id: 'bad-size', size: [-10, 20], default_duration_s: 1, props_schema: {} },
+      { id: 'bad-duration', size: [640, 480], default_duration_s: -1, props_schema: {} },
+      { id: 'bad-props', size: [640, 480], default_duration_s: 1, props_schema: 'not-an-object' },
+    ];
+    for (const manifest of malformed) {
+      const dir = path.join(root, manifest.id);
+      mkdirSync(dir, { recursive: true });
+      const html = `<script type="application/json" id="motif-manifest">${JSON.stringify({ ...manifest, name: manifest.id, version: 1 })}</script><body>motif</body>`;
+      writeFileSync(path.join(dir, 'index.html'), html);
+      expect(s.getMotif(manifest.id)).toBeNull();
+    }
+    expect(s.listManifests().map(m => m.id)).toEqual(['valid']);
+  });
   it("lists installed, skipping drafts and broken", () => {
     const dir = path.join(root, "user-a");
     mkdirSync(dir, { recursive: true });
@@ -93,6 +115,9 @@ describe("UserMotifStore reads", () => {
     mkdirSync(path.join(root, "broken"), { recursive: true });
     writeFileSync(path.join(root, "broken", "index.html"), "<html>no island</html>");
     const s = new UserMotifStore(root);
+    mkdirSync(path.join(root, "malformed-schema"), { recursive: true });
+    writeFileSync(path.join(root, "malformed-schema", "index.html"), `<script type="application/json" id="motif-manifest">{"id":"malformed-schema","name":"Bad","version":1,"size":[640,480],"default_duration_s":1,"props_schema":"not-an-obj"}</script>`);
+    expect(s.getMotif("malformed-schema")).toBeNull();
     expect(s.listManifests().map((m) => m.id)).toEqual(["user-a"]);
   });
   it("missing root is empty", () => {

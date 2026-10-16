@@ -109,6 +109,14 @@ function seed() {
 }
 
 describe("CaptionsPanel", () => {
+  it("offers word reveal through the existing atomic restyle command",async()=>{
+    seed();const onMutated=vi.fn().mockResolvedValue(undefined)
+    render(<CaptionPanel onMutated={onMutated} onActivateCue={ignoreCueActivation} />)
+    await act(async()=>{fireEvent.change(screen.getByLabelText("Word display"),{target:{value:"word_reveal"}})})
+    expect(restyleCaptions).toHaveBeenCalledWith({caption_display:"word_reveal"})
+    expect(onMutated).toHaveBeenCalledTimes(1)
+  })
+
   it("shows empty placeholder when no caption tracks", () => {
     useProjectStore.getState().apply(null);
     render(<CaptionPanel onMutated={async () => {}} onActivateCue={ignoreCueActivation} />);

@@ -387,6 +387,8 @@ export interface ImageOverlayView {
 }
 
 export interface TextView {
+  caption_display?: import('../../shared/captionTiming').CaptionDisplay;
+  caption_reveal?: import('../../shared/captionTiming').CaptionTiming;
   content: string;
   font_family: string;
   font_size_px: number;
@@ -3273,6 +3275,7 @@ export async function checkExportAttributionSafety(): Promise<ExportAttributionS
 /// `CaptionStylePatch`. `outline_width` 0 removes the outline (the actor stores
 /// `null`, the same absent style the Text tool writes).
 export interface CaptionStylePatch {
+  caption_display?: import('../../shared/captionTiming').CaptionDisplay;
   font_family?: string;
   font_size_px?: number;
   color?: Rgba;

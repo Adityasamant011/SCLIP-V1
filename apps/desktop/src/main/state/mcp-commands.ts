@@ -6,6 +6,7 @@
 import type { CommandError } from './errors'
 import type { Animated, Continuity, EaseDir, Extrapolate, Extrapolation, Interpolation, Keyframe, Rgba, Segment, Tangent, TangentMode, TransitionDirection, TransitionKind } from './model'
 import { HOLD_EXTRAPOLATION } from '../../shared/keyframe'
+import { isUuid } from './ids'
 import type { EffectPatch } from './mutations/effects'
 import type { MarkerPatch } from './mutations/markers'
 import { sortKeys } from './canonical'
@@ -28,10 +29,9 @@ function parseTrimEdge(value: unknown): 'in' | 'out' {
   return value
 }
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 /** Mirrors tools.rs parse_uuid: validates + errors "<field> not a UUID: …". */
 export function parseUuid(s: unknown, field: string): string {
-  if (typeof s !== 'string' || !UUID_RE.test(s)) throw new McpArgError(`${field} not a UUID: ${String(s)}`, field)
+  if (!isUuid(s)) throw new McpArgError(`${field} not a UUID: ${String(s)}`, field)
   return s
 }
 
@@ -220,13 +220,13 @@ function parseAnimatedTrackWith<T>(v: unknown, parseValue: (v: unknown, field: s
       const k = raw as Record<string, unknown>
       if ('interp' in k)
         throw new McpArgError(`invalid track: keyframe carries the retired per-segment "interp" field — a key is ${KEY_SHAPE}; the easing of a segment is this key's segment + out and the next key's in`)
-      if (typeof k.id !== 'string') throw new McpArgError(`invalid track: keyframe id must be a string`)
+      const id = parseUuid(k.id, `keyframe[${i}].id`)
       if (typeof k.t_us !== 'number') throw new McpArgError(`invalid track: keyframe t_us must be a number`)
       const value = parseValue(k.value, `invalid track: keyframe[${i}].value`)
       for (const field of ['in', 'out', 'continuity', 'segment'] as const)
         if (k[field] === undefined) throw new McpArgError(`invalid track: keyframe lacks "${field}" — a key is ${KEY_SHAPE}`)
       return {
-        id: k.id, t_us: k.t_us, value,
+        id, t_us: k.t_us, value,
         in: parseTangent(k.in, 'in'), out: parseTangent(k.out, 'out'),
         continuity: parseContinuity(k.continuity, 'invalid track: keyframe continuity'), segment: parseSegment(k.segment),
       }
@@ -836,7 +836,7 @@ function animTrackSchema(value: Record<string, unknown>, staticTypes: string[], 
         items: {
           type: 'object',
           properties: {
-            id: { type: 'string' }, t_us: { type: 'integer' }, value,
+            id: { type: 'string', format: 'uuid', description: 'A UUID, never a short label such as k1. Use set_keyframe to let the editor generate IDs.' }, t_us: { type: 'integer' }, value,
             in: TANGENT_SCHEMA, out: TANGENT_SCHEMA,
             continuity: { type: 'string', enum: ['Smooth', 'Broken'], description: 'With both sides Free: Smooth keeps their slopes locked equal on write, Broken lets them differ.' },
             segment: SEGMENT_SCHEMA,
@@ -1228,7 +1228,7 @@ export const MCP_TOOL_DEFS: ReadonlyArray<McpToolDef> = [
       t_start_us: parseNum(a.t_start_us, 't_start_us'), t_end_us: parseNum(a.t_end_us, 't_end_us'),
       composition_id: parseCompositionIdOpt(a.composition_id) }) },
   { name: 'add_media_layer', exec: 'dedicated',
-    description: 'Place an imported Audio, Video, or Image item using the editor\'s existing kind-matched media placement command. Standalone Audio becomes an editable Audio layer (use update_layer_params for music role, gain and fades). Places the full probed source duration; use trim_layer afterward for a shorter section. Video with audio follows the project\'s normal auto-pair setting. Returns the new layer id. Recorded through ProjectActor for undo, save and reload.',
+    description: 'Place an imported Audio, Video, or Image item using the editor\'s existing kind-matched media placement command. Standalone Audio becomes an editable Audio layer (use update_layer_params for music role, gain and fades). New Video/Image layers start centered and scaled to fill their own composition (cover; different aspect ratios crop edges). This is an insertion default; use update_layer_params or calculate_video_fit for a different framing. Places the full probed source duration; use trim_layer afterward for a shorter section. Video with audio follows the project\'s normal auto-pair setting. Returns the new layer id. Recorded through ProjectActor for undo, save and reload.',
     inputSchema: { type: 'object', properties: { media_id: { type: 'string' }, track_id: { type: 'string' }, t_start_us: { type: 'integer' } }, required: ['media_id', 'track_id', 't_start_us'], additionalProperties: false },
     parseDedicated: (a) => {
       const unsupported=Object.keys(a).filter(key=>!['media_id','track_id','t_start_us'].includes(key))
@@ -1255,11 +1255,12 @@ export const MCP_TOOL_DEFS: ReadonlyArray<McpToolDef> = [
     }) },
   { name: 'restyle_captions', exec: 'dedicated',
     description: 'Restyle every native Text cue on every Caption-role track in one ProjectActor edit. Only supplied fields change. Reuses the editor\'s existing restyle_captions command; undo restores the previous caption style.',
-    inputSchema: { type: 'object', properties: { font_family: { type: 'string' }, font_size_px: { type: 'number' }, color: RGBA_SCHEMA, outline_width: { type: 'number' } }, required: [] },
+    inputSchema: { type: 'object', properties: { font_family: { type: 'string' }, font_size_px: { type: 'number' }, color: RGBA_SCHEMA, outline_width: { type: 'number' }, caption_display: { type: 'string', enum: ['phrase', 'word_reveal'] } }, required: [] },
     parseDedicated: (a) => ({ font_family: parseStrOpt(a.font_family, 'font_family'), font_size_px: parseNumOpt(a.font_size_px, 'font_size_px'),
-      color: a.color === undefined ? undefined : parseRgba(a.color, 'color'), outline_width: parseNumOpt(a.outline_width, 'outline_width') }) },
+      color: a.color === undefined ? undefined : parseRgba(a.color, 'color'), outline_width: parseNumOpt(a.outline_width, 'outline_width'),
+      ...(a.caption_display === undefined ? {} : { caption_display: parseStr(a.caption_display, 'caption_display') as 'phrase' | 'word_reveal' }) }) },
   { name: 'add_video_layer', exec: 'dedicated',
-    description: "Add a visual media layer from an imported media item onto a track. For Video media, `src_in_us`/`src_out_us` are the in/out points within the source media; `t_start_us`/`t_end_us` are where the clip lives on the timeline. For Image media, this creates an ImageOverlay over the timeline range, and `src_in_us`/`src_out_us` are accepted for schema compatibility but ignored. Video source and timeline ranges should be the same length unless `speed` is later changed. When a Video source has an audio stream and the project's `auto_pair_audio_on_import` setting is on (default), this also creates a paired dialogue Audio layer on the SAME track's audio lane (every track holds one visual lane plus one audio lane) at the same time bounds and links the two so they move/trim/split together. The whole call is atomic: video, paired audio, and link commit together or not at all — if the audio lane is occupied the call rejects naming the blocking layer, and nothing lands on the timeline. Returns either the visual layer id (no pairing) or `{ video_layer_id, audio_layer_id, link_id }` when a pair was created.",
+    description: "Add a visual media layer from an imported media item onto a track. New Video/Image layers start centered and scaled to fill their own composition (cover; different aspect ratios crop edges). Explicit subsequent transforms remain editable. For Video media, `src_in_us`/`src_out_us` are the in/out points within the source media; `t_start_us`/`t_end_us` are where the clip lives on the timeline. For Image media, this creates an ImageOverlay over the timeline range, and `src_in_us`/`src_out_us` are accepted for schema compatibility but ignored. Video source and timeline ranges should be the same length unless `speed` is later changed. When a Video source has an audio stream and the project's `auto_pair_audio_on_import` setting is on (default), this also creates a paired dialogue Audio layer on the SAME track's audio lane (every track holds one visual lane plus one audio lane) at the same time bounds and links the two so they move/trim/split together. The whole call is atomic: video, paired audio, and link commit together or not at all — if the audio lane is occupied the call rejects naming the blocking layer, and nothing lands on the timeline. Returns either the visual layer id (no pairing) or `{ video_layer_id, audio_layer_id, link_id }` when a pair was created.",
     inputSchema: { type: 'object', properties: { media_id: { type: 'string' }, src_in_us: { type: 'integer' }, src_out_us: { type: 'integer' }, t_end_us: { type: 'integer' }, t_start_us: { type: 'integer' }, track_id: { type: 'string' }, composition_id: TRACK_COMPOSITION_ID_SCHEMA }, required: ['media_id', 'src_in_us', 'src_out_us', 't_end_us', 't_start_us', 'track_id'] },
     parseDedicated: (a) => ({ track: parseUuid(a.track_id, 'track_id'), media: parseUuid(a.media_id, 'media_id'),
       src_in_us: parseNum(a.src_in_us, 'src_in_us'), src_out_us: parseNum(a.src_out_us, 'src_out_us'),
@@ -1478,7 +1479,7 @@ export const MCP_TOOL_DEFS: ReadonlyArray<McpToolDef> = [
       return { plan: a.plan }
     } },
   { name: 'apply_rough_cut_plan', exec: 'dedicated',
-    description: "Bulk execution of YOUR ALREADY-DECIDED ranges/order: place every clip in one RoughCutPlan in one atomic undoable operation, with linked A/V, frame snapping, automatic checkpoint and created layer/audio/link IDs plus source/timeline mappings. No AI or creative selection. REPLACES all layers on the target track and assembles from timeline zero; there is no need to delete those layers one by one first. Use an empty/new target track to preserve existing work. Omitted track selects an unlocked A-roll or first unlocked track. dry_run returns predictions without history/mutation. Plan is revalidated internally. Ordinary add_video_layer/trim/move tools remain available; this is optional, not a mandatory editing stage.",
+    description: "Bulk execution of YOUR ALREADY-DECIDED ranges/order: place every clip in one RoughCutPlan in one atomic undoable operation, with linked A/V, frame snapping, automatic checkpoint and created layer/audio/link IDs plus source/timeline mappings. No AI or creative selection. Newly placed video starts centered and scaled to fill the target composition; subsequent framing is editable. REPLACES all layers on the target track and assembles from timeline zero; there is no need to delete those layers one by one first. Use an empty/new target track to preserve existing work. Omitted track selects an unlocked A-roll or first unlocked track. dry_run returns predictions without history/mutation. Plan is revalidated internally. Ordinary add_video_layer/trim/move tools remain available; this is optional, not a mandatory editing stage.",
     inputSchema: { type: 'object', properties: {
       plan: ROUGH_CUT_PLAN_INPUT_SCHEMA,
       composition_id: COMPOSITION_ID_SCHEMA,

@@ -272,6 +272,14 @@ export async function applyTranscriptsHybrid(
   const { layer, composition } = findLayer(layerId, deps)
   if (!layer) throw new Error(`apply_transcripts: layer ${layerId} not found`)
 
+  // Match the native clip-audio contract. Video speed does not establish the
+  // paired Audio layer's speech clock; dividing cached word times by it would
+  // silently certify captions against audio that may still play at speed 1.
+  // Refuse before transcript I/O or an actor write, including supplied payloads.
+  if (layer.params.kind === 'VideoClip' && (!Number.isFinite(layer.params.speed) || Math.abs(layer.params.speed - 1) > Number.EPSILON)) {
+    throw new Error('apply_transcripts: captions for a retimed VideoClip are not supported; use its normal-speed dialogue Audio layer or restore speed 1 before applying captions')
+  }
+
   const compId = (args.composition_id as string | undefined) ?? composition.id
   const snap = deps.actor.snapshot()
 
@@ -322,81 +330,75 @@ export async function applyTranscriptsHybrid(
       throw new Error(parsed.message || `No transcript generated yet for media ${mediaId}. Call transcribe_clip first.`)
     }
 
-    const wordTiming = (parsed.word_timing as 'exact' | 'interpolated_from_cue' | 'none') || 'exact'
+    const wordTiming = ['exact', 'interpolated_from_cue', 'none'].includes(parsed.word_timing ?? '')
+      ? parsed.word_timing as TranscriptPayload['word_timing'] : 'none'
     const clipEndUs = layer.t_end_us
-    const rawSegments = parsed.segments || []
-
-    // Collect all valid timeline words inside [srcInUs, srcOutUs]
-    const timelineWords: TimelineWord[] = []
-    let hasExactWords = false
-
-    for (const seg of rawSegments) {
-      if (Array.isArray(seg.words) && seg.words.length > 0) {
-        // Words present: filter strictly to [srcInUs, srcOutUs]
-        const inRangeWords = seg.words.filter((w) => w.t_end_us > srcInUs && w.t_start_us < srcOutUs)
-        if (inRangeWords.length > 0) {
-          hasExactWords = true
-          for (const w of inRangeWords) {
-            const wStart = Math.max(0, Math.max(srcInUs, w.t_start_us) - srcInUs) + layer.t_start_us
-            const wEnd = Math.max(0, Math.min(srcOutUs, w.t_end_us) - srcInUs) + layer.t_start_us
-            const tlStart = Math.max(layer.t_start_us, Math.min(clipEndUs, wStart))
-            const tlEnd = Math.max(layer.t_start_us, Math.min(clipEndUs, wEnd))
-            if (tlEnd > tlStart && w.text.trim()) {
-              timelineWords.push({ text: w.text.trim(), t_start_us: tlStart, t_end_us: tlEnd })
-            }
-          }
-        }
-      }
+    const validTime = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0
+    const validSpan = (item: { t_start_us: number; t_end_us: number }) =>
+      validTime(item.t_start_us) && validTime(item.t_end_us) && item.t_end_us > item.t_start_us
+    // Compare textual coverage only, not meaning. Partial/malformed word arrays
+    // must not replace a complete segment with a subset of its spoken text.
+    const normalized = (text: string) => text.toLocaleLowerCase().replace(/[\p{P}\p{Z}\s]/gu, '')
+    const source = {
+      id: layer.id, signature: sourceSignature(layer), project_id: snap.project_id, composition_id: compId,
     }
+    const segments = (parsed.segments || []).map((seg, index) => {
+      if (typeof seg.text !== 'string') throw new Error(`apply_transcripts: invalid text in segment ${index}`)
+      const words = Array.isArray(seg.words) ? seg.words : []
+      const validWords = words.every(w => w && typeof w.text === 'string' && w.text.trim() && validSpan(w))
+      const sortedWords = validWords ? words.slice().sort((a, b) => a.t_start_us - b.t_start_us) : []
+      const completeWords = sortedWords.length > 0 && normalized(sortedWords.map(w => w.text).join(' ')) === normalized(seg.text)
+        && sortedWords.every((w, i) => i === 0 || w.t_start_us >= sortedWords[i - 1].t_end_us)
+      // Complete measured words can supply missing segment bounds. Otherwise we
+      // cannot locate this text safely; reject before the actor writes anything.
+      const start = validSpan(seg) ? seg.t_start_us : completeWords ? sortedWords[0].t_start_us : null
+      const end = validSpan(seg) ? seg.t_end_us : completeWords ? sortedWords[sortedWords.length - 1].t_end_us : null
+      if (seg.text.trim() && (start === null || end === null)) {
+        throw new Error(`apply_transcripts: segment ${index} has no usable timestamp bounds; transcribe it again before applying captions`)
+      }
+      return { seg, words: sortedWords, completeWords, start: start ?? 0, end: end ?? 0 }
+    }).sort((a, b) => a.start - b.start)
 
-    let shiftedSegments: Array<{ text: string; t_start_us: number; t_end_us: number; words: TimelineWord[] }> = []
-
-    if (hasExactWords && timelineWords.length > 0) {
-      shiftedSegments = chunkWordsToPhrases(timelineWords, clipEndUs)
-    } else {
-      // Fallback when no word timings are present: clamp segment bounds and synthesize words for long sentences
-      for (const seg of rawSegments) {
-        if (seg.t_end_us <= srcInUs || seg.t_start_us >= srcOutUs) continue
-        const sStart = Math.max(srcInUs, seg.t_start_us)
-        const sEnd = Math.min(srcOutUs, seg.t_end_us)
-        if (sEnd <= sStart) continue
-        const tlStart = Math.max(layer.t_start_us, Math.min(clipEndUs, (sStart - srcInUs) + layer.t_start_us))
-        const tlEnd = Math.max(layer.t_start_us, Math.min(clipEndUs, (sEnd - srcInUs) + layer.t_start_us))
-        if (tlEnd <= tlStart) continue
-
-        const wordsInText = seg.text.trim().split(/\s+/).filter(Boolean)
-        if (wordsInText.length > 5) {
-          const segDuration = tlEnd - tlStart
-          const wordDur = Math.floor(segDuration / wordsInText.length)
-          const synthWords: TimelineWord[] = wordsInText.map((tw, idx) => ({
-            text: tw,
-            t_start_us: tlStart + idx * wordDur,
-            t_end_us: idx === wordsInText.length - 1 ? tlEnd : tlStart + (idx + 1) * wordDur,
+    // Decide timing per segment. The actor packs genuine overlapping segments
+    // into separate caption lanes; do not drop or shift speech to hide overlaps.
+    payloads = []
+    for (const { seg, words, completeWords, start, end } of segments) {
+      if (!seg.text.trim() || end <= srcInUs || start >= srcOutUs) continue
+      // Preserve the existing cut-boundary guard: padded ASR segment bounds
+      // can overlap a cut while all of its measured speech lies outside it.
+      if (words.length && !words.some(w => w.t_end_us > srcInUs && w.t_start_us < srcOutUs)) continue
+      const toTimeline = (time: number) => Math.max(layer.t_start_us, Math.min(clipEndUs, Math.max(srcInUs, Math.min(srcOutUs, time)) - srcInUs + layer.t_start_us))
+      const tlStart = toTimeline(start), tlEnd = toTimeline(end)
+      if (tlEnd <= tlStart) continue
+      if (completeWords) {
+        const timelineWords = words.filter(w => w.t_end_us > srcInUs && w.t_start_us < srcOutUs)
+          .map(w => ({ text: w.text.trim(), t_start_us: toTimeline(w.t_start_us), t_end_us: toTimeline(w.t_end_us) }))
+          .filter(w => w.t_end_us > w.t_start_us)
+        payloads.push({ source, word_timing: wordTiming, segments: chunkWordsToPhrases(timelineWords, clipEndUs) })
+      } else {
+        // Only segment bounds are supported here. Keep all text; estimated word
+        // locations must never acquire exact provenance from another segment.
+        const textWords = seg.text.trim().split(/\s+/)
+        if (textWords.length > 5) {
+          const estimated = textWords.map((text, i) => ({ text,
+            t_start_us: tlStart + Math.floor((tlEnd - tlStart) * i / textWords.length),
+            t_end_us: tlStart + Math.floor((tlEnd - tlStart) * (i + 1) / textWords.length),
           }))
-          const chunks = chunkWordsToPhrases(synthWords, tlEnd)
-          shiftedSegments.push(...chunks)
+          payloads.push({ source, word_timing: 'interpolated_from_cue', segments: chunkWordsToPhrases(estimated, tlEnd) })
         } else {
-          shiftedSegments.push({
-            text: seg.text.trim(),
-            t_start_us: tlStart,
-            t_end_us: tlEnd,
-            words: [],
-          })
+          payloads.push({ source, word_timing: 'none', segments: [{ text: seg.text.trim(), t_start_us: tlStart, t_end_us: tlEnd, words: [] }] })
         }
       }
     }
-
-    const payload: TranscriptPayload = {
-      source: {
-        id: layer.id,
-        signature: sourceSignature(layer),
-        project_id: snap.project_id,
-        composition_id: compId,
-      },
-      word_timing: wordTiming,
-      segments: shiftedSegments,
+    // The mutation accepts bounded payload batches, not one payload per source
+    // sentence. Keep at most the three supported provenance groups for long ASR.
+    const grouped = new Map<TranscriptPayload['word_timing'], TranscriptPayload>()
+    for (const payload of payloads) {
+      const group = grouped.get(payload.word_timing)
+      if (group) group.segments.push(...payload.segments)
+      else grouped.set(payload.word_timing, payload)
     }
-    payloads = [payload]
+    payloads = [...grouped.values()]
   }
 
   // Compute may await transcript I/O while the GUI keeps editing. Diff against

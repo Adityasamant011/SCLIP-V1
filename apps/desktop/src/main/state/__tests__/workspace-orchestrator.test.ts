@@ -1,3 +1,6 @@
+import * as nodeFs from 'node:fs'
+import nodeOs from 'node:os'
+import nodePath from 'node:path'
 import { describe, it, expect, vi } from 'vitest'
 import { WorkspaceFailure } from '../../../shared/workspaceErrors'
 import { openProject, saveProjectAs, newWorkspace, makeEnqueueDerivatives, type OrchestratorDeps, type OrchestratorFs, type WorkspaceNapi } from '../workspace-orchestrator'
@@ -22,8 +25,20 @@ function memFs(seed: Record<string, string> = {}): OrchestratorFs & { files: Map
     exists: (p) => files.has(p) || dirs.has(p),
     readFile: (p) => { const t = files.get(p); if (t === undefined) throw new Error(`ENOENT ${p}`); return t },
     writeFile: (p, t) => { files.set(p, t) },
+    copyFile: (from, to) => { const t=files.get(from);if(t===undefined)throw Error('ENOENT');files.set(to,t) },
     mkdirp: (d) => { dirs.add(d) },
     rm: vi.fn((p) => { files.delete(p) }),
+    readdir: (d: string) => {
+      const prefix = d.endsWith("/") ? d : d + "/";
+      const entries: string[] = [];
+      for (const k of files.keys()) {
+        if (k.startsWith(prefix)) {
+          const rest = k.slice(prefix.length);
+          if (!rest.includes("/")) entries.push(rest);
+        }
+      }
+      return entries;
+    },
   }
 }
 
@@ -59,6 +74,107 @@ describe('openProject', () => {
   it('lets the schema gate refusal through untouched', async () => {
     const fs = memFs({ [`/ws/${PROJECT_FILE}`]: JSON.stringify({ schema_version: 999 }) }); fs.dirs.add('/ws')
     await expect(openProject(deps({ fs }), '/ws')).rejects.toThrow(new WorkspaceFailure({ error: 'ProjectSchemaTooNew', found: 999, supported: SCHEMA_VERSION }))
+  })
+
+  it("preserves corrupt project bytes and reports the valid backup used", async () => {
+    const corruptText = "{corrupted partial json"
+    const fs = memFs({
+      [`/ws/${PROJECT_FILE}`]: corruptText,
+      [`/ws/Backups/20261014T110000.json`]: projectJson,
+    });
+    fs.dirs.add("/ws");
+    fs.dirs.add("/ws/Backups");
+    const d = deps({ fs });
+    const reports: unknown[] = []
+    d.onBackupRecovery = (report) => { reports.push(report); d.calls.push('backupRecovery') }
+    await openProject(d, "/ws");
+    expect(d.calls).toEqual(["commit:/ws", "replaceState", "backupRecovery", "recent:/ws:Demo"]);
+    const report = reports[0] as { backupFile: string; preservedFile: string }
+    expect(report.backupFile).toBe('20261014T110000.json')
+    expect(fs.files.get(`/ws/${report.preservedFile}`)).toBe(corruptText)
+    expect(d.actor.replaceState).toHaveBeenCalledWith(expect.objectContaining({ metadata: expect.objectContaining({ name: 'Demo' }) }))
+  })
+
+  it("skips a corrupt newest rolling backup and recovers from the next older valid one", async () => {
+    const olderProject = blankProject(seededGen(), 'Older valid snapshot')
+    const fs = memFs({
+      [`/ws/${PROJECT_FILE}`]: '{newer project is corrupt',
+      ['/ws/Backups/20261014T120000000Z.json']: '{newest backup is corrupt',
+      ['/ws/Backups/20261014T110000000Z.json']: serializeProjectToJson(olderProject),
+    })
+    fs.dirs.add('/ws'); fs.dirs.add('/ws/Backups')
+    const d = deps({ fs })
+    let recovery: { backupFile: string; preservedFile: string } | undefined
+    d.onBackupRecovery = report => { recovery = report }
+    await openProject(d, '/ws')
+    expect(recovery?.backupFile).toBe('20261014T110000000Z.json')
+    expect(d.actor.replaceState).toHaveBeenCalledWith(expect.objectContaining({ metadata: expect.objectContaining({ name: 'Older valid snapshot' }) }))
+    expect(fs.files.get(`/ws/${recovery!.preservedFile}`)).toBe('{newer project is corrupt')
+  })
+
+  it("preserves a project with an unreadable schema marker before recovering", async () => {
+    const invalidSchema = JSON.parse(projectJson)
+    delete invalidSchema.schema_version
+    const damaged = JSON.stringify(invalidSchema)
+    const fs = memFs({
+      [`/ws/${PROJECT_FILE}`]: damaged,
+      ['/ws/Backups/20261014T110000000Z.json']: projectJson,
+    }); fs.dirs.add('/ws'); fs.dirs.add('/ws/Backups')
+    const d = deps({ fs })
+    let recovery: { backupFile: string; preservedFile: string } | undefined
+    d.onBackupRecovery = report => { recovery = report }
+    await openProject(d, '/ws')
+    expect(recovery?.backupFile).toBe('20261014T110000000Z.json')
+    expect(fs.files.get(`/ws/${recovery!.preservedFile}`)).toBe(damaged)
+  })
+
+  it("does not fall back to an older snapshot when the newest backup uses a newer schema", async () => {
+    const newer = JSON.parse(projectJson)
+    newer.schema_version = SCHEMA_VERSION + 1
+    const fs = memFs({
+      [`/ws/${PROJECT_FILE}`]: '{project is corrupt',
+      ['/ws/Backups/20261014T120000000Z.json']: JSON.stringify(newer),
+      ['/ws/Backups/20261014T110000000Z.json']: projectJson,
+    }); fs.dirs.add('/ws'); fs.dirs.add('/ws/Backups')
+    const d = deps({ fs })
+    await expect(openProject(d, '/ws')).rejects.toThrow(/backup .* uses schema .* newer than this app supports.*Original bytes were preserved/)
+    const archive = [...fs.files.entries()].find(([p]) => p.includes('.corrupt-'))
+    expect(archive?.[1]).toBe('{project is corrupt')
+    expect(d.actor.replaceState).not.toHaveBeenCalled()
+  })
+
+  it("does not report recovery as complete when the actor rejects the recovered project", async () => {
+    const fs = memFs({
+      [`/ws/${PROJECT_FILE}`]: '{corrupt',
+      ['/ws/Backups/20261014T110000000Z.json']: projectJson,
+    }); fs.dirs.add('/ws'); fs.dirs.add('/ws/Backups')
+    const d = deps({ fs })
+    const onRecovery = vi.fn()
+    d.onBackupRecovery = onRecovery
+    vi.mocked(d.actor.replaceState).mockImplementation(() => { throw new Error('synthetic invariant failure') })
+    await expect(openProject(d, '/ws')).rejects.toThrow('ProjectInvalid')
+    expect(onRecovery).not.toHaveBeenCalled()
+  })
+
+  it("preserves the damaged project and refuses recovery when the Backups folder is missing", async () => {
+    const corruptText = '{missing all backups'
+    const fs = memFs({ [`/ws/${PROJECT_FILE}`]: corruptText }); fs.dirs.add('/ws')
+    const d = deps({ fs })
+    await expect(openProject(d, '/ws')).rejects.toThrow(/Original bytes preserved at project\.json\.corrupt-/)
+    const archived = [...fs.files.entries()].find(([p]) => p.includes('.corrupt-'))
+    expect(archived?.[1]).toBe(corruptText)
+    expect(d.actor.replaceState).not.toHaveBeenCalled()
+  })
+
+  it("does not recover if preserving the unreadable project fails", async () => {
+    const fs = memFs({
+      [`/ws/${PROJECT_FILE}`]: '{cannot archive',
+      ['/ws/Backups/20261014T110000000Z.json']: projectJson,
+    }); fs.dirs.add('/ws'); fs.dirs.add('/ws/Backups')
+    fs.copyFile = () => { throw new Error('synthetic archive failure') }
+    const d = deps({ fs })
+    await expect(openProject(d, '/ws')).rejects.toThrow(/Could not preserve the damaged project/)
+    expect(d.actor.replaceState).not.toHaveBeenCalled()
   })
 
   it('refuses ProjectFileUnreadable on a corrupt project.json, keeping the parser prose as detail', async () => {
@@ -295,4 +411,27 @@ describe('round-trip: new → save → open is state-identical', () => {
     expect(JSON.stringify(canonicalize(serializeProject(reopened))))
       .toBe(JSON.stringify(canonicalize(serializeProject(created))))
   })
+})
+
+
+it('archives invalid UTF8 project bytes exactly before recovering a real filesystem project',async()=>{
+ const dir=nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(),'sclip-byte-recovery-'))
+ try{
+  const damaged=Buffer.from([0xff,0xfe,0x7b,0x22,0x00]);nodeFs.writeFileSync(nodePath.join(dir,PROJECT_FILE),damaged)
+  nodeFs.mkdirSync(nodePath.join(dir,'Backups'));nodeFs.writeFileSync(nodePath.join(dir,'Backups','20261014T110000000Z.json'),serializeProjectToJson(blankProject(seededGen(),'Recovered')))
+  const io:OrchestratorFs={exists:nodeFs.existsSync,readFile:p=>nodeFs.readFileSync(p,'utf8'),writeFile:(p,t)=>nodeFs.writeFileSync(p,t),copyFile:nodeFs.copyFileSync,mkdirp:p=>{nodeFs.mkdirSync(p,{recursive:true})},rm:p=>nodeFs.rmSync(p,{force:true}),readdir:p=>nodeFs.readdirSync(p)}
+  const d=deps({fs:io,join:nodePath.join});let archive='';d.onBackupRecovery=r=>{archive=r.preservedFile}
+  await openProject(d,dir)
+  expect(nodeFs.readFileSync(nodePath.join(dir,archive))).toEqual(damaged)
+  expect(nodeFs.readFileSync(nodePath.join(dir,PROJECT_FILE))).toEqual(damaged)
+  expect(d.actor.replaceState).toHaveBeenCalledWith(expect.objectContaining({metadata:expect.objectContaining({name:'Recovered'})}))
+ }finally{nodeFs.rmSync(dir,{recursive:true,force:true})}
+})
+
+
+it('refuses an older snapshot when the newest backup has an IO error rather than corrupt content',async()=>{
+ const valid=serializeProjectToJson(blankProject(seededGen(),'Synthetic'))
+ const io=memFs({'/ws/project.json':'{bad','/ws/Backups/20261014T120000000Z.json':valid,'/ws/Backups/20261014T110000000Z.json':valid});io.dirs.add('/ws');io.dirs.add('/ws/Backups')
+ const read=io.readFile;io.readFile=p=>{if(p.includes('120000'))throw Error('synthetic permission denial');return read(p)}
+ const d=deps({fs:io});await expect(openProject(d,'/ws')).rejects.toThrow('refusing to substitute an older snapshot');expect(d.actor.replaceState).not.toHaveBeenCalled()
 })

@@ -128,34 +128,34 @@ describe('parseAnimatedTrack — a scalar param', () => {
     expect(parse(keyed([k], { before: 'Loop', after: 'Continue' }))).toMatchObject({ extrapolate: { before: 'Loop', after: 'Continue' } })
   })
   it('accepts a side at x = 0 and at x = 1 (the closed bounds)', () => {
-    const k = { id: 'x', t_us: 0, value: 0, in: { x: 1, y: 1, mode: 'Free' }, out: { x: 0, y: 0, mode: 'Free' }, continuity: 'Broken', segment: { kind: 'Spline' } }
+    const k = { id: '00000000-0000-0000-0000-000000000003', t_us: 0, value: 0, in: { x: 1, y: 1, mode: 'Free' }, out: { x: 0, y: 0, mode: 'Free' }, continuity: 'Broken', segment: { kind: 'Spline' } }
     expect(parse(keyed([k]))).toMatchObject({ value: [k] })
   })
   it('rejects a bad mode', () => { expect(() => parse({ mode: 'Bogus', value: 1 })).toThrow(McpArgError) })
   it('rejects a colour where the scalar param wants a number, naming the one param that takes a colour', () => {
     expect(() => parse({ mode: 'Static', value: RED })).toThrow(/Static value: param 'opacity' takes a number, got an object — \{r,g,b,a\} is the value type of param_key "color" only/)
-    expect(() => parse(keyed([{ id: 'x', t_us: 0, value: RED, ...SIDES, segment: { kind: 'Linear' } }]))).toThrow(/keyframe\[0\]\.value: param 'opacity' takes a number/)
+    expect(() => parse(keyed([{ id: '00000000-0000-0000-0000-000000000003', t_us: 0, value: RED, ...SIDES, segment: { kind: 'Linear' } }]))).toThrow(/keyframe\[0\]\.value: param 'opacity' takes a number/)
     expect(() => parse({ mode: 'Static', value: 'half' })).toThrow(/takes a number, got a string/)
   })
   it('rejects a keyframe with a bad segment kind', () => {
-    expect(() => parse(keyed([{ id: 'x', t_us: 0, value: 0, ...SIDES, segment: { kind: 'no' } }]))).toThrow(McpArgError)
+    expect(() => parse(keyed([{ id: '00000000-0000-0000-0000-000000000003', t_us: 0, value: 0, ...SIDES, segment: { kind: 'no' } }]))).toThrow(McpArgError)
   })
   it('rejects a keyframe with the retired EaseIn kind', () => {
-    expect(() => parse(keyed([{ id: 'x', t_us: 0, value: 0, ...SIDES, segment: { kind: 'EaseIn' } }]))).toThrow(McpArgError)
+    expect(() => parse(keyed([{ id: '00000000-0000-0000-0000-000000000003', t_us: 0, value: 0, ...SIDES, segment: { kind: 'EaseIn' } }]))).toThrow(McpArgError)
   })
   it('rejects a Bezier segment kind — the cubic lives on the tangents', () => {
-    expect(() => parse(keyed([{ id: 'x', t_us: 0, value: 0, ...SIDES, segment: { kind: 'Bezier', p1: [0, 0], p2: [1, 1] } }]))).toThrow(/Spline/)
+    expect(() => parse(keyed([{ id: '00000000-0000-0000-0000-000000000003', t_us: 0, value: 0, ...SIDES, segment: { kind: 'Bezier', p1: [0, 0], p2: [1, 1] } }]))).toThrow(/Spline/)
   })
   it('rejects a keyframe still carrying the retired per-segment interp, naming the record', () => {
-    expect(() => parse(keyed([{ id: 'x', t_us: 0, value: 0, interp: { kind: 'Linear' } }]))).toThrow(/retired per-segment "interp"/)
+    expect(() => parse(keyed([{ id: '00000000-0000-0000-0000-000000000003', t_us: 0, value: 0, interp: { kind: 'Linear' } }]))).toThrow(/retired per-segment "interp"/)
   })
   it('rejects a side whose x leaves [0, 1], naming the side and the rule', () => {
-    const k = { id: 'x', t_us: 0, value: 0, ...SIDES, segment: { kind: 'Spline' } }
+    const k = { id: '00000000-0000-0000-0000-000000000003', t_us: 0, value: 0, ...SIDES, segment: { kind: 'Spline' } }
     expect(() => parse(keyed([{ ...k, out: { x: 1.5, y: 0, mode: 'Free' } }]))).toThrow(/"out"\.x is 1\.5 — x is the fraction of the segment's time span and must be within \[0, 1\]; only y may overshoot/)
     expect(() => parse(keyed([{ ...k, in: { x: -0.01, y: 1, mode: 'Auto' } }]))).toThrow(/"in"\.x is -0\.01/)
   })
   it('rejects a keyframe lacking a side, a non-finite tangent, a bad mode, continuity or extrapolate', () => {
-    const k = { id: 'x', t_us: 0, value: 0, ...SIDES, segment: { kind: 'Linear' } }
+    const k = { id: '00000000-0000-0000-0000-000000000003', t_us: 0, value: 0, ...SIDES, segment: { kind: 'Linear' } }
     expect(() => parse(keyed([{ ...k, in: undefined }]))).toThrow(/lacks "in"/)
     expect(() => parse(keyed([{ ...k, out: { x: Number.NaN, y: 0, mode: 'Free' } }]))).toThrow(/finite/)
     expect(() => parse(keyed([{ ...k, out: { x: 0, y: 0, mode: 'Loose' } }]))).toThrow(/mode/)
@@ -175,7 +175,7 @@ describe('parseAnimatedTrack — the color param', () => {
   })
   it('rejects a number where the colour param wants an {r,g,b,a}, at the track and at a key', () => {
     expect(() => parse({ mode: 'Static', value: 0.5 })).toThrow(/Static value: param 'color' takes an \{r,g,b,a\} colour \(integers 0\.\.255\), got a number/)
-    expect(() => parse(keyed([{ id: 'x', t_us: 0, value: 1, ...SIDES, segment: { kind: 'Linear' } }]))).toThrow(/keyframe\[0\]\.value: param 'color' takes an \{r,g,b,a\} colour/)
+    expect(() => parse(keyed([{ id: '00000000-0000-0000-0000-000000000003', t_us: 0, value: 1, ...SIDES, segment: { kind: 'Linear' } }]))).toThrow(/keyframe\[0\]\.value: param 'color' takes an \{r,g,b,a\} colour/)
   })
   it('rejects an out-of-range colour component (the wire Rgba is four integers 0..255)', () => {
     expect(() => parse({ mode: 'Static', value: { r: 300, g: 0, b: 0, a: 255 } })).toThrow(/0\.\.255/)
@@ -183,9 +183,16 @@ describe('parseAnimatedTrack — the color param', () => {
   })
 })
 describe('parseAnimatedF64 (effect params — scalar whatever the param is named)', () => {
+  it('rejects short key IDs before they can poison a native export', () => {
+    for (const id of ['s1', 'k1', '', 12, null, undefined]) {
+      const track = keyed([{ id, t_us: 0, value: 0, ...SIDES, segment: { kind: 'Linear' } }])
+      expect(() => parseAnimatedF64(track)).toThrow(/keyframe\[0\]\.id not a UUID/)
+      expect(() => parseAnimatedTrack(track, 'opacity')).toThrow(/keyframe\[0\]\.id not a UUID/)
+    }
+  })
   it('accepts a Static number and a keyframed number track', () => {
     expect(parseAnimatedF64({ mode: 'Static', value: 8 })).toEqual({ mode: 'Static', value: 8 })
-    const t = keyed([{ id: 'x', t_us: 0, value: 0, ...SIDES, segment: { kind: 'Linear' } }], { before: 'Hold', after: 'Hold' })
+    const t = keyed([{ id: '00000000-0000-0000-0000-000000000003', t_us: 0, value: 0, ...SIDES, segment: { kind: 'Linear' } }], { before: 'Hold', after: 'Hold' })
     expect(parseAnimatedF64(t)).toEqual(t)
   })
   it('rejects a colour value — an effect param named color is still a number', () => {

@@ -565,3 +565,6 @@
 }
 
 .sclip-review-status { padding: 4px 10px; font-size: 11px; color: #a1a1aa; background: #141414; border-bottom: 1px solid #27272a; flex: 0 0 auto; }
+.sclip-background-feedback { font-size: 12px; padding: 4px 10px; max-height: 180px; overflow: auto; border-bottom: 1px solid #333; }
+.sclip-background-feedback summary { cursor: pointer; }
+.sclip-background-feedback p { margin: 6px 0; }

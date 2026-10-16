@@ -1,9 +1,11 @@
 import { shotCompute } from './state/shotCompute.js'
 import { createAudioUnderstanding, managedAudioPaths, prepareAudioRuntime } from './sclip/audioUnderstanding'
+import { createLocalGeneration } from './sclip/localGeneration'
 import path from 'node:path'
 import { sourceSignature } from './state/mutations/textCorrection.js'
 import { locateLayer } from './state/mutations/helpers.js'
 import fs from 'node:fs'
+import { writeTextAtomically } from './atomicTextFile.js'
 import os from 'node:os'
 import { Readable } from 'node:stream'
 import { createRequire } from 'node:module'
@@ -484,7 +486,7 @@ app.whenReady().then(async () => {
   const atomicFs = {
     exists: (p: string) => fs.existsSync(p),
     readFile: (p: string) => fs.readFileSync(p, 'utf8'),
-    writeFile: (p: string, t: string) => fs.writeFileSync(p, t, 'utf8'),
+    writeFile: (p: string, t: string) => writeTextAtomically(fs, p, t),
     rename: (a: string, b: string) => fs.renameSync(a, b),
     mkdirp: (d: string) => { fs.mkdirSync(d, { recursive: true }) },
   }
@@ -522,7 +524,7 @@ app.whenReady().then(async () => {
     settings: appSettings,
     fs: {
       mkdirp: (d: string) => { fs.mkdirSync(d, { recursive: true }) },
-      writeFile: (p: string, t: string) => fs.writeFileSync(p, t, 'utf8'),
+      writeFile: (p: string, t: string) => writeTextAtomically(fs, p, t),
       rm: (p: string) => { fs.rmSync(p, { force: true }) },
     },
     join: path.join,
@@ -694,7 +696,7 @@ app.whenReady().then(async () => {
   const nodeFs = {
     exists: (p: string) => fs.existsSync(p),
     readFile: (p: string) => fs.readFileSync(p, 'utf8'),
-    writeFile: (p: string, t: string) => fs.writeFileSync(p, t, 'utf8'),
+    writeFile: (p: string, t: string) => writeTextAtomically(fs, p, t),
     mkdirp: (d: string) => { fs.mkdirSync(d, { recursive: true }) },
     copyFile: (s: string, d: string) => fs.copyFileSync(s, d),
     readdir: (d: string) => fs.readdirSync(d) as string[],
@@ -1044,15 +1046,38 @@ app.whenReady().then(async () => {
 
   app.once('before-quit', () => backgroundReviewer.dispose())
 
+  const { LiveFeedback } = await import('./sclip/reviewer/liveFeedback.js')
+  const { createLocalFeedbackObserver } = await import('./sclip/reviewer/localFeedbackObserver.js')
+  const audioUnderstanding = createAudioUnderstanding(() => managedAudioPaths(dataRoot.downloadsDir))
+  const liveFeedback = new LiveFeedback({
+    actor: tsHost.actor,
+    opening: () => tsHost?.agent?.snapshot().workspace_id,
+    enabled: process.platform === 'darwin' && process.arch === 'arm64' && process.env.SCLIP_BACKGROUND_FEEDBACK !== '0',
+    observe: createLocalFeedbackObserver({
+      window: () => mainWindow && !mainWindow.isDestroyed() ? mainWindow : null,
+      vision: getVisionSidecar(), understand: audioUnderstanding.understand,
+    }),
+  })
+  app.once('before-quit', () => liveFeedback.dispose())
+
   const mcpHost = await startMcpHost(backend, {
+    localGeneration: process.platform === 'darwin' && process.arch === 'arm64' ? createLocalGeneration({
+      root: process.env.SCLIP_GENERATION_MODELS_DIR ?? path.join(app.getPath('userData'), 'generation-models'),
+      worker: app.isPackaged ? path.join(process.resourcesPath, 'vision', 'sidecar', 'generation_worker.py') : path.resolve(__dirname, '../../src/vision/sidecar/generation_worker.py'),
+      releaseIdleVision: async () => {
+        const vision = getVisionSidecar(), status = await vision.status()
+        if (status.modelLoaded && status.state !== 'ready') throw new Error('Local vision is busy; retry generation after the inspection finishes')
+        if (status.modelLoaded) await vision.unloadModel()
+      },
+    }) : undefined,
     listSpeechVoices: listLocalSpeechVoices,
-    audioUnderstanding: createAudioUnderstanding(() => managedAudioPaths(dataRoot.downloadsDir)),
+    audioUnderstanding,
     triageToolFailure: createToolFailureRecovery(jevDecide, () => process.env.SCLIP_FAILURE_JEV_AUTHORIZED === '1' && !!jevCredential()),
     getTsHost: () => tsHost,
     getActiveWindow: () => mainWindow && !mainWindow.isDestroyed() ? mainWindow : null,
     getPreferredEngine,
     getVlm,
-    getReviewerSummary: () => backgroundReviewer.getSummary(),
+    getReviewerSummary: () => ({ ...backgroundReviewer.getSummary(), live_feedback: liveFeedback.snapshot() }),
     reviewAtCompletion: signal => backgroundReviewer.runReview(signal),
     sourceObservationIndex,
     creatorStyleStore: creatorStyleStore ?? undefined,
@@ -1443,6 +1468,14 @@ app.whenReady().then(async () => {
       return testHermesConnection(profile, tag => keys[tag], app.isPackaged ? {} : process.env)
     }
     if (channel === 'sclip_get_review_disposition') return mcpHost.reviewDisposition()
+    if (channel === 'sclip_get_background_feedback') return { ...backgroundReviewer.getSummary(), live_feedback: liveFeedback.snapshot() }
+    if (channel === 'sclip_set_background_feedback') {
+      const enabled = (args as { enabled?: unknown })?.enabled
+      if ((args as { project_id?: unknown })?.project_id !== tsHost?.actor.snapshot().project_id) throw new Error('Project changed before feedback setting')
+      if (typeof enabled !== 'boolean') throw new Error('enabled must be boolean')
+      liveFeedback.setEnabled(enabled)
+      return liveFeedback.snapshot()
+    }
     if (channel === 'sclip_get_hermes_status') return getHermesStatus()
     if (channel === 'sclip_open_terminal') {
       const { projectId, sessionId, cols, rows } = args as { projectId: string; sessionId: string; cols?: number; rows?: number }

@@ -16,7 +16,10 @@ export function selectCreatorMemory(doc:CreatorMemoryDocument,project:string,req
 
  const all=doc.preferences.filter(p=>creatorPreferenceIsLive(doc,creator.id,p.id)&&p.creatorId===creator.id&&!['disabled','superseded'].includes(p.status)&&applies(p.scope))
  const sorted=all.sort((a,b)=>{
-  const rank=(p:typeof a)=> (p.approved&&(p.scope.kind!=='creator'||matches(p.hypothesis))?4:p.scope.kind==='project'?3:p.scope.kind==='series'?2:p.approved?1:0)
+  // Scope order is the contract in MEMORY_CONTEXT_NOTICE. Authority and
+  // relevance only order items within a scope; an approved global preference
+  // cannot outrank an applicable project-specific direction.
+  const rank=(p:typeof a)=> (p.scope.kind==='project'?30:p.scope.kind==='series'?20:10)+(p.approved?2:0)+(matches(p.hypothesis)?1:0)
   return rank(b)-rank(a)||Number(!!b.approved)-Number(!!a.approved)||matches(b.hypothesis)-matches(a.hypothesis)||b.updated.localeCompare(a.updated)||a.id.localeCompare(b.id)
  })
  const preferences=sorted.slice(0,8).map(p=>({id:p.id,version:p.version,scope:p.scope,hypothesis:p.hypothesis,origin:p.origin,status:p.status,authority:p.approved?'creator':'foreground_inference',applicability:p.applicability,exception_to:p.exceptionTo,exception_version:p.exceptionVersion,

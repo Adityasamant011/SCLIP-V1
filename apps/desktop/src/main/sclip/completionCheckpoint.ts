@@ -1,5 +1,5 @@
 import type { ActorHandle } from '../state/actor.js'
-import { completionReview, completionDisposition, setEditingBrief, type CompletionReview } from './completionReview.js'
+import { completionReview, completionDisposition, setEditingBrief, requiresDeliveryReview, type CompletionReview } from './completionReview.js'
 import { validateOutputState, requiredRenderedDimensions, sourceFingerprint, deliveryProofValid, type DeliveryProof } from './finalOutput.js'
 import { reviewState } from './evidenceCoordinates.js'
 import { currentCritique } from './reviewer/currentCritique.js'
@@ -112,6 +112,13 @@ export class CompletionCheckpoint {
       entry.lifecycle={status,turn_id:event.turn_id,termination,reason:'Native Hermes stopped without a normal completed task; output remains unverified.'}
       delete entry.delivery;this.deps.endWork(binding);return completionDisposition(c.actor.snapshot(),this.sessions)
     }
+    // Hermes's on_session_end is a conversational-turn event, not an assertion
+    // that media was authored. Never manufacture an editing assignment here.
+    if(!requiresDeliveryReview(c.actor.snapshot(),entry) && !c.pending && event.background_jobs_pending===false){
+      entry.lifecycle={status:'response_only',turn_id:event.turn_id,termination,reason:'Native response finished without an editing deliverable; no media completion is claimed.'}
+      delete entry.delivery;this.deps.endWork(binding)
+      return completionDisposition(c.actor.snapshot(),this.sessions)
+    }
     const facts=validateOutputState(c.actor.snapshot(),entry.requirements,entry.requirement)
     const state=reviewState(c.actor.snapshot()),epoch=entry.epoch??0,sources=sourceFingerprint(c.actor.snapshot())
     const problems=[...facts.errors]
@@ -160,7 +167,7 @@ export class CompletionCheckpoint {
   }
   interrupt(binding:TerminalBinding,reason:string,cancelled=false) {
     this.abortRequests(binding)
-    try {const c=this.current(binding),entry=completionReview(c.actor.snapshot(),this.sessions);if(entry.lifecycle?.status==='completed'){binding.closed=true;return}entry.lifecycle={status:cancelled?'cancelled':'interrupted',turn_id:binding.activeTurn??'',termination:reason,reason:'Native process exited/restarted without a verified completion.'};delete entry.delivery;this.deps.endWork(binding)}catch{/* Old opening cannot affect the new project. */}
+    try {const c=this.current(binding),entry=completionReview(c.actor.snapshot(),this.sessions);if(entry.lifecycle?.status==='completed'||entry.lifecycle?.status==='response_only'){binding.closed=true;return}entry.lifecycle={status:cancelled?'cancelled':'interrupted',turn_id:binding.activeTurn??'',termination:reason,reason:'Native process exited/restarted without a verified completion.'};delete entry.delivery;this.deps.endWork(binding)}catch{/* Old opening cannot affect the new project. */}
     binding.closed=true
   }
   close(){for(const binding of this.requests.keys())this.abortRequests(binding);this.unsubscribe?.()}

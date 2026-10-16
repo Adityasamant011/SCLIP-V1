@@ -53,4 +53,11 @@ describe("credential persistence", () => {
     expect(() => setKey("openai", "SCLIP_TEST_SECRET_DO_NOT_LEAK_12345")).toThrow("Secure OS key storage");
     expect(disk.files.size).toBe(0);
   });
+  it("never deletes encrypted keys from disk when decryption fails", () => {
+    setKey("openai", "valid-key");
+    disk.files.set(target, JSON.stringify({ ...JSON.parse(disk.files.get(target)!), lockedKey: "invalid" }));
+    expect(loadAllKeys()).toEqual({ openai: "valid-key" });
+    const rawOnDisk = JSON.parse(disk.files.get(target)!);
+    expect(rawOnDisk).toHaveProperty("lockedKey");
+  });
 });

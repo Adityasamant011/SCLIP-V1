@@ -2,6 +2,7 @@ import { SCHEMA_VERSION, defaultSettings, type Animated, type Link, type Project
 import { frameGrid, gridForLayerKind, snapOnGrid, snapUpOnGrid, type Grid } from './snap'
 import { scaleTracksTwins } from './mutations/scaleLink'
 import { positionProblem } from '../../shared/position'
+import { isUuid, uuidV7Gen } from './ids'
 
 function serializeLink(g: Link): unknown {
   const out: Record<string, unknown> = { id: g.id, members: [...g.members].sort() }
@@ -33,6 +34,9 @@ export interface GridRepair {
 }
 
 export interface ParseProjectOptions {
+  /** Historical bulk-animation writes accepted labels where Rust requires UUIDs.
+   * Report identity-only repair; no key time/value/easing is changed. */
+  onKeyframeIdRepair?: (repairs: readonly KeyframeIdRepair[]) => void
   /** Called once, with every field the grid repair changed, when the load pass
    *  actually repaired something — so a silently-migrated project is visible
    *  rather than mysterious. Defaults to a `console.warn` one-liner; the live host
@@ -40,6 +44,45 @@ export interface ParseProjectOptions {
    *  `workspace-orchestrator.ts`, which must CAPTURE these and emit only after
    *  `commitWorkspace` has rotated the per-workspace bus), or a no-op to silence it. */
   onGridRepair?: (repairs: readonly GridRepair[]) => void
+}
+
+export interface KeyframeIdRepair { from: string; to: string }
+
+/** Key IDs have no foreign-key references in project state. Replace only invalid
+ * string IDs in engine-owned animation slots, never arbitrary Motif props or
+ * metadata. Missing/non-string IDs remain corrupt input, rather than inventing
+ * identities for a malformed record. Existing UUIDs stay byte-identical. */
+function repairKeyframeIds(o: Record<string, unknown>): KeyframeIdRepair[] {
+  const repairs: KeyframeIdRepair[] = []
+  const gen = uuidV7Gen()
+  const repair = (value: unknown): void => {
+    if (!value || typeof value !== 'object') return
+    const a = value as Record<string, unknown>
+    if (a.mode !== 'Keyframed' || !Array.isArray(a.value)) return
+    for (const k of a.value) {
+      if (!k || typeof k !== 'object' || typeof k.id !== 'string' || isUuid(k.id)) continue
+      const from = k.id
+      k.id = gen()
+      repairs.push({ from, to: k.id })
+    }
+  }
+  forEachWireLayerParams(o, (p) => {
+    for (const key of ['opacity', 'color', 'gain_db', 'pan']) repair(p[key])
+    const t = p.transform as Record<string, unknown> | undefined
+    if (t && typeof t === 'object') {
+      for (const key of ['scale_x', 'scale_y', 'rotation_deg', 'anchor_x', 'anchor_y']) repair(t[key])
+      const pos = t.position as Record<string, unknown> | undefined
+      if (pos && typeof pos === 'object') for (const key of ['x', 'y', 'progress']) repair(pos[key])
+    }
+  })
+  for (const comp of wireCompositions(o)) {
+    for (const track of (comp.tracks as Array<{ layers?: Array<{ effects?: Array<{ params?: Record<string, unknown> }> }> }>) ?? []) {
+      for (const layer of track.layers ?? []) for (const fx of layer.effects ?? []) {
+        for (const value of Object.values(fx.params ?? {})) repair(value)
+      }
+    }
+  }
+  return repairs
 }
 
 /** Human summary of a repair set — shared by the console default and the LogBus row
@@ -518,6 +561,11 @@ export function parseProject(json: unknown, opts: ParseProjectOptions = {}): Pro
   // refused here with a structured error — see the function. Before the twin
   // repair below, which dereferences the record.
   refuseRetiredKeyframeShape(o)
+  const idRepairs = repairKeyframeIds(o)
+  if (idRepairs.length > 0) {
+    if (opts.onKeyframeIdRepair) opts.onKeyframeIdRepair(idRepairs)
+    else console.warn(`[keyframe-id-repair] replaced ${idRepairs.length} invalid keyframe IDs on load; animation unchanged`, idRepairs)
+  }
   // Additive settings fields (prefer_proxies/proxy_overrides/shot_review, added
   // later WITHOUT a schema bump) deserialize as absent on projects saved before
   // they existed.

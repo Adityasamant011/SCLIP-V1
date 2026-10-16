@@ -1,7 +1,8 @@
 import {describe,it,expect,vi} from 'vitest'
-import {mkdtempSync,writeFileSync,rmSync,readdirSync} from 'node:fs'
+import {mkdtempSync,writeFileSync,rmSync,readdirSync,existsSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
+import {spawnSync} from 'node:child_process'
 import {listLocalSpeechVoices,synthesizeSpeechLocally,runTtsCommand,type TtsRuntime} from './localTts'
 function fixture() {
  const dir=mkdtempSync(join(tmpdir(),'sclip-tts-unit-')),model=join(dir,'model'),voices=join(dir,'voices');writeFileSync(model,'model');writeFileSync(voices,'voices')
@@ -12,6 +13,16 @@ function fixture() {
  });const rt:TtsRuntime={python:'python',worker:'worker',model,voices,edge:'edge',run};return {dir,run,rt}
 }
 describe('local speech provenance/cache',()=>{
+ it.skipIf(spawnSync(process.env.SCLIP_TEST_PYTHON ?? 'python3',['--version'],{stdio:'ignore'}).error !== undefined)('runs the actual Python command without creating __pycache__ in a script directory',async()=>{
+  const dir=mkdtempSync(join(tmpdir(),'sclip-tts-python-bytecode-'))
+  try {
+   writeFileSync(join(dir,'sclip_bytecode_probe.py'),'VALUE = 42\n')
+   const script='import sys; sys.path.insert(0, sys.argv[1]); import sclip_bytecode_probe; print(sys.dont_write_bytecode)'
+   const output=await runTtsCommand(process.env.SCLIP_TEST_PYTHON ?? 'python3',['-c',script,dir])
+   expect(output.trim()).toBe('True')
+   expect(existsSync(join(dir,'__pycache__'))).toBe(false)
+  } finally { rmSync(dir,{recursive:true,force:true}) }
+ })
  it('reports actual voice, validates cache integrity and preserves provenance',async()=>{
   const f=fixture();try{const a=await synthesizeSpeechLocally({text:'Synthetic',voice:'nova'},f.dir,f.rt),b=await synthesizeSpeechLocally({text:'Synthetic',voice:'nova'},f.dir,f.rt)
    expect(a.synthesis.resolved_voice).toBe('af_nicole');expect(b.synthesis).toEqual(a.synthesis);expect(b.cached).toBe(true);expect(f.run).toHaveBeenCalledTimes(2)

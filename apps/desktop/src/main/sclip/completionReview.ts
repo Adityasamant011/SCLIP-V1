@@ -14,10 +14,12 @@ export interface CompletionReview {
   renderedSources?: string
   reviewedEpoch?: number
   delivery?: { state: string; epoch: number; sources: string; proof: DeliveryProof }
-  lifecycle?: { status: 'running' | 'completed' | 'review_required' | 'incomplete' | 'interrupted' | 'cancelled'; turn_id: string; termination: string; reason?: string }
+  lifecycle?: { status: 'running' | 'response_only' | 'completed' | 'review_required' | 'incomplete' | 'interrupted' | 'cancelled'; turn_id: string; termination: string; reason?: string }
   followupCount?: number
   requirement?: DurationRequirement
   correctionRequests?: number
+  /** Editing was undertaken; ordinary conversation does not enroll a delivery. */
+  deliveryRequested?: boolean
   baseline: string
   guard: RevisionLoopGuard
   started: boolean
@@ -50,8 +52,16 @@ export function outputState(project: Project): string {
     media: Object.values(project.media_pool).filter(m => used.has(m.id)).map(m => ({id:m.id,hash:m.file_hash_blake3,metadata:m.metadata})) },
     (key, value) => ['label', 'markers'].includes(key) ? undefined : value)
 }
+/** No greeting/intent classifier. Actual work and explicit review enroll
+ * delivery checks. A response without these
+ * is never a verified deliverable, even if its prose claims success. */
+export function requiresDeliveryReview(project: Project, entry: CompletionReview): boolean {
+  return !!(entry.deliveryRequested || entry.started ||
+    entry.guard.status.phase !== 'idle' || entry.baseline !== outputState(project))
+}
 export function completionDisposition(project: Project, sessions: Map<string, CompletionReview>) {
   const entry = sessions.get(project.project_id)
+  if(entry?.lifecycle?.status==='response_only' && !requiresDeliveryReview(project,entry))return {...entry.lifecycle,readiness:'unverified',scope:'Conversational response only; no editing deliverable or media readiness is certified.'}
   const facts=validateOutputState(project,entry?.requirements,entry?.requirement)
   if(entry?.lifecycle && ['running','interrupted','cancelled'].includes(entry.lifecycle.status))return {...entry.lifecycle,readiness:'unverified',current_output:facts.current_output}
   if(entry?.limitation || entry?.lifecycle?.status==='incomplete')return {status:'incomplete',readiness:'unverified',reason:entry.limitation??entry.lifecycle?.reason,current_output:facts.current_output}
@@ -70,12 +80,13 @@ export function setEditingBrief(project: Project, sessions: Map<string, Completi
   if(brief!==null && !/^\s*continue\b/i.test(brief))entry.originalBrief=brief.slice(0,8000)
   if(brief===null)delete entry.requirements
   if(brief===null)delete entry.originalBrief
-  const stopped=!!entry.lifecycle&&['cancelled','interrupted','incomplete'].includes(entry.lifecycle.status)
+  const stopped=!!entry.lifecycle&&['response_only','cancelled','interrupted','incomplete'].includes(entry.lifecycle.status)
   delete entry.lifecycle;delete entry.delivery
   const finished=stopped||entry.guard.status.phase==='done'||!!entry.limitation
   entry.requirement=brief===null?undefined:fresh??(finished?undefined:entry.requirement)
   if(fresh||finished)entry.correctionRequests=0
   if(finished){
+    delete entry.deliveryRequested
     entry.baseline=outputState(project);entry.guard=new RevisionLoopGuard();entry.started=false
     delete entry.reviewedState;delete entry.reviewedEpoch;delete entry.limitation;delete entry.decision
     entry.followupCount=0

@@ -2,8 +2,11 @@ import type { Project } from '../state/model.js'
 import { validateOutputState, requiredRenderedDimensions, sourceFingerprint, deliveryProofValid, verifyDelivery, type DeliveryProof } from '../sclip/finalOutput.js'
 import { currentOutput } from '../sclip/editingBrief.js'
 import type { AudioUnderstandingBackend } from '../sclip/audioUnderstanding'
-import { completionReview, completionDisposition, outputState, hasAuthoredOutput, type CompletionReview } from '../sclip/completionReview.js'
+import type { LocalGeneration } from '../sclip/localGeneration'
+import { LOCAL_GENERATION_TOOLS, callLocalGeneration } from '../sclip/localGenerationTools'
+import { completionReview, completionDisposition, outputState, hasAuthoredOutput, requiresDeliveryReview, type CompletionReview } from '../sclip/completionReview.js'
 import { currentCritique } from '../sclip/reviewer/currentCritique.js'
+import { feedbackContext } from '../sclip/reviewer/feedbackContext.js'
 import { inspectRenderedAudio, decodeRenderedPcm } from '../sclip/renderedAudioEvidence'
 import { inspectTimelineTemporalWindow } from '../sclip/timelineTemporalEvidence'
 import { beginModelUse } from "../model-usage";
@@ -1229,6 +1232,7 @@ export const AUDIO_UNDERSTANDING_STATUS_TOOL = {name:'get_audio_understanding_st
  *  positionals: `log` is the fourth and every one of them is optional, and each
  *  omitted seam must keep the behaviour it had before it existed. */
 export interface McpServerOptions {
+  localGeneration?: LocalGeneration
   /** Native connection only: acquire a lease for its current request/turn. */
   captureRequestAuthority?: () => import('../sclip/completionCheckpoint.js').RequestAuthority
   audioUnderstanding?: AudioUnderstandingBackend
@@ -1305,6 +1309,7 @@ export async function registeredMcpTools(backend: Backend, opts: McpServerOption
     ...MCP_TOOL_DEFS,
     ...MOTIF_TOOL_DEFS,
     ...(opts.listSpeechVoices ? [SPEECH_VOICES_TOOL] : []),
+    ...(opts.localGeneration ? LOCAL_GENERATION_TOOLS : []),
     ...(opts.audioUnderstanding ? [AUDIO_UNDERSTANDING_STATUS_TOOL] : []),
     CREATOR_STYLE_TOOL,
     EDITORIAL_PACKET_TOOL,
@@ -1357,6 +1362,7 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
     try { opts.log?.emit({ level: 'debug', category: { kind: 'Mcp' }, source: { kind: 'System' }, message: 'Review lifecycle', details: { review_tool: tool, review_session: revisionGuard.status } }) } catch {}
   }
   const connectionId = opts.connectionId ?? randomUUID()
+  let lastLiveFeedback = ''
   const track: typeof withLog = (method, handler, deps, client) => withLog(method, (req, extra) => {
     const service = getTsHost()?.agent
     const params = (req.params ?? {}) as Record<string, unknown>
@@ -1365,6 +1371,19 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
     const execute = async () => {
       const result=await handler(req,extra)
       const ts=getTsHost(),snapshot=ts?.actor.snapshot()
+      if (method === 'tools/call' && snapshot && snapshot.project_id === initialProjectId && !(result as any)?.isError && Array.isArray((result as any).content)) {
+        try {
+        const feedback = feedbackContext(snapshot, opts.getReviewerSummary?.().live_feedback)
+        const key = feedback ? `${feedback.state_version}:${feedback.epoch}` : ''
+        if (feedback && key !== lastLiveFeedback) {
+          // The same current native lease gate used by review guidance. Never
+          // append observations from a superseding request/project opening.
+          const authority = opts.captureRequestAuthority?.()
+          try { authority?.(); (result as any).content.push({ type: 'text', text: JSON.stringify({ background_feedback: feedback }) }); lastLiveFeedback = key }
+          finally { authority?.release() }
+        }
+        } catch { /* Optional feedback cannot turn a committed edit into a failed call. */ }
+      }
       if(method==='tools/call'&&snapshot&&snapshot.project_id===initialProjectId&&
           (revisionGuard.status.phase!=='idle'||['end_agent_session','revision_control','record_issue','withdraw_issue'].includes(tool))&&Array.isArray((result as any).content)){
         // Do not publish a new opening's guidance to an expired native lease.
@@ -1400,10 +1419,11 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
       const completion = ordinaryCompletion && snapshot ? completionReview(snapshot, completionSessions) : undefined
       if (completion) revisionGuard = completion.guard
       const restartCompletion = name === 'begin_agent_session' && completion && (revisionGuard.status.phase === 'done' || completion.limitation)
-      if (name === 'end_agent_session' && snapshot && completion) {
+      if (completion && name === 'begin_agent_session') completion.deliveryRequested = true
+      if (name === 'end_agent_session' && snapshot && completion && requiresDeliveryReview(snapshot,completion)) {
         const validation=validateOutputState(snapshot,completion.requirements,completion.requirement)
         const output=validation.current_output
-        if(!validation.valid && (completion.requirements || completion.started || hasAuthoredOutput(snapshot))){
+        if(!validation.valid && (completion.deliveryRequested || completion.requirements || completion.started || hasAuthoredOutput(snapshot))){
           completion.correctionRequests=(completion.correctionRequests??0)+1
           const exhausted=completion.correctionRequests>2||typeof args.review_unavailable_reason==='string'
           if(exhausted){
@@ -1543,6 +1563,9 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
       // must remain available while Hermes is considering/verifying a repair.
       const mutation = isRevisionMutation(name) && !(name === 'synthesize_speech' && args.preview_only === true)
       if (mutation) {
+        // Track even failed editing attempts and edits later undone. Imports
+        // alone put media in the pool; they do not promise a timeline output.
+        if(completion && !['import_media','import_external_media'].includes(name)) completion.deliveryRequested = true
         const refusal = revisionGuard.beforeMutation(reviewState(getTsHost()?.actor.snapshot()))
         if (refusal) return { isError: true, content: [{ type: 'text', text: JSON.stringify({ error: refusal, review_session: revisionGuard.status }) }] } as ServerResult
       }
@@ -1559,6 +1582,10 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
         if (Object.keys(args).length) return revisionToolError('list_speech_voices accepts no arguments')
         if (!opts.listSpeechVoices) return revisionToolError('Local voice catalog unavailable')
         return {content: [{type: 'text', text: JSON.stringify(await opts.listSpeechVoices())}]} as ServerResult
+      }
+      if (name === 'get_local_generation_status') {
+        if (Object.keys(args).length || !opts.localGeneration) return revisionToolError('Local generation status unavailable or invalid arguments')
+        return {content: [{type: 'text', text: JSON.stringify(opts.localGeneration.status())}]} as ServerResult
       }
       const evidenceState = reviewState(getTsHost()?.actor.snapshot())
       const evidenceHost = getTsHost(), evidenceActor = evidenceHost?.actor
@@ -1583,7 +1610,11 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
       try {
         requestSignal?.throwIfAborted()
         assertAuthority?.()
-        result = await handleCallTool(backend, getTsHost, name, args, getPreferredEngine, getVlm, peaksPathFor, opts.getActiveWindow, opts.getReviewerSummary, opts.sourceObservationIndex, opts.externalMediaService, externalEnabled, requestSignal, opts.audioUnderstanding, assertAuthority)
+        if (name === 'generate_image' || name === 'generate_music') {
+          if (!opts.localGeneration) throw new Error('Optional local generation is unavailable')
+          const generated = await callLocalGeneration(opts.localGeneration, getTsHost, name, args, requestSignal, assertAuthority)
+          result = {content: [{type: 'text', text: JSON.stringify(generated)}]} as ServerResult
+        } else result = await handleCallTool(backend, getTsHost, name, args, getPreferredEngine, getVlm, peaksPathFor, opts.getActiveWindow, opts.getReviewerSummary, opts.sourceObservationIndex, opts.externalMediaService, externalEnabled, requestSignal, opts.audioUnderstanding, assertAuthority)
       } finally { unsubscribeInspection?.(); assertAuthority?.release() }
       if (restartCompletion && completion && !('isError' in result && result.isError)) {
         completion.baseline = outputState(getTsHost()!.actor.snapshot())

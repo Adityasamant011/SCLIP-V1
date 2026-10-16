@@ -29,22 +29,18 @@ function writeStored(s: Stored): void {
   fs.renameSync(target + '.tmp', target)
 }
 
-/// Decrypt every stored key. A blob that fails to decrypt (OS backend rotated,
-/// corrupt entry) is dropped from the file and skipped — never throws.
+/// Decrypt every stored key. A blob that fails to decrypt (OS backend locked,
+/// transient error, corrupt entry) is skipped in memory — never deletes from disk and never throws.
 export function loadAllKeys(): Record<string, string> {
   const stored = readStored()
   const out: Record<string, string> = {}
-  let mutated = false
   for (const [provider, b64] of Object.entries(stored)) {
     try {
       out[provider] = safeStorage.decryptString(Buffer.from(b64, 'base64'))
     } catch {
-      delete stored[provider]
-      mutated = true
+      // Non-destructive: skip key in memory if decryption fails.
+      // Preserves encrypted credential on disk across locked keychains or transient OS errors.
     }
-  }
-  if (mutated) {
-    try { writeStored(stored) } catch { /* Reading usable keys never fails on cleanup. */ }
   }
   return out
 }

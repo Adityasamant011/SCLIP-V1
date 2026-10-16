@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto'
 import * as pty from 'node-pty'
 import { readHermesProfile, writeHermesProfile, initializeCreatorHermesControls, assertForegroundHermesConfiguration } from './hermesRuntime.js'
 import { createHermesOutputRedactor, hermesBaseEnvironment } from './hermesSecrets.js'
+import { pythonArgsWithoutBytecode } from '../pythonRuntime.js'
 import type { HermesProfileConfig } from './hermesRuntime.js'
 
 // The WeftCut editor tools arrive through the authenticated MCP server in the
@@ -40,6 +41,7 @@ export interface HermesTerminalOptions {
 
 interface TerminalSession {
   mode: 'edit' | 'review'
+  creatorKey?: string
   lifecycle?: HermesLifecycleLease
   firstTurnAt?: number
   followups: number
@@ -71,19 +73,28 @@ export class HermesTerminalRuntime {
 
   async ensure(projectId: string, sessionId: string, cols = 100, rows = 30, mode: 'edit' | 'review' = 'edit'): Promise<TerminalSnapshot> {
     await this.options.assertSession(projectId, sessionId)
+    const creatorKey = this.options.getCreatorSessionKey?.(projectId)
     const key = this.key(projectId, sessionId)
     const existing = this.sessions.get(key)
     if (existing) {
-      if (existing.mode !== mode) throw new Error('Use a new session ID or restart explicitly when changing editing/review intent')
-      // A dock/tab remount can have a different width. Reattach to the same
-      // conversation with the current geometry, rather than its old PTY size.
-      existing.pty.resize(this.dimension(cols, 100), this.dimension(rows, 30))
-      return { history: existing.history, sequence: existing.sequence }
+      if (existing.creatorKey !== creatorKey) {
+        // A creator reset/change must not inherit the prior creator's live PTY,
+        // even when the renderer reuses its project/session identifiers.
+        existing.lifecycle?.interrupt('creator_context_changed')
+        existing.lifecycle?.close()
+        try { existing.pty.kill() } catch { /* already gone */ }
+        this.sessions.delete(key)
+      } else {
+        if (existing.mode !== mode) throw new Error('Use a new session ID or restart explicitly when changing editing/review intent')
+        // A dock/tab remount can have a different width. Reattach to the same
+        // conversation with the current geometry, rather than its old PTY size.
+        existing.pty.resize(this.dimension(cols, 100), this.dimension(rows, 30))
+        return { history: existing.history, sequence: existing.sequence }
+      }
     }
-    const launch = this.resolveLaunch()
+    const launch = this.resolveLaunch(projectId, sessionId, creatorKey)
     const baseHome = path.join(this.options.userDataPath, 'sclip-hermes')
     const home = this.options.getCreatorHome?.(baseHome, projectId) ?? baseHome
-    const creatorKey = this.options.getCreatorSessionKey?.(projectId)
     fs.mkdirSync(home, { recursive: true, mode: 0o700 })
     const mcp = this.options.getMcpInfo()
     const review = mode === 'review' ? await startAutonomousReview(mcp, projectId) : null
@@ -140,6 +151,7 @@ export class HermesTerminalRuntime {
       // Hermes already supports this hint; avoid a startup OSC query whose
       // delayed response can land in the editable prompt. Matches xterm theme.
       HERMES_TUI_BACKGROUND: '#0b0d12',
+      PYTHONDONTWRITEBYTECODE: '1',
     }
     delete env.TERMINAL_CWD
     const chatArgs = [
@@ -169,7 +181,7 @@ export class HermesTerminalRuntime {
       cwd: launch.cwd,
       env: env as Record<string, string>,
     })
-    const session: TerminalSession = { pty: terminal, mode, lifecycle, followups:0,inputGeneration:0,inputReady:false,readyTail:'',cancelled:false, submittedPrompt: new SubmittedPrompt(), history: '', sequence: 0 }
+    const session: TerminalSession = { pty: terminal, mode, creatorKey, lifecycle, followups:0,inputGeneration:0,inputReady:false,readyTail:'',cancelled:false, submittedPrompt: new SubmittedPrompt(), history: '', sequence: 0 }
     this.sessions.set(key, session)
     const redactor = createHermesOutputRedactor([...Object.values(providerEnv), mcp.bearer_token,...(lifecycle?[lifecycle.token]:[])])
     terminal.onData(data => {
@@ -224,7 +236,7 @@ export class HermesTerminalRuntime {
   async input(projectId: string, sessionId: string, data: string): Promise<void> {
     await this.options.assertSession(projectId, sessionId)
     if (Buffer.byteLength(data, 'utf8') > MAX_INPUT_BYTES) throw new Error('Terminal input is too large')
-    const session = this.sessions.get(this.key(projectId, sessionId))
+    const session = this.getCurrentCreatorSession(projectId, sessionId)
     if (!session) throw new Error('Open the Hermes terminal before sending input')
     session.inputGeneration++;delete session.pendingFollowup
     if(data.includes('\x03')){session.cancelled=true;session.lifecycle?.cancel?.()}
@@ -237,7 +249,7 @@ export class HermesTerminalRuntime {
 
   async resize(projectId: string, sessionId: string, cols: number, rows: number): Promise<void> {
     await this.options.assertSession(projectId, sessionId)
-    const session = this.sessions.get(this.key(projectId, sessionId))
+    const session = this.getCurrentCreatorSession(projectId, sessionId)
     if (session) session.pty.resize(this.dimension(cols, 100), this.dimension(rows, 30))
   }
 
@@ -253,6 +265,16 @@ export class HermesTerminalRuntime {
     const data=`\r\n[Sclip] ${text}\r\n`
     session.history=`${session.history}${data}`.slice(-MAX_HISTORY_BYTES)
     this.options.onOutput({projectId,sessionId,sequence:++session.sequence,data})
+  }
+  private getCurrentCreatorSession(projectId: string, sessionId: string): TerminalSession | undefined {
+    const key = this.key(projectId, sessionId)
+    const session = this.sessions.get(key)
+    if (!session || session.creatorKey === this.options.getCreatorSessionKey?.(projectId)) return session
+    session.lifecycle?.interrupt('creator_context_changed')
+    session.lifecycle?.close()
+    try { session.pty.kill() } catch { /* already gone */ }
+    this.sessions.delete(key)
+    throw new Error('Creator context changed; reopen the Hermes terminal')
   }
   private flushFollowup(session:TerminalSession) {
     const pending=session.pendingFollowup
@@ -273,11 +295,20 @@ export class HermesTerminalRuntime {
     return Number.isInteger(value) && value >= 2 && value <= 500 ? value : fallback
   }
 
-  private resolveLaunch(): LaunchSpec {
+  private resolveLaunch(projectId?: string, sessionId?: string, creatorKey?: string): LaunchSpec {
     if (this.options.isPackaged) {
       const executable = path.join(this.options.resourcesPath, 'hermes', process.platform === 'win32' ? 'hermes.exe' : 'hermes')
       if (!fs.existsSync(executable)) throw new Error('Bundled Hermes runtime is missing')
-      return { command: executable, args: [], cwd: path.dirname(executable) }
+      // The working directory is writable user data, isolated by project,
+      // terminal session, and creator generation. The immutable bundled runtime
+      // remains resolved from resourcesPath and is never used as cwd.
+      const workspaceKey = projectId !== undefined && sessionId !== undefined
+        ? [creatorKey ?? '', projectId, sessionId].join('\u0000')
+        : 'unscoped-runtime'
+      const workspaceId = createHash('sha256').update(workspaceKey).digest('hex')
+      const cwd = path.join(this.options.userDataPath, 'hermes-workspaces', workspaceId)
+      fs.mkdirSync(cwd, { recursive: true, mode: 0o700 })
+      return { command: executable, args: [], cwd }
     }
     const explicit = this.options.executableOverride?.trim()
     if (explicit) {
@@ -294,6 +325,6 @@ export class HermesTerminalRuntime {
       if (this.options.isPackaged) throw new Error('Bundled Hermes runtime is missing')
       throw new Error('Hermes development virtual environment is missing')
     }
-    return { command: python, args: ['-m', 'hermes_cli.main'], cwd: source }
+    return { command: python, args: pythonArgsWithoutBytecode(['-m', 'hermes_cli.main']), cwd: source }
   }
 }

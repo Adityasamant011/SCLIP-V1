@@ -11,6 +11,7 @@ import { remove, writeFile } from "@/bridge/fs";
 import { reveal as revealInShell } from "@/bridge/shell";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { RenderLease, type RenderOrigin } from "./renderLease";
 import { createRenderPresentation } from "./renderPresentation";
 import { createExportLogMirror } from "./exportLog";
 import {
@@ -125,7 +126,7 @@ export function useExportFlow(deps: {
   closeConfirmOpen: boolean;
   setCloseConfirmOpen: React.Dispatch<React.SetStateAction<boolean>>;
   runExportWithSettings: (settings: ExportSettings, path: string,
-    range?: { startUs: number; endUs: number }, origin?: "user" | "inspection", signal?: AbortSignal) => Promise<void>;
+    range?: { startUs: number; endUs: number }, origin?: RenderOrigin, signal?: AbortSignal) => Promise<void>;
   openRenderPlayPopup: (path: string) => Promise<void>;
   revealExportedFile: (path: string) => void;
 } {
@@ -308,20 +309,20 @@ export function useExportFlow(deps: {
   // a finally block. If cleanup itself fails the user's output is
   // still good — we just leave the temps for the next reboot to
   // clear.
-  const renderInFlight = useRef(false);
+  const renderLease = useRef(new RenderLease());
   const runExportWithSettings = useCallback(
-    async (settings: ExportSettings, path: string, range?: { startUs: number; endUs: number }, origin: "user" | "inspection" = "user", requestSignal?: AbortSignal) => {
+    async (settings: ExportSettings, path: string, range?: { startUs: number; endUs: number }, origin: RenderOrigin = "user", requestSignal?: AbortSignal) => {
     requestSignal?.throwIfAborted();
-    if (renderInFlight.current) throw new Error("A render is already running");
-    renderInFlight.current = true;
+    const lease = await renderLease.current.acquire(origin);
     const controller = new AbortController();
     const signal = controller.signal;
     const cancel = () => controller.abort();
     requestSignal?.addEventListener('abort', cancel, {once:true});
-    if (requestSignal?.aborted) cancel();
+    lease.signal.addEventListener('abort', cancel, {once:true});
+    if (requestSignal?.aborted || lease.signal.aborted) cancel();
     const ownedTemps: string[] = [];
     let ownsVideoSink = false;
-    const presentation = createRenderPresentation(origin, setExportState);
+    const presentation = createRenderPresentation(origin === "background" ? "inspection" : origin, setExportState);
     const setRunState = presentation.update;
     let failed = false;
     try {
@@ -972,14 +973,15 @@ export function useExportFlow(deps: {
       throw error;
     } finally {
       requestSignal?.removeEventListener('abort', cancel);
+      lease.signal.removeEventListener('abort', cancel);
       if (signal.aborted) {
         if (ownsVideoSink) await exportVideoSinkCancel().catch(() => {});
         for (const file of ownedTemps) await remove(file).catch(() => {});
       }
-      renderInFlight.current = false;
+      lease.release();
       if (signal.aborted) {
         setRunState(null);
-        if (origin === 'inspection') throw new DOMException('Export cancelled', 'AbortError');
+        if (origin !== 'user') throw new DOMException('Export cancelled', 'AbortError');
         return;
       }
       if (!failed) presentation.finish();

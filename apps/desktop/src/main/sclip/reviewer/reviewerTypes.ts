@@ -36,6 +36,7 @@ export interface TimelineCritiqueIssue {
 }
 
 export interface TimelineReviewSummary {
+  live_feedback?: import('../../../shared/liveFeedback').LiveFeedbackSnapshot
   commit_id: string
   project_id?: string
   composition_id?: string

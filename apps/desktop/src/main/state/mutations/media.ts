@@ -1,16 +1,36 @@
-import type { AudioParams, LayerParams, MediaItem, Project, Track, Uuid } from '../model'
+import type { AudioParams, LayerParams, MediaItem, Project, Track, Transform, Uuid } from '../model'
 import type { DecodeRoute } from '../../../shared/decode-route'
 import type { IdGen } from '../ids'
 import { CommandFailure } from '../errors'
 import { defaultTransform } from './add'
 import { pruneEmptiedTrack, requireLayer } from './helpers'
 import { eachLayer } from '../model'
+import { staticPosition } from '../../../shared/position'
+import { paramDecimals, quantizeParam } from '../quantize'
+
+/** Initial placement only: centered cover is the user's default for new visual
+ * media. Never reapplied on reopen, move, paste or an explicit transform edit.
+ * Unknown dimensions retain the safe identity transform until probing succeeds.
+ */
+export function mediaPlacementTransform(project: Project, media: Uuid, canvas: { width: number; height: number }): Transform {
+  const source = project.media_pool[media]?.metadata.video
+  const w = source?.width, h = source?.height
+  if (typeof w !== 'number' || typeof h !== 'number' ||
+      ![w, h, canvas.width, canvas.height].every(v => Number.isFinite(v) && v > 0)) return defaultTransform()
+  const factor = 10 ** paramDecimals('scale_x')
+  // Round UP on the authored scale lattice: nearest rounding can leave a strip.
+  const scale = Math.ceil(Math.max(canvas.width / w, canvas.height / h) * factor) / factor
+  return { ...defaultTransform(),
+    position: staticPosition(quantizeParam('x', (canvas.width - w * scale) / 2), quantizeParam('y', (canvas.height - h * scale) / 2)),
+    scale_x: { mode: 'Static', value: scale }, scale_y: { mode: 'Static', value: scale },
+  }
+}
 
 /** The canonical VideoClip layer shape. blend_mode
  *  default = Normal, transform default per defaultTransform. */
-export function videoClipParams(media: Uuid, srcInUs: number, srcOutUs: number): LayerParams {
+export function videoClipParams(media: Uuid, srcInUs: number, srcOutUs: number, transform: Transform = defaultTransform()): LayerParams {
   return { kind: 'VideoClip', media, src_in_us: srcInUs, src_out_us: srcOutUs,
-    transform: defaultTransform(), opacity: { mode: 'Static', value: 1 }, crop: null,
+    transform, opacity: { mode: 'Static', value: 1 }, crop: null,
     flip_h: false, flip_v: false, blend_mode: 'Normal', speed: 1, fade_in_us: 0, fade_out_us: 0 }
 }
 /** Standalone Audio layer. AudioRole is
@@ -23,8 +43,8 @@ export function audioParams(media: Uuid, srcInUs: number, srcOutUs: number): Aud
 }
 /** Image overlay (no src range; validator checks
  *  only the media ref). */
-export function imageOverlayParams(media: Uuid): LayerParams {
-  return { kind: 'ImageOverlay', media, transform: defaultTransform(),
+export function imageOverlayParams(media: Uuid, transform: Transform = defaultTransform()): LayerParams {
+  return { kind: 'ImageOverlay', media, transform,
     opacity: { mode: 'Static', value: 1 }, blend_mode: 'Normal', fade_in_us: 0, fade_out_us: 0 }
 }
 

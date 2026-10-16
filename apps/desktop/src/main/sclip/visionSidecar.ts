@@ -16,11 +16,13 @@ import * as crypto from 'crypto'
 import * as fs from 'fs'
 import * as net from 'net'
 import * as path from 'path'
+import { pythonArgsWithoutBytecode, pythonEnvWithoutBytecode } from '../pythonRuntime.js'
 
 // ── Config ────────────────────────────────────────────────────────────────────
 const DEFAULT_MODEL = process.env.SCLIP_VLM_MODEL ?? 'mlx-community/Qwen3-VL-2B-Instruct-4bit'
 const IDLE_TIMEOUT_S = 300 // 5 minutes keep-warm
 const STARTUP_TIMEOUT_MS = 30_000
+const REQUEST_TIMEOUT_MS = 30_000
 const HEALTH_POLL_INTERVAL_MS = 500
 
 const VENV_DIR = path.join(
@@ -42,6 +44,25 @@ function resolveWorkerScript(): string {
 
 const WORKER_SCRIPT = resolveWorkerScript()
 
+export function resolveVisionPythonBinary(venvDir = VENV_DIR, exists: (p: string) => boolean = fs.existsSync): string {
+  const configured = path.join(venvDir, 'bin', 'python3')
+  return exists(configured) ? configured : 'python3'
+}
+
+export function visionWorkerLaunchSpec(pythonBin: string, workerScript: string, model: string, port: number, baseEnv: Record<string, string | undefined> = process.env) {
+  return {
+    command: pythonBin,
+    args: pythonArgsWithoutBytecode([workerScript]),
+    env: pythonEnvWithoutBytecode({
+      ...baseEnv,
+      SCLIP_VLM_MODEL: model,
+      SCLIP_VLM_PORT: String(port),
+      SCLIP_VLM_IDLE_TIMEOUT: String(IDLE_TIMEOUT_S),
+      PYTHONUNBUFFERED: '1',
+    }),
+  }
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 export interface AnalyzeRequest {
   imagePath?:   string
@@ -49,6 +70,8 @@ export interface AnalyzeRequest {
   question:     string
   context?:     string
   resolution?:  'auto' | 'low' | 'high' | 'original'
+  /** Background sensing may only use already-cached model files. */
+  localOnly?: boolean
   maxTokens?:   number
 }
 
@@ -169,11 +192,12 @@ function findFreePort(): Promise<number> {
   })
 }
 
-async function httpPost(url: string, body: unknown): Promise<unknown> {
+async function httpPost(url: string, body: unknown, timeoutMs = REQUEST_TIMEOUT_MS): Promise<unknown> {
   const resp = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(timeoutMs),
   })
   if (!resp.ok) {
     const text = await resp.text()
@@ -182,13 +206,20 @@ async function httpPost(url: string, body: unknown): Promise<unknown> {
   return resp.json()
 }
 
-async function httpGet(url: string): Promise<unknown> {
-  const resp = await fetch(url)
+async function httpGet(url: string, timeoutMs = REQUEST_TIMEOUT_MS): Promise<unknown> {
+  const resp = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) })
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
   return resp.json()
 }
 
 // ── Main class ────────────────────────────────────────────────────────────────
+export interface VisionSidecarRuntime {
+  spawn?: typeof spawn
+  workerScript?: string
+  startupTimeoutMs?: number
+  requestTimeoutMs?: number
+}
+
 export class VisionSidecarManager {
   private proc:         ChildProcess | null = null
   private port:         number | null = null
@@ -198,7 +229,7 @@ export class VisionSidecarManager {
   private readonly model: string
   private readonly queryCache = new BoundedQueryCache()
 
-  constructor(model: string = DEFAULT_MODEL) {
+  constructor(model: string = DEFAULT_MODEL, private readonly runtime: VisionSidecarRuntime = {}) {
     this.model = model
   }
 
@@ -249,9 +280,10 @@ export class VisionSidecarManager {
         context:      req.context ?? null,
         resolution:   req.resolution ?? 'auto',
         max_tokens:   req.maxTokens ?? null,
+        local_only: req.localOnly === true,
       }
 
-      const response = await httpPost(url, payload) as Record<string, unknown>
+      const response = await httpPost(url, payload, this.runtime.requestTimeoutMs) as Record<string, unknown>
 
       const result: AnalyzeResult = {
         ok:               true,
@@ -341,7 +373,7 @@ export class VisionSidecarManager {
         cut_timestamps_us: req.cutTimestampsUs,
         word_boundaries: req.wordBoundaries,
       }
-      const response = (await httpPost(url, payload)) as Record<string, unknown>
+      const response = (await httpPost(url, payload, this.runtime.requestTimeoutMs)) as Record<string, unknown>
       return audioPerceptionFacts(response)
     } catch (e) {
       const err = e instanceof Error ? e.message : String(e)
@@ -375,7 +407,7 @@ export class VisionSidecarManager {
         focus: req.focus ?? 'continuity_and_framing',
         max_tokens: req.maxTokens ?? 128,
       }
-      const response = (await httpPost(url, payload)) as Record<string, unknown>
+      const response = (await httpPost(url, payload, this.runtime.requestTimeoutMs)) as Record<string, unknown>
       return {
         ok: true,
         raw_critique: String(response.raw_critique ?? ''),
@@ -422,18 +454,18 @@ export class VisionSidecarManager {
 
   /** Shut down the sidecar process. */
   async dispose(): Promise<void> {
-    if (this.proc) {
-      console.log('[vision-sidecar] shutting down...')
-      this.proc.kill('SIGTERM')
-      await new Promise<void>((resolve) => {
-        const t = setTimeout(() => { this.proc?.kill('SIGKILL'); resolve() }, 3000)
-        this.proc?.on('exit', () => { clearTimeout(t); resolve() })
-      })
-      this.proc = null
-      this.port = null
-      this.startPromise = null
-      this.queryCache.clear()
-    }
+    const child = this.proc
+    if (!child) return
+    this.proc = null
+    this.port = null
+    this.startPromise = null
+    this.queryCache.clear()
+    child.kill('SIGTERM')
+    await new Promise<void>((resolve) => {
+      if (child.exitCode !== null || child.signalCode !== null) return resolve()
+      const timer = setTimeout(() => { child.kill('SIGKILL'); resolve() }, 3000)
+      child.once('exit', () => { clearTimeout(timer); resolve() })
+    })
   }
 
   // ── Private ──────────────────────────────────────────────────────────────────
@@ -443,83 +475,99 @@ export class VisionSidecarManager {
   }
 
   private async ensureRunning(): Promise<void> {
-    if (this.isAlive() && this.port !== null) return
     if (this.startPromise) return this.startPromise
-    this.startPromise = this.start().finally(() => {
-      if (!this.isAlive()) this.startPromise = null
-    })
-    return this.startPromise
+    if (this.isAlive() && this.port !== null) return
+    const starting = this.start()
+    this.startPromise = starting
+    try { await starting } finally {
+      if (this.startPromise === starting) this.startPromise = null
+    }
   }
 
   private async start(): Promise<void> {
-    if (!fs.existsSync(WORKER_SCRIPT)) {
-      throw new Error(`Vision worker not found: ${WORKER_SCRIPT}`)
+    const workerScript = this.runtime.workerScript ?? WORKER_SCRIPT
+    if (!fs.existsSync(workerScript)) {
+      throw new Error(`Vision worker not found: ${workerScript}`)
     }
 
-    const pythonBin = fs.existsSync(path.join(VENV_DIR, 'bin', 'python3'))
-      ? path.join(VENV_DIR, 'bin', 'python3')
-      : 'python3'
+    const pythonBin = resolveVisionPythonBinary()
 
     const port = await findFreePort()
     console.log(`[vision-sidecar] spawning on port ${port}, model=${this.model}`)
 
-    this.proc = spawn(pythonBin, [WORKER_SCRIPT], {
-      env: {
-        ...process.env,
-        SCLIP_VLM_MODEL:        this.model,
-        SCLIP_VLM_PORT:         String(port),
-        SCLIP_VLM_IDLE_TIMEOUT: String(IDLE_TIMEOUT_S),
-        PYTHONUNBUFFERED:       '1',
-      },
+    const launch = visionWorkerLaunchSpec(pythonBin, workerScript, this.model, port)
+    const child = (this.runtime.spawn ?? spawn)(launch.command, launch.args, {
+      env: launch.env,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
+    this.proc = child
 
     this.proc.stderr?.on('data', (chunk: Buffer) => {
       const lines = chunk.toString().split('\n').filter(Boolean)
       for (const line of lines) console.log(`[vision-sidecar-py] ${line}`)
     })
 
-    this.proc.on('exit', (code, signal) => {
+    child.on('exit', (code, signal) => {
       console.warn(`[vision-sidecar] process exited: code=${code} signal=${signal}`)
-      this.proc = null
-      this.port = null
-      this.startPromise = null
-    })
-
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        reject(new Error('Sidecar startup timeout'))
-      }, STARTUP_TIMEOUT_MS)
-
-      let buf = ''
-      this.proc!.stdout?.on('data', (chunk: Buffer) => {
-        buf += chunk.toString()
-        const match = /SCLIP_VLM_PORT=(\d+)/.exec(buf)
-        if (match) {
-          const announcedPort = parseInt(match[1], 10)
-          this.port = announcedPort
-          clearTimeout(timer)
-          console.log(`[vision-sidecar] ready on port ${announcedPort}`)
-          resolve()
-        }
-      })
-
-      this.proc!.on('exit', () => {
-        clearTimeout(timer)
-        reject(new Error('Sidecar exited before announcing port'))
-      })
-    })
-
-    const deadline = Date.now() + 10_000
-    while (Date.now() < deadline) {
-      try {
-        await httpGet(`http://127.0.0.1:${this.port}/health`)
-        return
-      } catch {
-        await new Promise(r => setTimeout(r, HEALTH_POLL_INTERVAL_MS))
+      if (this.proc === child) {
+        this.proc = null
+        this.port = null
+        this.startPromise = null
       }
+    })
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        let buf = ''
+        const finish = (error?: Error) => {
+          clearTimeout(timer)
+          child.stdout?.off('data', onData)
+          child.off('exit', onExit)
+          child.off('error', onError)
+          error ? reject(error) : resolve()
+        }
+        const onData = (chunk: Buffer) => {
+          if (this.proc !== child) return
+          buf = (buf + chunk.toString()).slice(-4096)
+          const match = /SCLIP_VLM_PORT=(\d+)/.exec(buf)
+          if (!match) return
+          if (Number(match[1]) !== port) return finish(new Error('Sidecar announced an unexpected port'))
+          this.port = port
+          finish()
+        }
+        const onExit = () => finish(new Error('Sidecar exited before announcing port'))
+        const onError = (error: Error) => finish(error)
+        const timer = setTimeout(() => finish(new Error('Sidecar startup timeout')), this.runtime.startupTimeoutMs ?? STARTUP_TIMEOUT_MS)
+        child.stdout?.on('data', onData)
+        child.once('exit', onExit)
+        child.once('error', onError)
+      })
+
+      const deadline = Date.now() + 10_000
+      while (Date.now() < deadline) {
+        if (this.proc !== child) throw new Error('Sidecar ownership changed during startup')
+        try {
+          await httpGet(`http://127.0.0.1:${port}/health`, Math.min(this.runtime.requestTimeoutMs ?? REQUEST_TIMEOUT_MS, Math.max(1, deadline-Date.now())))
+          if (this.proc !== child || !this.isAlive()) throw new Error('Sidecar ownership changed during startup')
+          return
+        } catch {
+          await new Promise(r => setTimeout(r, HEALTH_POLL_INTERVAL_MS))
+        }
+      }
+      throw new Error('Sidecar health check timed out')
+    } catch (error) {
+      if (this.proc === child) {
+        this.proc = null
+        this.port = null
+      }
+      try { child.kill('SIGTERM') } catch { /* child may already have exited */ }
+      if (child.exitCode === null && child.signalCode === null) {
+        const killTimer = setTimeout(() => { try { child.kill('SIGKILL') } catch { /* already exited */ } }, 2_000)
+        killTimer.unref()
+        child.once('exit', () => clearTimeout(killTimer))
+      }
+      throw error
     }
-    throw new Error('Sidecar health check timed out')
   }
 }
 
