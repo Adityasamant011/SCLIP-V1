@@ -2,27 +2,21 @@
 
 ## Supported versions
 
-WeftCut is pre-1.0. Security fixes land on the latest release and on `main`;
-there are no maintained release branches yet.
+SCLIP is under active development. Security fixes land on the latest release and on `main`.
 
 ## Reporting a vulnerability
 
-Use GitHub's [private vulnerability reporting](https://github.com/WeftCut/WeftCut/security/advisories/new) — the report stays
-private until a fix ships, and it gives us one place to work the issue rather
-than a mail thread. Email **voidgun1998@gmail.com** instead if you'd rather not
+Use GitHub's [private vulnerability reporting](https://github.com/Adityasamant011/SCLIP-V1/security/advisories/new) — the report stays
+private until a fix ships. Email **adityasamant011@gmail.com** instead if you'd rather not
 go through GitHub.
 
 Either way, include what you found, the version or commit you saw it on, and a
 minimal reproduction if you have one. Please don't open a public issue for
 anything exploitable.
 
-I aim to acknowledge within a week. This is a one-person project, so treat that
-as best effort rather than a guaranteed response time. When a fix ships you'll
-be credited in the release notes unless you'd rather not be.
-
 ## What's worth reporting
 
-The parts of WeftCut most worth your attention:
+The parts of SCLIP most worth your attention:
 
 - **The MCP server.** It binds to localhost and exposes the editor as a tool
   surface, which makes it the largest attack surface in the app. Anything that
@@ -38,6 +32,6 @@ The parts of WeftCut most worth your attention:
 ## Out of scope
 
 - Vulnerabilities in the bundled FFmpeg binaries themselves — report those
-  upstream to FFmpeg. Do tell me as well if WeftCut's usage is what makes one
+  upstream to FFmpeg. Do tell me as well if SCLIP's usage is what makes one
   reachable.
 - Findings that assume the attacker already has code execution on the machine.

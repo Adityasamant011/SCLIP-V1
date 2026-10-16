@@ -1,4 +1,4 @@
-# WeftCut — agent instructions
+# SCLIP — agent instructions
 
 Project glossary and domain vocabulary live in [`CONTEXT.md`](CONTEXT.md);
 architectural decisions in [`docs/adr/`](docs/adr/).

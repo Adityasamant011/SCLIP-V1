@@ -1,4 +1,4 @@
-appId: dev.weftcut.desktop
+appId: com.sclip.desktop
 productName: Sclip
 executableName: Sclip
 # OS + arch, no version: GitHub's releases/latest/download/<asset> URL then always
@@ -6,13 +6,13 @@ executableName: Sclip
 # exact build stays addressable through its tag (releases/download/v<version>/
 # <asset>), and electron-updater derives the previous blockmap URL by swapping the
 # version inside that tag segment, so differential Windows updates still work.
-# Expands to WeftCut-win-x64.exe, WeftCut-linux-x86_64.AppImage,
-# WeftCut-linux-amd64.deb and WeftCut-mac-arm64.dmg; release.mjs pins that set.
+# Expands to Sclip-win-x64.exe, Sclip-linux-x86_64.AppImage,
+# Sclip-linux-amd64.deb and Sclip-mac-arm64.dmg; release.mjs pins that set.
 artifactName: ${productName}-${os}-${arch}.${ext}
 publish:
   provider: github
-  owner: WeftCut
-  repo: WeftCut
+  owner: Adityasamant011
+  repo: SCLIP-V1
   releaseType: release
 # Pack-time gates, re-asserted from the packaged files rather than from what the
 # supply steps believed they staged: both ffmpeg lanes' licensing compliance, and
