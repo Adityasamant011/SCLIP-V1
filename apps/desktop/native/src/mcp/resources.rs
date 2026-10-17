@@ -423,8 +423,12 @@ async fn find_cached_transcript(
         let path = entry.path();
         if path.extension().and_then(|s| s.to_str()) == Some("json") {
             if let Ok(bytes) = tokio::fs::read(&path).await {
-                if let Ok(cached) = serde_json::from_slice::<crate::speech::transcript::CachedTranscript>(&bytes) {
-                    let Ok(cached) = cached.validated() else { continue; };
+                if let Ok(cached) =
+                    serde_json::from_slice::<crate::speech::transcript::CachedTranscript>(&bytes)
+                {
+                    let Ok(cached) = cached.validated() else {
+                        continue;
+                    };
                     if cached.source_hash == source_hash {
                         if cached.is_full_source {
                             crate::cache::touch_if_stale(&path);
@@ -453,7 +457,10 @@ async fn read_transcript_resource(
 ) -> Result<ResourceResult, McpToolError> {
     let parts: Vec<&str> = tail.split('/').collect();
     if parts.is_empty() {
-        return Err(McpToolError::invalid_request("empty media resource URI", None));
+        return Err(McpToolError::invalid_request(
+            "empty media resource URI",
+            None,
+        ));
     }
     let id_part = parts[0];
     let media_id = Uuid::parse_str(id_part).map_err(|_| {
@@ -641,18 +648,25 @@ pub(crate) async fn build_media_context_json(
     // 4. Descriptions modality (VLM)
     let descriptions = {
         let desc_dir = cache.descriptions_dir();
-        let mut found_desc: Option<(Vec<[i64; 2]>, Vec<crate::vlm::description::DescSegment>)> = None;
+        let mut found_desc: Option<(Vec<[i64; 2]>, Vec<crate::vlm::description::DescSegment>)> =
+            None;
         if let Ok(mut entries) = tokio::fs::read_dir(&desc_dir).await {
             while let Ok(Some(entry)) = entries.next_entry().await {
                 let path = entry.path();
                 if path.extension().and_then(|s| s.to_str()) == Some("json") {
                     if let Ok(bytes) = tokio::fs::read(&path).await {
-                        if let Ok(parsed) = serde_json::from_slice::<crate::vlm::DescriptionCache>(&bytes) {
+                        if let Ok(parsed) =
+                            serde_json::from_slice::<crate::vlm::DescriptionCache>(&bytes)
+                        {
                             let matches_source = match &parsed.source_hash {
                                 Some(h) => h == &media.file_hash_blake3,
                                 None => {
-                                    let filename = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-                                    crate::vlm::is_cache_key_for_source(filename, &media.file_hash_blake3)
+                                    let filename =
+                                        path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                                    crate::vlm::is_cache_key_for_source(
+                                        filename,
+                                        &media.file_hash_blake3,
+                                    )
                                 }
                             };
                             if matches_source {
@@ -792,7 +806,10 @@ async fn read_media_context_resource(
 ) -> Result<ResourceResult, McpToolError> {
     let parts: Vec<&str> = tail.split('/').collect();
     if parts.is_empty() {
-        return Err(McpToolError::invalid_request("empty media resource URI", None));
+        return Err(McpToolError::invalid_request(
+            "empty media resource URI",
+            None,
+        ));
     }
     let id_part = parts[0];
     let media_id = Uuid::parse_str(id_part).map_err(|_| {
@@ -1284,8 +1301,7 @@ mod stateless_tests {
             );
 
             // 2. Detail mode
-            let detail =
-                build_media_context_json(&b.cache, &item, None, None, Some("range")).await;
+            let detail = build_media_context_json(&b.cache, &item, None, None, Some("range")).await;
             assert_eq!(detail["detail"], "range");
             assert_eq!(detail["transcript"]["status"], "available");
             let segs = detail["transcript"]["segments"]
@@ -1344,8 +1360,7 @@ mod stateless_tests {
 
         // Query with hash_b -> must NOT see hash_a's descriptions!
         let item_b = make_item(uuid::Uuid::now_v7(), hash_b);
-        let ctx_b =
-            build_media_context_json(&b.cache, &item_b, None, None, Some("overview")).await;
+        let ctx_b = build_media_context_json(&b.cache, &item_b, None, None, Some("overview")).await;
         assert_eq!(
             ctx_b["descriptions"]["status"], "not_generated",
             "must not return descriptions belonging to a different media hash"
@@ -1353,8 +1368,7 @@ mod stateless_tests {
 
         // Query with hash_a -> must see hash_a's descriptions and covered_ranges!
         let item_a = make_item(uuid::Uuid::now_v7(), hash_a);
-        let ctx_a =
-            build_media_context_json(&b.cache, &item_a, None, None, Some("overview")).await;
+        let ctx_a = build_media_context_json(&b.cache, &item_a, None, None, Some("overview")).await;
         assert_eq!(ctx_a["descriptions"]["status"], "available");
         let covered = ctx_a["descriptions"]["covered_ranges"]
             .as_array()

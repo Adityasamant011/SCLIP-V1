@@ -2,7 +2,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import { spawn, execFile } from 'node:child_process'
 
 export type GenerationKind = 'image' | 'music'
@@ -140,8 +140,9 @@ export function createLocalGeneration(deps: GenerationDeps) {
         catch { return { kind, ...GENERATORS[kind], state: 'not_configured', setup: 'Install a verified optional model pack; generation never downloads weights or accepts provider terms.' } }
       }), limitation: 'Resource admission/watchdog reduce risk, not an OS-wide hard memory guarantee. Other existing model integrations retain their own limits. Musical quality and absence of vocals are not certified.' }
   }
-  async function generate(request: GenerationRequest, binding: GenerationBinding, signal = new AbortController().signal) {
-    signal.throwIfAborted(); binding.assertCurrent()
+  async function generate(request: GenerationRequest, binding: GenerationBinding, signal?: AbortSignal) {
+    const sig = signal ?? new AbortController().signal
+    sig.throwIfAborted(); binding.assertCurrent()
     if ((deps.platform ?? process.platform) !== 'darwin' || (deps.arch ?? process.arch) !== 'arm64') throw new Error('Optional generation currently supports macOS Apple Silicon only')
     if (busy) throw new Error('Another local generation is running; wait or cancel that owned request')
     busy = true
@@ -159,7 +160,7 @@ export function createLocalGeneration(deps: GenerationDeps) {
       if (fs.existsSync(file) && fs.existsSync(provenance)) {
         try {
           const saved = JSON.parse(fs.readFileSync(provenance, 'utf8')), asset = validateGeneratedAsset(file, request)
-          if (saved.sha256 === asset.sha256 && saved.cache_key === key) { binding.assertCurrent(); signal.throwIfAborted(); return result(true, asset) }
+          if (saved.sha256 === asset.sha256 && saved.cache_key === key) { binding.assertCurrent(); sig.throwIfAborted(); return result(true, asset) }
         } catch { /* Corrupt/unverified assets are preserved, not credited as cache hits. */ }
         throw new Error('An invalid generated cache entry exists; preserve it for diagnosis or choose another seed')
       }
@@ -168,24 +169,24 @@ export function createLocalGeneration(deps: GenerationDeps) {
       if (diskFree(target) < 2 * GiB) throw new Error('Generation requires at least 2 GiB free output space; no model was loaded')
       // Verify complete local weights/config files before any package/model execution.
       for (const [name, hash] of Object.entries(model.pack.files)) {
-        signal.throwIfAborted(); binding.assertCurrent()
-        if (await hashFile(path.join(model.directory, 'weights', name), signal) !== hash) throw new Error(`Generation pack integrity check failed: ${name}`)
+        sig.throwIfAborted(); binding.assertCurrent()
+        if (await hashFile(path.join(model.directory, 'weights', name), sig) !== hash) throw new Error(`Generation pack integrity check failed: ${name}`)
       }
       await deps.releaseIdleVision?.()
-      signal.throwIfAborted(); binding.assertCurrent()
+      sig.throwIfAborted(); binding.assertCurrent()
       const after = memory()
       if (after.available < required + 4 * GiB) throw new Error('Memory headroom changed before generation; no model was loaded')
       fs.mkdirSync(directory, { recursive: true })
       temp = fs.mkdtempSync(path.join(directory, '.generation-'))
       const staged = path.join(temp, `asset.${ext}`)
       await (deps.run ?? runGenerationWorker)(model.pack.python, deps.worker, { ...request, output: staged, weights: path.join(model.directory, 'weights'),
-        runtime_version: model.pack.runtime_version, working_bytes: required }, signal)
-      signal.throwIfAborted(); binding.assertCurrent()
+        runtime_version: model.pack.runtime_version, working_bytes: required }, sig)
+      sig.throwIfAborted(); binding.assertCurrent()
       const asset = validateGeneratedAsset(staged, request)
       const saved = { cache_key: key, ...result(false, asset), runtime: model.pack.runtime, runtime_version: model.pack.runtime_version,
         license: GENERATORS[request.kind].license, model_manifest_sha256: model.identity }
       fs.writeFileSync(path.join(temp, 'provenance.json'), JSON.stringify(saved, null, 2), { flag: 'wx' })
-      signal.throwIfAborted(); binding.assertCurrent()
+      sig.throwIfAborted(); binding.assertCurrent()
       // Never overwrite an unrelated file, even on a concurrent process/cache race.
       fs.linkSync(staged, file)
       try { fs.linkSync(path.join(temp, 'provenance.json'), provenance) }

@@ -178,7 +178,8 @@ pub fn is_cache_key_for_source(key: &str, source_hash: &str) -> bool {
         for focus in [Focus::General, Focus::ShotType] {
             for lang in &languages {
                 for fps_m in [1000, 2000, 500] {
-                    if cache_key(source_hash, *backend, backend.as_str(), fps_m, focus, lang) == key {
+                    if cache_key(source_hash, *backend, backend.as_str(), fps_m, focus, lang) == key
+                    {
                         return true;
                     }
                 }

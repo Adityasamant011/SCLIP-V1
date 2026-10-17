@@ -282,7 +282,7 @@ mod blank_audio_regression {
     use super::*;
     #[test]
     fn historical_blank_audio_marker_is_not_speech() {
-        let raw=r#"{"transcription":[{"text":"[BLANK_AUDIO]","offsets":{"from":13840,"to":23840},"tokens":[{"text":"[BLANK_AUDIO]","offsets":{"from":13970,"to":23430}}]}]}"#;
+        let raw = r#"{"transcription":[{"text":"[BLANK_AUDIO]","offsets":{"from":13840,"to":23840},"tokens":[{"text":"[BLANK_AUDIO]","offsets":{"from":13970,"to":23430}}]}]}"#;
         assert!(WhisperJsonParser.parse(raw).unwrap().segments.is_empty());
     }
 }

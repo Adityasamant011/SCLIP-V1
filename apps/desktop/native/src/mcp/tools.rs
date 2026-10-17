@@ -1302,9 +1302,15 @@ pub(super) fn resolve_clip_audio_source(
     let t_end = match t_end_arg {
         Some(end) => end,
         None => {
-            let source_end_on_timeline = src_out_us.checked_sub(src_in_us)
+            let source_end_on_timeline = src_out_us
+                .checked_sub(src_in_us)
                 .and_then(|span| layer.t_start_us.checked_add(span))
-                .ok_or_else(|| McpToolError::invalid_params("clip source range cannot map to the timeline", None))?;
+                .ok_or_else(|| {
+                    McpToolError::invalid_params(
+                        "clip source range cannot map to the timeline",
+                        None,
+                    )
+                })?;
             layer.t_end_us.min(source_end_on_timeline)
         }
     };
@@ -1533,7 +1539,8 @@ pub(super) async fn transcribe_clip(
         crate::cache::touch_if_stale(&full_path);
         if let Ok(bytes) = tokio::fs::read(&full_path).await {
             if let Ok(cached) =
-                serde_json::from_slice::<speech::transcript::CachedTranscript>(&bytes).and_then(|c| c.validated().map_err(serde::de::Error::custom))
+                serde_json::from_slice::<speech::transcript::CachedTranscript>(&bytes)
+                    .and_then(|c| c.validated().map_err(serde::de::Error::custom))
             {
                 let sliced = cached.slice_window(resolved.source_in_us, resolved.source_out_us);
                 let transcript =
@@ -1567,7 +1574,8 @@ pub(super) async fn transcribe_clip(
         crate::cache::touch_if_stale(&range_path);
         if let Ok(bytes) = tokio::fs::read(&range_path).await {
             if let Ok(cached) =
-                serde_json::from_slice::<speech::transcript::CachedTranscript>(&bytes).and_then(|c| c.validated().map_err(serde::de::Error::custom))
+                serde_json::from_slice::<speech::transcript::CachedTranscript>(&bytes)
+                    .and_then(|c| c.validated().map_err(serde::de::Error::custom))
             {
                 let sliced = cached.slice_window(resolved.source_in_us, resolved.source_out_us);
                 let transcript =
