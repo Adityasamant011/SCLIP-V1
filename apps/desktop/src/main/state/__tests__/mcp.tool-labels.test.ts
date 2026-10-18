@@ -18,7 +18,7 @@ import { registeredMcpTools } from '../../mcp/server'
 const rust = JSON.parse(readFileSync('fixtures/mcp/rust-catalog-snapshot.json', 'utf8')) as {
   tools: Array<{ name: string }>
 }
-const merged = await registeredMcpTools({ mcpCatalog: async () => JSON.stringify(rust) } as any, { sourceObservationIndex: {} as any, enableExternalMedia: true, evaluateSourcePassages: async () => ({}) })
+const merged = await registeredMcpTools({ mcpCatalog: async () => JSON.stringify(rust) } as any, { sourceObservationIndex: {} as any, localGeneration: {} as any, enableExternalMedia: true, evaluateSourcePassages: async () => ({}) })
 const labels: Record<string, string> = en.agent_panel.tools
 
 describe('agent_panel.tools labels', () => {

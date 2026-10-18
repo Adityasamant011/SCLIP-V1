@@ -99,6 +99,26 @@ function makeDeps(actor: ActorHandle, opts: { workspaceDir?: string | null; file
 }
 
 describe('runHybrid: import_media', () => {
+  it('rejects cancellation and stale authority after probing without inserting media', async () => {
+    for (const cancelled of [true, false]) {
+      const actor = freshActor(), deps = makeDeps(actor), controller = new AbortController()
+      let current = true
+      deps._probeMedia.mockImplementation(async () => { current = false; if (cancelled) controller.abort(); return JSON.stringify(probedItem()) })
+      await expect(runHybrid('import_media', { path: 'C:/x.mp4' }, deps, { signal: controller.signal,
+        assertAuthority: () => { if (!current) throw new Error('stale opening') },
+      })).rejects.toThrow()
+      expect(actor.snapshot().media_pool[MID]).toBeUndefined()
+      expect(deps._enqueueDerivatives).not.toHaveBeenCalled()
+    }
+  })
+  it('includes stock provenance in the authoritative import and derivative input', async () => {
+    const actor = freshActor(), deps = makeDeps(actor)
+    await runHybrid('import_media', { path: 'C:/x.mp4' }, deps, {
+      prepareImportedMedia: item => ({ ...item, metadata: { ...item.metadata, provenance_path: 'synthetic.provenance.json' } }),
+    })
+    expect(actor.snapshot().media_pool[MID].metadata.provenance_path).toBe('synthetic.provenance.json')
+    expect((deps._enqueueDerivatives.mock.calls[0][0] as MediaItem[])[0].metadata.provenance_path).toBe('synthetic.provenance.json')
+  })
   it('returns the new media id and inserts the probed item into the pool', async () => {
     const actor = freshActor()
     const deps = makeDeps(actor)

@@ -225,7 +225,7 @@ export function HermesSettingsSection() {
       setReplacingKey(false)
       setShowApiKey(false)
     } catch {
-      setErrorMessage('Could not load Hermes settings. Please try again.')
+      setErrorMessage('Could not load Sclip AI settings. Please try again.')
     } finally {
       setLoading(false)
     }
@@ -294,13 +294,13 @@ export function HermesSettingsSection() {
         apiKey: apiKeyInput.trim() ? apiKeyInput.trim() : undefined,
       })
       setSaveSuccess(true)
-      setSuccessMessage('Settings saved. Hermes is reconnecting with the selected provider and model.')
+      setSuccessMessage('Settings saved. Sclip AI is reconnecting with the selected provider and model.')
       setApiKeyInput('')
       setReplacingKey(false)
       setShowApiKey(false)
       await fetchConfig()
     } catch {
-      setErrorMessage('Could not save Hermes settings. Check the provider, model, and secure storage availability.')
+      setErrorMessage('Could not save Sclip AI settings. Check the provider, model, and secure storage availability.')
     } finally {
       setSaving(false)
     }
@@ -315,7 +315,7 @@ export function HermesSettingsSection() {
       setReplacingKey(false)
       setShowApiKey(false)
       setSaveSuccess(true)
-      setSuccessMessage('API key removed. Hermes is reconnecting.')
+      setSuccessMessage('API key removed. Sclip AI is reconnecting.')
       await fetchConfig()
     } catch {
       setErrorMessage('Could not remove the API key. Please try again.')
@@ -346,7 +346,7 @@ export function HermesSettingsSection() {
     return (
       <div className="sclip-settings-loading">
         <RotateCcw className="animate-spin" size={20} />
-        <span>Loading Hermes configuration…</span>
+        <span>Loading Sclip AI configuration…</span>
       </div>
     )
   }
@@ -364,7 +364,7 @@ export function HermesSettingsSection() {
           onClick={() => setTab('hermes')}
         >
           <Sparkles size={14} />
-          <span>Hermes Agent & Models</span>
+          <span>Sclip AI & Models</span>
         </button>
         <button
           type="button"
@@ -384,7 +384,7 @@ export function HermesSettingsSection() {
           <div className="sclip-settings-header-card">
             <div className="sclip-settings-header-status">
               <span className={`sclip-settings-status-pill ${status?.online ? 'online' : 'offline'}`}>
-                {status?.online ? 'Hermes Gateway Online' : 'Hermes Offline'}
+                {status?.online ? 'Sclip Gateway Online' : 'Sclip Offline'}
               </span>
               <span className="sclip-settings-status-mcp">
                 {status?.mcpTools ?? 93} Sclip MCP Tools Connected

@@ -2,6 +2,38 @@ import { describe, expect, it } from 'vitest'
 import { RevisionLoopGuard } from './revisionLoopGuard.js'
 
 describe('Phase 2E session guard', () => {
+  function closedVisualRepair() {
+    const guard = new RevisionLoopGuard(true)
+    const seen = guard.recordEvidence('vision_inspect','timeline',[0,1000],'before',['visual'])
+    guard.recordEvidence('inspect_rendered_audio','timeline',[0,1000],'before',['audio','speech'])
+    const { issue } = guard.recordIssue({description:'Synthetic visual concern',severity:'moderate',repairable:true,evidence_receipt_ids:[seen.id],evidence_dimensions:['visual'],affected_range_us:[0,1000]},'before',1000,new Map())
+    guard.selectIssue(issue.id,'before');guard.checkpointCreated();guard.mutationCommitted('after')
+    guard.recordEvidence('vision_inspect','timeline',[0,1000],'after',['visual'])
+    guard.finishIssue('resolved','after')
+    return guard
+  }
+  it('reacquires missing audio/speech after closing a visual repair without inventing another issue', () => {
+    const guard = closedVisualRepair(), completion = {state:'after',required:['visual','audio','speech'] as const}
+    expect(guard.hasCurrentRenderedEvidence('after',[...completion.required])).toBe(false)
+    expect(guard.guidance('after',[...completion.required]).legal_next_actions).toEqual(['current_rendered_inspection'])
+    expect(guard.beforeMutation('after')).not.toBeNull()
+    expect(guard.beforeInspection('get_media_context',{start_us:0},{...completion,required:[...completion.required]})).not.toBeNull()
+    expect(guard.beforeInspection('vision_inspect',{media_id:'source',source_t_us:0},{...completion,required:[...completion.required]})).not.toBeNull()
+    expect(guard.beforeInspection('inspect_rendered_audio',{start_us:0,end_us:1000},{...completion,required:[...completion.required]})).toBeNull()
+    guard.recordEvidence('inspect_rendered_audio','timeline',[0,1000],'after',['audio','speech'])
+    expect(guard.hasCurrentRenderedEvidence('after',[...completion.required])).toBe(true)
+    expect(guard.guidance('after',[...completion.required]).legal_next_actions).toContain('revision_control:complete')
+    expect(guard.beforeInspection('inspect_rendered_audio',{start_us:0,end_us:1000},{...completion,required:[...completion.required]})).not.toBeNull()
+    expect(guard.complete().phase).toBe('done')
+  })
+  it('bounds failed final acquisitions and refuses changed state or metadata as final evidence', () => {
+    const guard = closedVisualRepair(), required = ['visual','audio','speech'] as const
+    expect(guard.beforeInspection('inspect_rendered_audio',{start_us:0,end_us:1000},{state:'external-change',required:[...required]})).not.toBeNull()
+    for(let i=0;i<4;i++)expect(guard.beforeInspection('inspect_rendered_audio',{start_us:0,end_us:1000},{state:'after',required:[...required]})).toBeNull()
+    expect(guard.beforeInspection('inspect_rendered_audio',{start_us:0,end_us:1000},{state:'after',required:[...required]})).not.toBeNull()
+    expect(guard.hasCurrentRenderedEvidence('after',[...required])).toBe(false)
+    expect(guard.guidance('after',[...required]).tool_call_examples).toMatchObject([{name:'mcp__weftcut__end_agent_session',arguments:{review_unavailable_reason:expect.any(String)}}])
+  })
   it('rejects repairs against a changed timeline and preserves a three-cycle limit', () => {
     const guard = new RevisionLoopGuard(true)
     guard.reviewValidated(['first'], {}, 'state-a')

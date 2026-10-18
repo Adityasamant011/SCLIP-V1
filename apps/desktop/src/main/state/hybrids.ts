@@ -129,6 +129,8 @@ export interface HybridRequest {
   signal?: AbortSignal
   /** Request/turn lease, checked synchronously at the authoritative write. */
   assertAuthority?: () => void
+  /** Internal import decoration, applied before the actor publishes the item. */
+  prepareImportedMedia?: (item: MediaItem) => MediaItem
 }
 
 /** Return the id of the topmost (last) track, or create a new "Voiceover"
@@ -1050,7 +1052,12 @@ export async function runHybrid(tool: string, args: Record<string, unknown>, dep
       }
       // Insert the probed item FIRST so the clip appears in the timeline
       // immediately.
-      const item = JSON.parse(await deps.compute.probeMedia(path)) as MediaItem
+      request.signal?.throwIfAborted()
+      request.assertAuthority?.()
+      let item = JSON.parse(await deps.compute.probeMedia(path)) as MediaItem
+      request.signal?.throwIfAborted()
+      request.assertAuthority?.()
+      if (request.prepareImportedMedia) item = request.prepareImportedMedia(item)
       const r = deps.actor.dispatch('add_media_item', { media: item })
       if (!r.ok) throw new Error(JSON.stringify(r.error))
       // Compute the REAL content hash (a lightweight standalone read pass), set it
@@ -1059,6 +1066,8 @@ export async function runHybrid(tool: string, args: Record<string, unknown>, dep
       // superseded). One extra full read of the source, accepted to start
       // derivatives promptly instead of waiting for the workspace copy.
       const hash = await deps.compute.hashMediaSource(path)
+      request.signal?.throwIfAborted()
+      request.assertAuthority?.()
       const hr = deps.actor.dispatch('set_media_hash', { media: item.id, file_hash_blake3: hash })
       // Benign if the media was removed during hashing — nothing left to enqueue.
       if (!hr.ok) return item.id

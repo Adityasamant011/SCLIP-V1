@@ -6,7 +6,7 @@ import { videoClipParams } from '../state/mutations/media'
 import { createActor } from '../state/actor'
 import { blankProject } from '../state/model'
 import { uuidV7Gen } from '../state/ids'
-import { handleCallTool } from './server'
+import { handleCallTool, handleReadResource } from './server'
 import { startMcpHost } from './index'
 import { startAutonomousReview } from '../sclip/autonomousReview'
 import { timelineTime, reviewState } from '../sclip/evidenceCoordinates'
@@ -30,6 +30,18 @@ function fixture(visual = false) {
 }
 const body = (r: any) => JSON.parse(r.content[0].text)
 describe('Evidence coordinates', () => {
+  it('inspects still images at zero through both source tool and resource paths', async () => {
+    const { ts, backend, mediaId } = fixture()
+    const snapshot = structuredClone(ts.actor.snapshot())
+    snapshot.media_pool[mediaId].kind = 'Image'
+    snapshot.media_pool[mediaId].metadata.duration_us = 0
+    ts.actor = createActor({ initial: snapshot, idGen: uuidV7Gen(), clock: () => 'now' })
+    const result: any = await handleCallTool(backend, () => ts, 'vision_inspect', { media_id: mediaId, source_t_us: 0, question: 'Describe' })
+    expect(result.isError).not.toBe(true)
+    expect(body(result)).toMatchObject({ coordinate_space: 'source', source_t_us: 0, media_id: mediaId })
+    await expect(handleReadResource(backend, () => ts, `media://${mediaId}/frame/1`)).rejects.toThrow('Still images use')
+    await expect(handleCallTool(backend, () => ts, 'vision_inspect', { media_id: mediaId, source_t_us: 1, question: 'Describe' })).rejects.toThrow('Still images use')
+  })
   it('accepts timeline 20s in a 60s edit with current timeline provenance', async () => {
     const { ts, backend } = fixture()
     const execute = vi.fn(async (_code: string) => ({ pngBase64: Buffer.from('frame').toString('base64'), tUs: 20_000_000 }))

@@ -228,6 +228,8 @@ export class VisionSidecarManager {
   private readonly maxRestarts = 1
   private readonly model: string
   private readonly queryCache = new BoundedQueryCache()
+  private activeRequests = 0
+  private releasingModel = false
 
   constructor(model: string = DEFAULT_MODEL, private readonly runtime: VisionSidecarRuntime = {}) {
     this.model = model
@@ -238,8 +240,29 @@ export class VisionSidecarManager {
     this.queryCache.clear()
   }
 
+  private async withActiveRequest<T>(run: () => Promise<T>): Promise<T> {
+    if (this.releasingModel) throw new Error('Local vision is releasing its idle model; retry after generation preparation')
+    this.activeRequests++
+    try { return await run() } finally { this.activeRequests-- }
+  }
+
+  /** Release warm weights only; never unload an in-flight inspection. */
+  async releaseIdleModel(): Promise<void> {
+    if (this.activeRequests || this.releasingModel) throw new Error('Local vision is busy; retry generation after the inspection finishes')
+    this.releasingModel = true
+    try {
+      const status = await this.status()
+      if (status.modelLoaded && !['ready','loaded','idle'].includes(status.state)) throw new Error('Local vision is busy; retry generation after the inspection finishes')
+      if (status.modelLoaded) await this.unloadModel()
+    } finally { this.releasingModel = false }
+  }
+
   /** Analyze an image frame and answer a visual question. */
-  async analyze(req: AnalyzeRequest): Promise<AnalyzeResult> {
+  analyze(req: AnalyzeRequest): Promise<AnalyzeResult> {
+    return this.withActiveRequest(() => this.analyzeRequest(req)).catch(e => ({ok:false,description:'',confidence:'low',latencyMs:0,model:this.model,visibleContent:[],error:e instanceof Error ? e.message : String(e)}))
+  }
+
+  private async analyzeRequest(req: AnalyzeRequest): Promise<AnalyzeResult> {
     // Check in-memory query cache (<1ms response)
     const cached = this.queryCache.get(req)
     if (cached) return cached
@@ -332,7 +355,11 @@ export class VisionSidecarManager {
   }
 
   /** Analyzes an audio file for musical beats, speech chops, and awkward silence. */
-  async analyzeAudio(req: {
+  analyzeAudio(req: Parameters<VisionSidecarManager['analyzeAudioRequest']>[0]): ReturnType<VisionSidecarManager['analyzeAudioRequest']> {
+    return this.withActiveRequest(() => this.analyzeAudioRequest(req)).catch(e => ({ok:false,error:e instanceof Error ? e.message : String(e)}))
+  }
+
+  private async analyzeAudioRequest(req: {
     audioPath: string
     cutTimestampsUs?: number[]
     wordBoundaries?: Array<{ word?: string; text?: string; t_start_us: number; t_end_us: number }>
@@ -383,7 +410,11 @@ export class VisionSidecarManager {
   }
 
   /** Evaluates a multi-frame sequence for visual jump-cuts, framing defects, and action continuity. */
-  async inspectSequence(req: {
+  inspectSequence(req: Parameters<VisionSidecarManager['inspectSequenceRequest']>[0]): ReturnType<VisionSidecarManager['inspectSequenceRequest']> {
+    return this.withActiveRequest(() => this.inspectSequenceRequest(req)).catch(e => ({ok:false,error:e instanceof Error ? e.message : String(e)}))
+  }
+
+  private async inspectSequenceRequest(req: {
     imagePaths: string[]
     timestampsS?: number[]
     focus?: string

@@ -122,7 +122,7 @@ export const AUDIO_FX_CHANNELS: ReadonlySet<string> = new Set([
 /** Motif catalog-read + authoring + install + staleness channels, served in TS
  *  by runMotifTool. */
 export const MOTIF_CHANNELS: ReadonlySet<string> = new Set([
-  'list_motifs', 'get_motif_source', 'write_motif_draft', 'amend_motif_draft',
+  'list_motifs', 'get_motif_source', 'get_hyperframes_recipe', 'write_motif_draft', 'write_hyperframes_draft', 'amend_motif_draft',
   'create_edit_draft', 'import_motif', 'delete_motif', 'install_motif',
   'motif_staleness_report', 'acknowledge_motif_staleness',
 ])

@@ -13,7 +13,7 @@
 /// Kept STABLE across releases on purpose: changing it orphans pinned shortcuts
 /// and breaks notification continuity. See the taskbar-icon notes in
 /// docs/releases.md.
-export const WINDOWS_APP_USER_MODEL_ID = 'dev.weftcut.desktop'
+export const WINDOWS_APP_USER_MODEL_ID = 'com.sclip.desktop'
 
 /** macOS safeStorage uses the Electron application name for its Keychain entry. */
 export const DESKTOP_PRODUCT_NAME = 'Sclip'

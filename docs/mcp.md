@@ -530,9 +530,17 @@ Catalog:
 Motif authoring (see [motifs.md](motifs.md) "Agent surface"):
 - `get_motif_source { id }` → `{ manifest, html }` — any built-in, installed, or draft.
 - `write_motif_draft { manifest, html, from? }` → draft id. `from` records an existing Motif as the update target.
+- `get_hyperframes_recipe { recipe?, detail?, aspect?, width?, height?, duration_s? }` → read-only original graphic source catalog. Omit recipe to list six editorial starting points; select comparison/numbers/process/timeline/key-point/annotation. detail="schema" returns compact editable definitions for short recipe authoring; default "source" includes HTML for adaptation. Orientation: landscape/portrait/square; paired width/height (320–8192) match an exact canvas and determine layout/text scale; duration: 3–30 seconds. Does not draft/install/place, fabricate facts or generate images. Custom source remains supported.
+- `write_hyperframes_draft { manifest, html, from? }` or `{ recipe, props?, width?, height?, aspect?, duration_s?, from? }` → draft id for one editable HyperFrames/GSAP graphic. Recipe mode validates instance values and uses them as editable defaults without resending HTML; do not mix modes. Custom code supports a paused timeline under the root composition id in `window.__timelines`, props via `window.__sclipProps`, optional asset/layout readiness via `window.__sclipReady`, local preview and normal Motif placement/export. Custom graphics up to 180 seconds; recipe duration 3–30. External scripts/assets, audio/video tags and nested/timed media primitives are unsupported. See [HyperFrames contract](hyperframes.md).
 - `preview_motif_draft { id, t_sec, width?, height?, props? }` → base64 PNG of one frame; `props` defaults to the Motif's schema defaults.
 - `install_motif { draft_id, mode: new | update }` — publish; update bumps version and rebinds placed layers.
 - `delete_motif { id }` — remove a user Motif (built-ins rejected).
+
+Optional local generation (macOS Apple Silicon, verified model pack required):
+
+- `get_local_generation_status {}` — report configured packs and current busy state without inference or downloads.
+- `generate_music { prompt, seed, duration_seconds? }` — create a 1–11 second, 44.1 kHz stereo WAV candidate with Stable Audio Open Small inside the saved project. CPU inference with resource/cancellation guards; no provider call or automatic timeline change. Import and audition the returned asset before mixing. Musical quality, seamless loops and absence of vocals are not guaranteed. See [local music setup](local-music.md).
+- `generate_image { prompt, seed, width?, height? }` — create a PNG with the separate optional local FLUX.2 Klein pack. Bounded 256–768 pixel dimensions in multiples of 32. Requires its own pack; music setup does not install or verify image generation. No cloud fallback or automatic placement.
 
 ### Workflow / safety
 

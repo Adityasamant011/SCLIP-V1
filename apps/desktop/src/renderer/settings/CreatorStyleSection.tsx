@@ -26,7 +26,7 @@ export function CreatorStyleSection() {
   const creator = view?.creators.find(c => c.id === view.binding.creatorId)
   return <section className="settings-section">
     <h3>Creator style memory</h3>
-    <p>Stored locally. Your current request takes priority. Corrections are evidence; Hermes decides what they mean. Inferred preferences need your approval.</p>
+    <p>Stored locally. Your current request takes priority. Corrections are evidence; Sclip AI decides what they mean. Inferred preferences need your approval.</p>
     {error && <p role="alert">{error}</p>}
     {view && <>
       {view.captureWarning && <p role="alert">{view.captureWarning}</p>}
@@ -40,7 +40,7 @@ export function CreatorStyleSection() {
       <label><input type="checkbox" checked={view.binding.learningEnabled !== false} disabled={busy} onChange={e => void update({ action: 'project_enable', enabled: e.target.checked })} /> Use creator learning in this project</label>
       <AppInput ariaLabel="Series" value={series} onValueChange={setSeries} placeholder="Optional series for this project" />
       <Button disabled={busy} onClick={() => void update({ action: 'bind', creatorId: view.binding.creatorId, seriesId: series })}>Set project scope</Button>
-      <p>Switching or changing memory closes existing Hermes terminals so old context cannot carry into a new creator. Open the terminal again to continue. Other creators use isolated terminal sessions.</p>
+      <p>Switching or changing memory closes existing Sclip AI terminals so old context cannot carry into a new creator. Open the terminal again to continue. Other creators use isolated terminal sessions.</p>
       <label>Remember for <select aria-label="Preference scope" value={scope} onChange={e => setScope(e.target.value)}><option value="creator">This creator</option><option value="series">This series</option><option value="project">This project only</option></select></label>
       <AppInput ariaLabel="Explicit style preference" value={text} onValueChange={setText} placeholder="An editing preference or project override" />
       <Button disabled={busy || !text.trim()} onClick={() => void update({ action: 'explicit', text, scope: { kind: scope } })}>Remember preference</Button>
@@ -67,7 +67,7 @@ export function CreatorStyleSection() {
         <select aria-label="Reference scope" value={intent} onChange={e => setIntent(e.target.value)}><option value="project">This project</option><option value="persistent">Future projects</option></select>
         <Button disabled={busy || !referenceId.trim()} onClick={() => void update({ action: 'reference', media_id: referenceId, relationship, intent })}>Remember reference evidence</Button>
       </details>
-      <details><summary>Reset creator learning</summary><p>Clears this creator's style preferences, evidence and proposal associations. Projects and generic Hermes memory are preserved.</p><Button disabled={busy} onClick={() => void update({ action: 'reset' })}>Clear creator style memory</Button></details>
+      <details><summary>Reset creator learning</summary><p>Clears this creator's style preferences, evidence and proposal associations. Projects and generic Sclip memory are preserved.</p><Button disabled={busy} onClick={() => void update({ action: 'reset' })}>Clear creator style memory</Button></details>
     </>}
   </section>
 }

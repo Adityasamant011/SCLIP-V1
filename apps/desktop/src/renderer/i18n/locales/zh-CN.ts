@@ -288,7 +288,7 @@ const zhCN: Resources = {
     report_issue: "报告问题…",
     about: "关于 Sclip",
     version: "版本 {{version}}",
-    developed_by: "作者:UncleChair",
+    developed_by: "作者: Aditya Samant",
     license_mit: "证书:本体采用 <mit>MIT</mit> 许可证。",
     third_party: "第三方组件许可见 <notices>THIRD-PARTY-NOTICES.md</notices>。",
     copy_version: "复制版本信息",
@@ -1169,6 +1169,11 @@ const zhCN: Resources = {
     "list_motifs": "列出 Motif",
     "get_motif_source": "读取 Motif 源码",
     "write_motif_draft": "写入 Motif 草稿",
+    "get_hyperframes_recipe": "读取图形模板",
+    "write_hyperframes_draft": "创建动态图形",
+    "get_local_generation_status": "检查本地生成模型",
+    "generate_image": "生成图片",
+    "generate_music": "生成音乐",
     "preview_motif_draft": "预览 Motif 草稿",
     "install_motif": "安装 Motif",
     "delete_motif": "删除 Motif"
@@ -1395,7 +1400,7 @@ const zhCN: Resources = {
     },
     native_decode_unavailable: {
       title: "原生解码引擎不可用",
-      body: "原生解码组件（@weftcut/native-decode）加载失败，预览将仅使用 WebCodecs 引擎。重新安装应用可恢复。",
+      body: "原生解码组件加载失败，预览将仅使用 WebCodecs 引擎。重新安装应用可恢复。",
       action: "打开解码设置",
     },
     agent_skill_unavailable: {
@@ -1538,6 +1543,7 @@ const zhCN: Resources = {
     cat_keyboard: "键盘",
     cat_speech: "语音转录",
     cat_vlm: "视频理解",
+    cat_stock: "素材库",
     cat_agent: "代理",
     project_scope_blurb: "本页设置仅作用于当前项目，随工程文件保存。",
     startup_heading: "启动",

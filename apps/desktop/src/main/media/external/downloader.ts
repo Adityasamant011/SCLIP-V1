@@ -1,6 +1,9 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { Readable, Transform } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
+import { setTimeout as delay } from 'node:timers/promises'
 import type { ExternalMediaCandidate } from './types.js'
 
 const MAX_DOWNLOAD_SIZE_BYTES = 250 * 1024 * 1024 // 250MB
@@ -109,7 +112,7 @@ export function sanitizeFilename(name: string): string {
 export async function downloadExternalMediaCandidate(
   candidate: ExternalMediaCandidate,
   targetDir: string,
-  options?: { timeoutMs?: number; maxSizeBytes?: number },
+  options?: { timeoutMs?: number; maxSizeBytes?: number; signal?: AbortSignal },
 ): Promise<DownloadResult> {
   if (candidate.import_mode !== 'AUTO_IMPORT') {
     throw new Error(
@@ -128,10 +131,13 @@ export async function downloadExternalMediaCandidate(
   const timeoutMs = options?.timeoutMs ?? DOWNLOAD_TIMEOUT_MS
   const maxSizeBytes = options?.maxSizeBytes ?? MAX_DOWNLOAD_SIZE_BYTES
   const controller = new AbortController()
+  options?.signal?.throwIfAborted()
+  const signal = options?.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal
   const timeout = setTimeout(() => controller.abort(new Error(`Download timed out after ${timeoutMs}ms`)), timeoutMs)
 
   const tempFilePath = path.join(targetDir, `download_${randomUUID()}.tmp`)
   let bytesWritten = 0
+  const stagedFiles = [tempFilePath]
 
   try {
     let currentUrl = candidate.direct_media_url
@@ -142,7 +148,7 @@ export async function downloadExternalMediaCandidate(
     while (true) {
       validateSafeUrl(currentUrl)
       response = await fetch(currentUrl, {
-        signal: controller.signal,
+        signal,
         headers: {
           'User-Agent': 'SCLIP-Video-Editor/1.0 (https://sclip.app; contact@sclip.app)',
         },
@@ -151,9 +157,9 @@ export async function downloadExternalMediaCandidate(
 
       if (response.status === 429) {
         // Rate-limited by provider CDN (e.g. Wikimedia). Backoff briefly and retry once.
-        await new Promise((resolve) => setTimeout(resolve, 2000))
+        await delay(2000, undefined, { signal })
         response = await fetch(currentUrl, {
-          signal: controller.signal,
+          signal,
           headers: {
             'User-Agent': 'SCLIP-Video-Editor/1.0 (https://sclip.app; contact@sclip.app)',
           },
@@ -203,35 +209,23 @@ export async function downloadExternalMediaCandidate(
       throw new Error(`Empty response body from ${candidate.direct_media_url}`)
     }
 
-    const fileStream = fs.createWriteStream(tempFilePath)
-
-    const reader = body.getReader()
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      if (value) {
-        bytesWritten += value.length
-        if (bytesWritten > maxSizeBytes) {
-          reader.cancel()
-          fileStream.destroy()
-          throw new Error(`Download exceeded maximum permitted size of ${maxSizeBytes} bytes.`)
-        }
-        fileStream.write(Buffer.from(value))
-      }
-    }
-
-    await new Promise<void>((resolve, reject) => {
-      fileStream.end((err?: Error | null) => {
-        if (err) reject(err)
-        else resolve()
-      })
+    const bounded = new Transform({
+      transform(chunk: Buffer, _encoding, callback) {
+        bytesWritten += chunk.length
+        callback(bytesWritten > maxSizeBytes ? new Error(`Download exceeded maximum permitted size of ${maxSizeBytes} bytes.`) : null, chunk)
+      },
     })
+    await pipeline(Readable.fromWeb(body as import('node:stream/web').ReadableStream), bounded,
+      fs.createWriteStream(tempFilePath, { flags: 'wx' }), { signal })
+    if (!bytesWritten) throw new Error('Empty stock media download')
 
     const sanitizedTitle = sanitizeFilename(candidate.title || candidate.candidate_id)
-    const finalFilename = `${candidate.provider}_${candidate.provider_asset_id}_${sanitizedTitle}${ext}`
+    const finalFilename = `${sanitizeFilename(candidate.provider)}_${sanitizeFilename(candidate.provider_asset_id)}_${sanitizedTitle}_${randomUUID()}${ext}`
     const finalFilePath = path.join(targetDir, finalFilename)
 
+    signal.throwIfAborted()
     await fs.promises.rename(tempFilePath, finalFilePath)
+    stagedFiles.push(finalFilePath)
 
     const provenance = {
       candidate_id: candidate.candidate_id,
@@ -256,7 +250,9 @@ export async function downloadExternalMediaCandidate(
     }
 
     const provenancePath = `${finalFilePath}.provenance.json`
-    await fs.promises.writeFile(provenancePath, JSON.stringify(provenance, null, 2), 'utf8')
+    stagedFiles.push(provenancePath)
+    await fs.promises.writeFile(provenancePath, JSON.stringify(provenance, null, 2), { encoding: 'utf8', flag: 'wx' })
+    signal.throwIfAborted()
 
     return {
       filePath: finalFilePath,
@@ -266,9 +262,7 @@ export async function downloadExternalMediaCandidate(
     }
   } catch (error) {
     try {
-      if (fs.existsSync(tempFilePath)) {
-        await fs.promises.unlink(tempFilePath)
-      }
+      await Promise.all(stagedFiles.map(file => fs.promises.rm(file, { force: true })))
     } catch {
       // Ignore cleanup error
     }

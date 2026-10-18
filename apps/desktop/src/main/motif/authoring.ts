@@ -103,9 +103,12 @@ function takenIds(store: UserMotifStore): string[] {
  *  minted from the name and version forced to 1 (any id/version in `manifest` is
  *  ignored). `from` (when set) is recorded as the draft's Update target. */
 export function writeMotifDraftCore(store: UserMotifStore, manifest: Manifest, html: string, from: string | null): string {
-  validateManifest(manifest)
-  const draftId = assignUniqueId(manifest.name, takenIds(store))
-  const finalManifest: Manifest = { ...manifest, id: draftId, version: 1 }
+  // Identity is app-owned, so a caller following the tool contract may omit it.
+  // Validate the authored fields before minting the final unique identity.
+  const finalManifest: Manifest = { ...manifest, id: 'draft', version: 1 }
+  validateManifest(finalManifest)
+  const draftId = assignUniqueId(finalManifest.name, takenIds(store))
+  finalManifest.id = draftId
   store.writeDraft(draftId, composeMotifHtml(finalManifest, html))
   if (from) store.writeDraftTarget(draftId, from)
   return draftId

@@ -139,7 +139,7 @@ export function KeybindingPanel({
       onError(null);
       const dest = await saveDialog({
         title: t("keybindings.export_title"),
-        defaultPath: "weftcut-keybindings.json",
+        defaultPath: "sclip-keybindings.json",
         filters: [{ name: "JSON", extensions: ["json"] }],
       });
       if (typeof dest !== "string") return;

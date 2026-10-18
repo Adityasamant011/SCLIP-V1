@@ -48,26 +48,26 @@ pub async fn extract(cache: &CacheLayout, media: &MediaItem, t_us: TimeUs) -> Re
 
     let t_seconds = (t_us as f64) / 1_000_000.0;
 
-    // -ss BEFORE -i is the fast seek (decode-from-keyframe-then-walk-to-time).
+    // -ss BEFORE -i is the fast seek for videos (decode-from-keyframe-then-walk-to-time).
     // Accuracy is keyframe-bounded but for a thumbnail-grade extract that's
     // fine and ~10x faster than putting -ss after -i.
     // -update 1 + -f image2 forces ffmpeg to overwrite a single output
     // (otherwise it complains about the lack of a `%d` pattern).
-    let output = Command::new(ffmpeg_path())
+    // A still image is a single frame, not a seekable stream. In particular,
+    // input-seeking a JPEG at zero can discard its only frame while ffmpeg
+    // reports success. Decode it directly, without an input seek.
+    let mut command = Command::new(ffmpeg_path());
+    command
         .no_console_window()
         // Reap on future-drop so no orphan keeps writing the frame temp; see
         // hwaccel.rs.
         .kill_on_drop(true)
-        .args([
-            "-y",
-            "-hide_banner",
-            "-nostats",
-            "-loglevel",
-            "error",
-            "-ss",
-            &format!("{t_seconds}"),
-            "-i",
-        ])
+        .args(["-y", "-hide_banner", "-nostats", "-loglevel", "error"]);
+    if media.kind == MediaKind::Video {
+        command.args(["-ss", &format!("{t_seconds}")]);
+    }
+    let output = command
+        .arg("-i")
         .arg(&media.path_abs)
         .args([
             "-frames:v",
@@ -205,6 +205,59 @@ mod tests {
         assert_eq!(p1, p2);
         let len_after = tokio::fs::metadata(&p2).await.unwrap().len();
         assert_eq!(len_before, len_after);
+    }
+
+    #[tokio::test]
+    async fn extracts_single_jpeg_without_seeking_away_its_frame() {
+        if !ffmpeg_available() {
+            eprintln!("ffmpeg not on PATH — skipping JPEG frame smoke");
+            return;
+        }
+        let tmp = TempDir::new().unwrap();
+        let cache = CacheLayout::new(tmp.path().join("cache"));
+        cache.ensure_dirs().unwrap();
+        let source = tmp.path().join("still.jpg");
+        let status = Command::new("ffmpeg")
+            .args([
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=blue:s=320x180",
+                "-frames:v",
+                "1",
+                "-update",
+                "1",
+            ])
+            .arg(&source)
+            .status()
+            .await
+            .unwrap();
+        assert!(status.success());
+        let media = MediaItem {
+            id: new_id(),
+            label: None,
+            path_abs: source,
+            path_rel: None,
+            kind: MediaKind::Image,
+            metadata: MediaMetadata::default(),
+            decode_route: DecodeRoute::Bypass,
+            waveform_path: None,
+            conform_path: None,
+            thumbnails_dir: None,
+            file_hash_blake3: "single-jpeg-frame".into(),
+            file_size: 0,
+            file_mtime: 0,
+            imported_at: Utc::now(),
+        };
+        let frame = extract(&cache, &media, 0)
+            .await
+            .expect("JPEG frame at zero");
+        assert!(cached_ok(&frame));
+        assert_eq!(extract(&cache, &media, 0).await.unwrap(), frame);
     }
 
     #[tokio::test]

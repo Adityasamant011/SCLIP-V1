@@ -31,6 +31,28 @@ import type { TsActorHost } from '../../state/ts-actor-host.js'
 
 describe('External Media B-Roll System (Phase 1)', () => {
   describe('Provider Normalization', () => {
+    it.each([['pexels', PexelsProvider], ['pixabay', PixabayProvider]] as const)('reports %s authentication failures for either-media searches', async (name, Provider) => {
+      const originalFetch = globalThis.fetch, variable = `${name.toUpperCase()}_API_KEY`, originalKey = process.env[variable]
+      process.env[variable] = 'synthetic-key'
+      globalThis.fetch = vi.fn(async () => new Response('', { status: 401 }))
+      try { await expect(new Provider().search({ query: 'abstract', media_type: 'either' })).rejects.toThrow('check your API key') }
+      finally { globalThis.fetch = originalFetch; if (originalKey === undefined) delete process.env[variable]; else process.env[variable] = originalKey }
+    })
+    it('keeps the production stock service restricted to stock providers', async () => {
+      const service = new ExternalMediaService(true)
+      expect(service.getAvailableProviders()).toEqual(['pexels', 'pixabay'])
+      expect(await service.search({ query: 'abstract', provider: 'youtube' })).toMatchObject({ success: false, search_status: 'ERROR', providers_queried: [], candidates: [] })
+    })
+    it('uses Pixabay minimum page size even when requesting one result', async () => {
+      const originalFetch = globalThis.fetch, originalKey = process.env.PIXABAY_API_KEY
+      process.env.PIXABAY_API_KEY = 'synthetic-key'
+      const fetcher = vi.fn(async (_url: unknown) => new Response(JSON.stringify({ hits: [] }), { headers: { 'content-type': 'application/json' } }))
+      globalThis.fetch = fetcher
+      try {
+        await new PixabayProvider().search({ query: 'abstract', media_type: 'image', limit: 1 })
+        expect(new URL(String(fetcher.mock.calls[0][0])).searchParams.get('per_page')).toBe('3')
+      } finally { globalThis.fetch = originalFetch; if (originalKey === undefined) delete process.env.PIXABAY_API_KEY; else process.env.PIXABAY_API_KEY = originalKey }
+    })
     it('normalizes YouTube discovery candidates and enforces DISCOVERY_ONLY / USER_IMPORT', async () => {
       const provider = new YouTubeProvider()
       const mockSearchData = {
@@ -371,28 +393,7 @@ describe('External Media B-Roll System (Phase 1)', () => {
       const fakeImageBytes = Buffer.from('FAKE_JPEG_IMAGE_DATA_BYTES')
 
       const originalFetch = globalThis.fetch
-      globalThis.fetch = vi.fn(async () => {
-        return {
-          ok: true,
-          headers: new Headers({
-            'content-type': 'image/jpeg',
-            'content-length': String(fakeImageBytes.length),
-          }),
-          body: {
-            getReader: () => {
-              let done = false
-              return {
-                read: async () => {
-                  if (done) return { done: true, value: undefined }
-                  done = true
-                  return { done: false, value: new Uint8Array(fakeImageBytes) }
-                },
-                cancel: () => {},
-              }
-            },
-          },
-        } as any
-      })
+      globalThis.fetch = vi.fn(async () => new Response(fakeImageBytes, { headers: { 'content-type': 'image/jpeg' } }))
 
       const candidate: ExternalMediaCandidate = {
         candidate_id: 'pexels-photo-777',
@@ -664,28 +665,7 @@ describe('External Media B-Roll System (Phase 1)', () => {
 
       // Mock fetch for downloader
       const originalFetch = globalThis.fetch
-      globalThis.fetch = vi.fn(async () => {
-        return {
-          ok: true,
-          headers: new Headers({
-            'content-type': 'video/mp4',
-            'content-length': '1024',
-          }),
-          body: {
-            getReader: () => {
-              let done = false
-              return {
-                read: async () => {
-                  if (done) return { done: true, value: undefined }
-                  done = true
-                  return { done: false, value: new Uint8Array(Buffer.from('FAKE_MP4_BYTES')) }
-                },
-                cancel: () => {},
-              }
-            },
-          },
-        } as any
-      })
+      globalThis.fetch = vi.fn(async () => new Response(Buffer.from('FAKE_MP4_BYTES'), { headers: { 'content-type': 'video/mp4' } }))
 
       try {
         // Step 1: Run video_search_external_media via handleCallTool

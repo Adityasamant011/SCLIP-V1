@@ -23,10 +23,11 @@ vi.mock('../sclip/visionRuntime',()=>({getVisionRuntime:()=>({analyze:async()=>(
 const hermesSource=process.env.SCLIP_OFFLINE_HERMES_SOURCE ?? path.join(os.homedir(),'SCLIP/hermes-agent-src')
 const body=(r:any)=>JSON.parse(r.content[0].text)
 const receipt=(r:any)=>r.content.filter((b:any)=>b.type==='text').map((b:any)=>{try{return JSON.parse(b.text).evidence_receipt}catch{return null}}).find(Boolean)
-async function fixture() {
+async function fixture(withAudio = false) {
  const ids=uuidV7Gen(),initial=blankProject(ids,'offline-completion')
  const media=mediaItemTemplate('00000000-0000-0000-0000-000000000001','Video',5000000)
  media.metadata.video={width:320,height:180,fps:{num:30,den:1},codec:'h264',pixel_format:'yuv420p'} as any
+ if(withAudio)media.metadata.audio={channels:2,sample_rate:48000,codec:'aac'} as any
  initial.media_pool[media.id]=media
  const actor=createActor({initial,idGen:ids,clock:()=> 'now'})
  const agent=new AgentActivityService(actor,()=>{});agent.start()
@@ -37,7 +38,7 @@ async function fixture() {
  let liveFeedback: LiveFeedbackSnapshot | undefined, feedbackFailure = false
  const host=await startMcpHost(backend,{getTsHost:()=>ts,getActiveWindow:()=>activeWindow,getReviewerSummary:()=>{if(feedbackFailure)throw new Error('Synthetic optional observation failure');return {...reviewer.getSummary(),live_feedback:liveFeedback}},
  // This transport fixture has synthetic media and PNG bytes; decode is an injected I/O seam. Real compositor/decode proof is covered independently.
- verifyCompletionOutput:async project=>({valid:true,decoded:true,has_video:true,has_audio:false,duration_us:project.compositions[project.root_id].duration_us})})
+ verifyCompletionOutput:async project=>({valid:true,decoded:true,has_video:true,has_audio:withAudio,duration_us:project.compositions[project.root_id].duration_us})})
  const clients:Client[]=[]
  async function connect(){const c=new Client({name:'offline-Hermes-decision',version:'1'},{});await c.connect(new StreamableHTTPClientTransport(new URL(host.getInfo().url),{requestInit:{headers:{Authorization:`Bearer ${host.getInfo().bearer_token}`}}}));clients.push(c);return c}
  const client=await connect(),call=async(n:string,a:Record<string,unknown>={})=>client.callTool({name:n,arguments:a}) as Promise<any>
@@ -57,6 +58,27 @@ async function fixture() {
  return {actor,ts,provider,reviewer,host,call,connect,assemble,activeWindow,setFeedback:(value?:LiveFeedbackSnapshot)=>{liveFeedback=value},failFeedback:()=>{feedbackFailure=true},async close(){for(const c of clients)await c.close();reviewer.dispose();agent.stop();await host.close()}}
 }
 describe('Normal completion: critique -> Hermes choice -> actor -> fresh evidence',()=>{
+ it('can collect final audio/speech after a closed visual repair, preserving the completion evidence gate',async()=>{
+  const audio=vi.spyOn(await import('../sclip/renderedAudioEvidence'),'inspectRenderedAudio').mockResolvedValue({coordinate_space:'timeline',evidence_origin:'CURRENT_TIMELINE',status:'measured',has_audio:true,signal:{duration_us:2000000,rms:0.1,peak:0.4},transcript:{status:'available',segments:[{text:'Synthetic speech',t_start_us:0,t_end_us:2000000}]},observed_dimensions:['audio','speech']} as any)
+  const f=await fixture(true)
+  try{
+   const id=await f.assemble();f.host.setEditingBrief('Create a video with speech.');await f.call('end_agent_session')
+   expect((await f.call('inspect_rendered_audio',{start_us:0,end_us:2000000})).isError).not.toBe(true)
+   const seen=await f.call('vision_inspect',{timeline_t_us:500000,question:'Observe current inset'})
+   const issue=body(await f.call('record_issue',{description:'Synthetic editor chooses a visual repair',severity:'moderate',repairable:true,evidence_dimensions:['visual'],evidence_receipt_ids:[receipt(seen).id],layer_ids:[id]}))
+   await f.call('revision_control',{action:'select_issue',issue_id:issue.issue.id});await f.call('checkpoint',{label:'Before selected repair'})
+   expect((await f.call('update_layer_params',{layer_id:id,patch:{kind:'VideoClip',scale_x:3,scale_y:3}})).isError).not.toBe(true)
+   await f.call('vision_inspect',{timeline_t_us:500000,question:'Observe repaired frame'})
+   expect((await f.call('revision_control',{action:'finish_issue',status:'resolved'})).isError).not.toBe(true)
+   const premature=await f.call('revision_control',{action:'complete'})
+   expect(premature.isError).toBe(true)
+   expect(JSON.stringify(premature)).toContain('current_rendered_inspection')
+   expect((await f.call('inspect_rendered_audio',{start_us:0,end_us:2000000})).isError).not.toBe(true)
+   expect((await f.call('revision_control',{action:'complete'})).isError).not.toBe(true)
+   expect(body(await f.call('end_agent_session')).completion).toBe('reviewed')
+   expect(audio).toHaveBeenCalledTimes(2)
+  }finally{await f.close();audio.mockRestore()}
+ })
  it.each(['hi','What can you do with video?','Explain how to make a 30-second video.'])('ending read-only work on %s does not demand a media deliverable',async brief=>{
   const f=await fixture();try{
    f.host.setEditingBrief(brief)

@@ -4,6 +4,7 @@ Input/output are app-selected local paths, not executable prompt text. No planne
 prompt rewriting, implicit model download, TTS substitution or timeline editing.
 """
 import importlib.metadata
+import gc
 import json
 import os
 from pathlib import Path
@@ -33,19 +34,10 @@ def generate_image(req):
     image.save(req["output"])
 
 
-def local_t5_paths(value, root):
-    if isinstance(value, dict):
-        if value.get("type") == "t5" or "t5_model_name" in value:
-            config = value.setdefault("config", {}) if value.get("type") == "t5" else value
-            config["model_path"] = str(root / "t5")
-        for item in list(value.values()):
-            local_t5_paths(item, root)
-    elif isinstance(value, list):
-        for item in value:
-            local_t5_paths(item, root)
-
-
 def generate_music(req):
+    for package, version in req.get("runtime_versions", {}).items():
+        if importlib.metadata.version(package) != version:
+            raise RuntimeError(f"Music runtime dependency differs from the pack: {package}")
     import torch
     import numpy as np
     import wave
@@ -61,16 +53,34 @@ def generate_music(req):
     config = json.loads((root / "model_config.json").read_text())
     if config.get("sample_rate") != 44100:
         raise RuntimeError("Unexpected music model sample rate")
-    local_t5_paths(config, root)
+    # stable-audio-tools 0.0.19 does not accept a T5 model_path argument.
+    # The pack includes a pinned, complete local HF cache for t5-base instead.
     # CPU is deliberate for the first compact audio integration. Metal support
     # is not inferred from CUDA benchmarks or silently selected.
     model = create_model_from_config(config)
     model.load_state_dict(load_file(str(root / "model.safetensors"), device="cpu"), strict=True)
     model = model.to("cpu").eval()
     with torch.inference_mode():
-        audio = generate_diffusion_cond(model, steps=8, cfg_scale=1.0,
+        latents = generate_diffusion_cond(model, steps=8, cfg_scale=1.0,
             conditioning=[{"prompt": req["prompt"], "seconds_total": req["duration_seconds"]}],
-            sample_size=config["sample_size"], seed=req["seed"], sampler_type="pingpong", device="cpu")
+            sample_size=config["sample_size"], seed=req["seed"], sampler_type="pingpong", device="cpu",
+            return_latents=True)
+        decoder = model.pretransform
+        if decoder is None:
+            raise RuntimeError("Small requires its configured waveform decoder")
+        # Denoising/text models are no longer needed. Release them before the
+        # memory-heavy waveform decode instead of holding both phases resident.
+        del model
+        gc.collect()
+        # Half CPU convolution uses a very slow fallback on this Mac. Convert
+        # only the retained autoencoder to float32, after freeing diffusion.
+        decoder.model_half = False
+        decoder.model.float()
+        # Use the runtime's overlapped decoder windows rather than allocating
+        # full-length CPU convolution workspaces. Its 32-latent overlap trims
+        # window edges; 64-latent windows keep this phase inside the RSS budget.
+        decoder.chunked = True
+        audio = decoder.decode(latents.float(), chunk_size=64, overlap=32)
     frames = round(req["duration_seconds"] * 44100)
     if audio.ndim != 3 or audio.shape[0] != 1 or audio.shape[1] != 2 or audio.shape[2] < frames:
         raise RuntimeError("Music generator returned an unexpected shape")
@@ -95,7 +105,8 @@ def main():
         raise RuntimeError("Generation requires configured absolute local paths")
     # Defense in depth: an incomplete library cache cannot turn into a WAN call.
     os.environ.update(HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1", HF_DATASETS_OFFLINE="1",
-                      HF_HUB_DISABLE_TELEMETRY="1", DO_NOT_TRACK="1")
+                      HF_HUB_DISABLE_TELEMETRY="1", DO_NOT_TRACK="1",
+                      HF_HUB_CACHE=str(weights / "hub"), HF_HOME=str(weights / "hf-home"))
     socket.socket.connect = deny_network
     socket.create_connection = deny_network
     if req["kind"] == "image":

@@ -188,7 +188,7 @@ export function HermesTerminal({ projectId, sessionId, onTerminalReady }: Props)
     }
   }, [projectId, sessionId])
 
-  return <div className="sclip-live-terminal" aria-label="Hermes interactive terminal">
+  return <div className="sclip-live-terminal" aria-label="Sclip interactive terminal">
     {error && <div className="sclip-terminal-error" role="alert">{error}</div>}
     <div ref={host} className="sclip-terminal-host" />
   </div>

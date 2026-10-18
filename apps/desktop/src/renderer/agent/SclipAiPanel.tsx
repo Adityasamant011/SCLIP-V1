@@ -54,13 +54,13 @@ export function SclipAiPanel() {
     let active = true
     setTerminal({ kind: 'opening' })
     if (!projectId) {
-      setTerminal({ kind: 'error', message: 'Open a Sclip project to start Hermes.' })
+      setTerminal({ kind: 'error', message: 'Open a Sclip project to start Sclip AI.' })
       return () => { active = false }
     }
     void (async () => {
       try {
         let status = await sclipGetHermesStatus()
-        // Retry polling up to 5 times (1.5 seconds total) if Hermes is starting/restarting
+        // Retry polling up to 5 times (1.5 seconds total) if Sclip AI is starting/restarting
         const maxAttempts = 5
         for (let attempt = 1; !status.online && attempt < maxAttempts; attempt++) {
           if (!active) return
@@ -68,7 +68,7 @@ export function SclipAiPanel() {
           status = await sclipGetHermesStatus()
         }
         if (!status.online) {
-          throw new Error(status.runtimeDetail || 'Hermes is not connected.')
+          throw new Error(status.runtimeDetail || 'Sclip AI is not connected.')
         }
         const sessions = await sclipListProjectSessions(projectId)
         let sessionId = sessions.activeSessionId
@@ -119,7 +119,7 @@ export function SclipAiPanel() {
                 )}
               </div>
             ) : (
-              'Starting Hermes terminal…'
+              'Starting Sclip AI terminal…'
             )}
           </div>
         )}

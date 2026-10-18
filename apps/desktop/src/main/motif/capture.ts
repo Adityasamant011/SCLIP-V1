@@ -1,6 +1,6 @@
 import { BrowserWindow } from 'electron'
 import { hardenWindow, markInternalWindow } from '../windows'
-import { BUILTIN_MANIFESTS, motifCtxDurationS, type Manifest } from '../../shared/motifs/catalog.js'
+import { BUILTIN_MANIFESTS, canonicalizeProps, motifCtxDurationS, type Manifest } from '../../shared/motifs/catalog.js'
 import type { UserMotifStore } from './store.js'
 
 interface CaptureArgs {
@@ -158,7 +158,10 @@ async function doCapture(a: CaptureArgs): Promise<string> {
   }
   const manifest: Manifest | undefined =
     BUILTIN_MANIFESTS.get(a.motifId) ?? motifStore?.getMotif(a.motifId)?.manifest
-  const props = JSON.parse(a.propsJson) as Record<string, unknown>
+  // MCP previews may supply only overrides. Match timeline/export props exactly:
+  // fill declared defaults and reject invalid/unknown values before rendering.
+  const suppliedProps = JSON.parse(a.propsJson) as Record<string, unknown>
+  const props = manifest ? canonicalizeProps(manifest, suppliedProps) : suppliedProps
   const duration = manifest ? motifCtxDurationS(manifest, props) : 5
   const meta = { duration, width: a.width, height: a.height, fps: 30, settleRafs: a.settleRafs }
   const expr = `window.__motifRender(${JSON.stringify(a.tSec)}, ${JSON.stringify(props)}, ${JSON.stringify(meta)})`

@@ -339,7 +339,7 @@ export function useExportFlow(deps: {
         return;
       }
     } catch (e) {
-      console.warn("[weftcut/export] checkExportAttributionSafety check failed:", e);
+      console.warn("[sclip/export] checkExportAttributionSafety check failed:", e);
     }
     // ---- No-material guard -----------------------------------------------
     // A video export with nothing visible to render would emit pure black —
@@ -448,7 +448,7 @@ export function useExportFlow(deps: {
         }
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        console.error("[weftcut/pixi] audio-only export failed:", e);
+        console.error("[sclip/pixi] audio-only export failed:", e);
         setRunState({ kind: "error", detail: `Audio export failed: ${msg}` });
         return;
       }
@@ -622,9 +622,9 @@ export function useExportFlow(deps: {
     const tempBase = await tempDir();
     const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const tempVideoExt = isIntermediateCodec(settings.codec) ? "mov" : "mp4";
-    const tempVideoPath = await join(tempBase, `weftcut-pixi-${stamp}.${tempVideoExt}`);
+    const tempVideoPath = await join(tempBase, `sclip-pixi-${stamp}.${tempVideoExt}`);
     const audioExt = settings.audio.codec === "opus" ? "mka" : "m4a";
-    const tempAudioPath = await join(tempBase, `weftcut-pixi-${stamp}.${audioExt}`);
+    const tempAudioPath = await join(tempBase, `sclip-pixi-${stamp}.${audioExt}`);
     ownedTemps.push(tempVideoPath, tempAudioPath);
     signal.throwIfAborted();
 
@@ -672,7 +672,7 @@ export function useExportFlow(deps: {
       );
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      console.error("[weftcut/pixi] motif bake failed:", e);
+      console.error("[sclip/pixi] motif bake failed:", e);
       setRunState({ kind: "error", detail: `Motif render failed: ${msg}` });
       return;
     }
@@ -763,7 +763,7 @@ export function useExportFlow(deps: {
         ownsVideoSink = true;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        console.error("[weftcut/pixi] video sink start failed:", e);
+        console.error("[sclip/pixi] video sink start failed:", e);
         // Native encoder unavailable under `auto`, on a combo WebCodecs can
         // actually take (8-bit, non-intermediate): offer an explicit-consent
         // fallback instead of hard-erroring — never a silent encoder swap.
@@ -887,7 +887,7 @@ export function useExportFlow(deps: {
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      console.error("[weftcut/pixi] export failed:", e);
+      console.error("[sclip/pixi] export failed:", e);
       if (nativeSink) await exportVideoSinkCancel().catch(() => {});
       ownsVideoSink = false;
       setRunState({ kind: "error", detail: msg });
@@ -914,7 +914,7 @@ export function useExportFlow(deps: {
         ownsVideoSink = false;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        console.error("[weftcut/pixi] sink finish failed:", e);
+        console.error("[sclip/pixi] sink finish failed:", e);
         setRunState({ kind: "error", detail: `Finalize failed: ${msg}` });
         void remove(tempVideoPath).catch(() => {});
         void remove(tempAudioPath).catch(() => {});
@@ -946,7 +946,7 @@ export function useExportFlow(deps: {
       await muxExport(tempVideoPath, tempAudioPath, path);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      console.error("[weftcut/pixi] finalize failed:", e);
+      console.error("[sclip/pixi] finalize failed:", e);
       // nativeSink sink-finish already ran (above); mux failure doesn't need cancel.
       setRunState({
         kind: "error",
@@ -1029,7 +1029,7 @@ export function useExportFlow(deps: {
           resizable: true,
         });
       } catch (e) {
-        console.error("[weftcut/render-play] failed to open popup:", e);
+        console.error("[sclip/render-play] failed to open popup:", e);
       }
     },
     [t],
@@ -1041,7 +1041,7 @@ export function useExportFlow(deps: {
   // fallback the user needs.
   const revealExportedFile = useCallback((path: string) => {
     void revealInShell(path).catch((e: unknown) => {
-      console.error("[weftcut/export] failed to reveal exported file:", e);
+      console.error("[sclip/export] failed to reveal exported file:", e);
     });
   }, []);
 

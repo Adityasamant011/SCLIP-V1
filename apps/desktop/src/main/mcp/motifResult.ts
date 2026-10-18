@@ -20,8 +20,10 @@ export function shapeMotifMcpResult(name: string, raw: unknown): ToolResultJson 
       return toolJson(stripped)
     }
     case 'get_motif_source':
+    case 'get_hyperframes_recipe':
       return toolJson(raw)
     case 'write_motif_draft':
+    case 'write_hyperframes_draft':
     case 'install_motif':
       return toolText(raw as string)
     case 'delete_motif':

@@ -45,7 +45,7 @@ const CSP = [
 
 function cspMeta(): Plugin {
   return {
-    name: 'weftcut-csp-meta',
+    name: 'sclip-csp-meta',
     apply: 'build',
     transformIndexHtml() {
       return [

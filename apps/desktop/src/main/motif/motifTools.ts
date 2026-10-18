@@ -4,9 +4,11 @@
 // path (ts-actor-host.handleInvoke `case 'motif'`) and the MCP path (server.ts
 // `route === 'motif'`). Returns a RAW value (array | object | id string | null);
 // the MCP caller wraps it via shapeMotifMcpResult, the renderer returns it as-is.
-import type { Manifest } from '../../shared/motifs/catalog'
+import { canonicalizeProps, type Manifest } from '../../shared/motifs/catalog'
 import type { MotifRebindEntry } from '../state/model'
 import type { UserMotifStore } from './store'
+import { hyperframesToMotif } from './hyperframes'
+import { getHyperframesRecipe } from './hyperframesRecipes'
 import {
   type BuiltinMotif, type MotifLayerRef, type InstallArgs,
   getMotifSource, listMotifsInner, writeMotifDraftCore, amendDraftHtml,
@@ -46,12 +48,33 @@ export function runMotifTool(name: string, rawArgs: Record<string, unknown>, dep
   // Renderer write/install nest under `args`; everything else is flat. MCP is flat.
   const a = (rawArgs.args ?? rawArgs) as Record<string, unknown>
   switch (name) {
+    case 'get_hyperframes_recipe':
+      return getHyperframesRecipe(a)
     case 'list_motifs':
       return listMotifsInner(deps.store, deps.builtins)
     case 'get_motif_source':
       return getMotifSource(deps.store, deps.builtins, a.id as string)
+    case 'write_hyperframes_draft':
     case 'write_motif_draft': {
-      const id = writeMotifDraftCore(deps.store, a.manifest as Manifest, a.html as string, (a.from as string | undefined) ?? null)
+      const format = name === 'write_hyperframes_draft' ? 'hyperframes' : a.format
+      if (format !== undefined && format !== 'motif' && format !== 'hyperframes') throw new Error('Unknown graphic format')
+      let manifest = a.manifest as Manifest
+      let html = a.html as string
+      if (name === 'write_hyperframes_draft' && a.recipe === undefined && (a.manifest === undefined || a.html === undefined)) throw new Error('Choose recipe + props OR both custom manifest + html')
+      if (name === 'write_hyperframes_draft' && a.recipe !== undefined) {
+        if (a.manifest !== undefined || a.html !== undefined) throw new Error('Choose recipe + props OR custom manifest + html; do not mix authoring modes')
+        const source = getHyperframesRecipe(a) as { manifest: Manifest; html: string }
+        manifest = source.manifest; html = source.html
+        const props = canonicalizeProps(manifest, a.props)
+        if (['process', 'timeline'].includes(String(a.recipe)) && Number(props.third_at) < Number(props.second_at) + 0.5) throw new Error('Keep at least 0.5 seconds between the second and third visual beats')
+        // A fresh draft owns its schema. Grounded recipe values become editable
+        // defaults, so the agent need not repeat a large source or prop payload.
+        for (const [key, value] of Object.entries(props)) Object.assign(manifest.props_schema[key], { default: value })
+      } else if (name === 'write_hyperframes_draft' && a.props !== undefined) throw new Error('Custom source defines defaults in manifest.props_schema; pass instance values to preview_motif_draft/add_motif props')
+      const source = format === 'hyperframes'
+        ? hyperframesToMotif(manifest, html)
+        : { manifest, html }
+      const id = writeMotifDraftCore(deps.store, source.manifest, source.html, (a.from as string | undefined) ?? null)
       deps.emitChanged(); deps.refreshCatalog()
       return id
     }

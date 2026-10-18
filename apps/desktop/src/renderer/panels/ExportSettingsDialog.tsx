@@ -120,7 +120,7 @@ export function ExportSettingsDialog({ comp, durationUs, hasTenBitSource, onCanc
   const markedRange = resolveMarkedRange(markedInUs, markedOutUs, durationUs);
   const [settings, setSettings] = useState<ExportSettings | null>(null);
   const [location, setLocation] = useState<string>("");
-  const [filename, setFilename] = useState<string>("weftcut-export");
+  const [filename, setFilename] = useState<string>("sclip-export");
   /// True once a one-frame WebCodecs smoke-encode confirms the current
   /// codec/dims/fps combo actually encodes; false if it fails; null while
   /// checking. Purely informational (which branch encodes is decided by

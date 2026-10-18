@@ -180,6 +180,10 @@ mac:
       to: vision/sidecar/kokoro_tts_worker.py
     - from: src/vision/sidecar/generation_worker.py
       to: vision/sidecar/generation_worker.py
+    - from: scripts/setup-music-pack.py
+      to: vision/sidecar/setup-music-pack.py
+    - from: scripts/music-requirements.txt
+      to: vision/sidecar/music-requirements.txt
 
     # LGPL §6 obligations for @weftcut/native-decode's ffmpeg runtime. The
     # .dylib themselves ride co-located beside the .node (files + asarUnpack

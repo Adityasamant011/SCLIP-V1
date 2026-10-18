@@ -36,12 +36,14 @@ export class ExternalMediaService {
   private readonly searchSemaphore = new Semaphore(CONCURRENCY_LIMITS.MAX_CONCURRENT_API_SEARCHES)
 
 
-  constructor() {
+  constructor(private readonly stockOnly = false) {
     this.registerProvider(new PexelsProvider())
     this.registerProvider(new PixabayProvider())
-    this.registerProvider(new WikimediaProvider())
-    this.registerProvider(new OpenverseProvider())
-    this.registerProvider(new YouTubeProvider())
+    if (!stockOnly) {
+      this.registerProvider(new WikimediaProvider())
+      this.registerProvider(new OpenverseProvider())
+      this.registerProvider(new YouTubeProvider())
+    }
   }
 
   registerProvider(provider: ExternalMediaProvider): void {
@@ -83,6 +85,13 @@ export class ExternalMediaService {
 
   private resolveProviders(options: ExternalMediaSearchOptions): ExternalMediaProvider[] {
     const { provider = 'auto', media_type = 'either', query, visual_intent } = options
+
+    if (this.stockOnly) {
+      if (provider === 'auto') return Array.from(this.providers.values())
+      const selected = this.providers.get(provider)
+      if (!selected) throw new Error('This build supports Pexels and Pixabay stock. Choose auto, pexels or pixabay.')
+      return [selected]
+    }
 
     if (provider !== 'auto') {
       const p = this.providers.get(provider)

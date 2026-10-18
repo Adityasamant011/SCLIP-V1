@@ -10,7 +10,8 @@ export class PexelsProvider implements ExternalMediaProvider {
   readonly displayName = 'Pexels Stock'
 
   async search(options: ExternalMediaSearchOptions): Promise<ExternalMediaCandidate[]> {
-    const { query, media_type = 'either', limit = 10, orientation } = options
+    const { query, media_type = 'either', orientation } = options
+    const limit = Math.max(1, Math.min(80, options.limit ?? 10))
     const apiKey = getProviderKey('pexels')
 
     if (!apiKey) {
@@ -18,6 +19,7 @@ export class PexelsProvider implements ExternalMediaProvider {
     }
 
     const candidates: ExternalMediaCandidate[] = []
+    const failures: unknown[] = []
     const orientationParam = orientation ? `&orientation=${orientation}` : ''
 
     if (media_type === 'either' || media_type === 'video') {
@@ -75,6 +77,7 @@ export class PexelsProvider implements ExternalMediaProvider {
           throw new Error(`Pexels video search failed (${videoRes.status})`)
         }
       } catch (err) {
+        failures.push(err)
         if (media_type === 'video') throw err
       }
     }
@@ -127,10 +130,12 @@ export class PexelsProvider implements ExternalMediaProvider {
           throw new Error(`Pexels photo search failed (${photoRes.status})`)
         }
       } catch (err) {
+        failures.push(err)
         if (media_type === 'image') throw err
       }
     }
 
+    if (failures.length === 2) throw new Error('Pexels stock searches failed; check your API key, quota and network connection.')
     return candidates.slice(0, limit)
   }
 }

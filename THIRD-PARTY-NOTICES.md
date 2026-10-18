@@ -63,6 +63,22 @@ The built-in "lower-third" Motif bundles the Inter typeface
 **SIL Open Font License 1.1** — see
 `apps/desktop/src/shared/motifs/builtin/lower-third/assets/LICENSE`.
 
+## WeftCut Video Editing Engine
+
+Portions of the editing timeline, WebGPU renderer, and canvas composition engine are derived from WeftCut (© 2026 UncleChair), licensed under the MIT License:
+
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+## Nous Hermes Agent Framework
+
+The autonomous agent runtime and PTY agent subsystem are built on Hermes (© 2025 Nous Research), licensed under the MIT License:
+
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
 ## npm and Rust dependencies
 
 Bundled JavaScript/TypeScript dependencies (npm) and statically linked Rust

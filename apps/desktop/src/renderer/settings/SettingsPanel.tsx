@@ -29,6 +29,7 @@ import { AppSwitch } from "../components/AppSwitch";
 import { Button } from "@/components/ui/button";
 import { KeybindingPanel } from "./KeybindingPanel";
 import { HermesSettingsSection } from "./HermesSettingsSection";
+import { StockMediaSection } from './StockMediaSection';
 import { CreatorStyleSection } from "./CreatorStyleSection";
 import { PreviewSection } from "./PreviewSection";
 import { ModelSection } from "./ModelSection";
@@ -80,7 +81,8 @@ export type SettingsCategory =
   | "keyboard"
   | "speech"
   | "vlm"
-  | "agent";
+  | "agent"
+  | "stock";
 
 /// Sidebar order. Every pane stays mounted (toggled via `hidden`) so
 /// in-progress input and per-section fetches survive a tab switch.
@@ -93,6 +95,7 @@ const CATEGORIES: ReadonlyArray<{ id: SettingsCategory; labelKey: string }> = [
   // reads the footage, and a user looking for one will look beside the other.
   { id: "vlm", labelKey: "settings.cat_vlm" },
   { id: "agent", labelKey: "settings.cat_agent" },
+  { id: "stock", labelKey: "settings.cat_stock" },
 ];
 
 export interface CompositionState {
@@ -379,6 +382,9 @@ export function SettingsPanel({
           >
             <HermesSettingsSection />
             <CreatorStyleSection />
+          </div>
+          <div role="tabpanel" id="settings-panel-stock" aria-labelledby="settings-tab-stock" hidden={category !== "stock"} className="settings-pane">
+            <StockMediaSection />
           </div>
         </div>
       </div>

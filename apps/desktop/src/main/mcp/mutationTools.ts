@@ -19,7 +19,7 @@ export const HYBRID_TOOLS: ReadonlySet<string> = new Set([
  *  MOTIF_TOOL_DEFS (mcpCatalog dedups by name); the two staleness tools are
  *  unadvertised. The Rust catalog carries no motif arms. */
 export const MOTIF_TOOLS: ReadonlySet<string> = new Set([
-  'list_motifs', 'get_motif_source', 'write_motif_draft', 'delete_motif', 'install_motif',
+  'list_motifs', 'get_motif_source', 'get_hyperframes_recipe', 'write_motif_draft', 'write_hyperframes_draft', 'delete_motif', 'install_motif',
   'motif_staleness_report', 'acknowledge_motif_staleness',
 ])
 

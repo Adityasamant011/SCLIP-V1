@@ -304,7 +304,7 @@ const enUS = {
     report_issue: "Report an Issue…",
     about: "About Sclip",
     version: "Version {{version}}",
-    developed_by: "Developed by UncleChair",
+    developed_by: "Developed by Aditya Samant",
     license_mit: "License: Sclip is <mit>MIT</mit>-licensed.",
     third_party:
       "Third-party components have their own licenses: <notices>THIRD-PARTY-NOTICES.md</notices>.",
@@ -1359,6 +1359,11 @@ const enUS = {
     "list_motifs": "List motifs",
     "get_motif_source": "Read motif source",
     "write_motif_draft": "Write motif draft",
+    "get_hyperframes_recipe": "Read graphic recipe",
+    "write_hyperframes_draft": "Create animated graphic",
+    "get_local_generation_status": "Check local generation models",
+    "generate_image": "Generate image",
+    "generate_music": "Generate music",
     "preview_motif_draft": "Preview motif draft",
     "install_motif": "Install motif",
     "delete_motif": "Delete motif"
@@ -1619,7 +1624,7 @@ const enUS = {
     },
     native_decode_unavailable: {
       title: "Native decode engine unavailable",
-      body: "The native decode component (@weftcut/native-decode) failed to load, so previews use the WebCodecs engine only. Reinstall the app to restore it.",
+      body: "The native decode component failed to load, so previews use the WebCodecs engine only. Reinstall the app to restore it.",
       action: "Open decode settings",
     },
     agent_skill_unavailable: {
@@ -1775,6 +1780,7 @@ const enUS = {
     cat_keyboard: "Keyboard",
     cat_speech: "Transcription",
     cat_vlm: "Video understanding",
+    cat_stock: "Stock media",
     cat_agent: "Agent",
     project_scope_blurb:
       "Settings on this page apply to the current project only and are saved with the project file.",

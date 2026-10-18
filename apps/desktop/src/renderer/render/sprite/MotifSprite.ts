@@ -128,7 +128,9 @@ export class MotifSprite implements StageableSprite {
     durationUs: number,
     injectedFrames?: readonly ImageBitmap[],
   ): void {
-    if (this.disposed || !this.motif) return;
+    // The export Worker receives already-baked frames, but does not share the
+    // editor's user-Motif catalog. Those frames need no manifest lookup.
+    if (this.disposed || (!this.motif && !injectedFrames)) return;
 
     // Transforms first, every tick, BEFORE the frame no-op below: a
     // transform-only change with an unchanged frame must still take.
@@ -183,6 +185,7 @@ export class MotifSprite implements StageableSprite {
       return;
     }
 
+    if (!this.motif) return;
     // `layerId` opts the on-screen frame into the preview overlay: a params
     // page mid-gesture renders here and nowhere else (the baker and the export
     // path deliberately omit it — see motifFrameDescriptor).

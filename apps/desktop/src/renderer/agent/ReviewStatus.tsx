@@ -3,12 +3,12 @@ import { invoke } from '@/bridge/ipc'
 export function reviewStatusLabel(status?: string) {
   if(status==='response_only')return 'Response finished — no edit verified'
   if(status==='completed')return 'Current edit reviewed; rendered media verified'
-  if(status==='running')return 'Hermes is working — current edit unverified'
+  if(status==='running')return 'Sclip AI is working — current edit unverified'
   if(status==='review_required')return 'Final verification required — current edit unverified'
   if(status==='incomplete')return 'Editing incomplete — current edit unverified'
   if(status==='interrupted')return 'Editing interrupted — current edit unverified'
   if(status==='cancelled')return 'Editing cancelled — current edit unverified'
-  return status === 'considered_in_completed_review' ? 'Current edit reviewed by Hermes' : status === 'review_incomplete_in_this_state' ? 'Review incomplete — current edit unverified' : 'Current edit not yet reviewed'
+  return status === 'considered_in_completed_review' ? 'Current edit reviewed by Sclip AI' : status === 'review_incomplete_in_this_state' ? 'Review incomplete — current edit unverified' : 'Current edit not yet reviewed'
 }
 /** Existing completion receipt only. Neither diagnostics nor an interrupted terminal certify readiness. */
 export function ReviewStatus({projectId}: {projectId:string}) {

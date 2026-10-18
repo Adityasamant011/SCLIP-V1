@@ -33,7 +33,7 @@ const rust = JSON.parse(readFileSync('fixtures/mcp/rust-catalog-snapshot.json', 
   prompts: Array<{ name: string }>
 }
 
-const toolNames = (await registeredMcpTools({ mcpCatalog: async () => JSON.stringify(rust) } as any, { sourceObservationIndex: {} as any, enableExternalMedia: true, evaluateSourcePassages: async () => ({}) })).map(t => t.name)
+const toolNames = (await registeredMcpTools({ mcpCatalog: async () => JSON.stringify(rust) } as any, { sourceObservationIndex: {} as any, localGeneration: {} as any, enableExternalMedia: true, evaluateSourcePassages: async () => ({}) })).map(t => t.name)
 const resourceUris = [...rust.resources.map((r) => r.uri), ...MOTIF_RESOURCE_DEFS.map((r) => r.uri)]
 const promptNames = rust.prompts.map((p) => p.name)
 

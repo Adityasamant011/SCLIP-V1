@@ -33,7 +33,7 @@ const rust = JSON.parse(readFileSync(path.join(repoRoot, 'apps/desktop/fixtures/
   resources: Array<{ uri: string }>
   prompts: Array<{ name: string }>
 }
-const toolNames = new Set((await registeredMcpTools({ mcpCatalog: async () => JSON.stringify(rust) } as any, { sourceObservationIndex: {} as any, enableExternalMedia: true, listSpeechVoices: async () => ({}), audioUnderstanding: { status: () => ({ status: 'unavailable' }) } as any, evaluateSourcePassages: async () => ({}) })).map(t => t.name))
+const toolNames = new Set((await registeredMcpTools({ mcpCatalog: async () => JSON.stringify(rust) } as any, { sourceObservationIndex: {} as any, localGeneration: {} as any, enableExternalMedia: true, listSpeechVoices: async () => ({}), audioUnderstanding: { status: () => ({ status: 'unavailable' }) } as any, evaluateSourcePassages: async () => ({}) })).map(t => t.name))
 const resourceUris = new Set([
   ...rust.resources.map((r) => r.uri),
   ...MOTIF_RESOURCE_DEFS.map((r) => r.uri),
@@ -49,7 +49,7 @@ const HERMES_DISCOVERY_TOOLS = new Set(['tool_search', 'tool_describe', 'tool_ca
 // with a live tool name (checked below).
 const KNOWN_NON_TOOLS = new Set([
   // SKILL.md — tool params
-  'from', 'request', 'start_us', 'end_us', 'limit', 't_us', 'estimated_duration_us', 'review_required', 'correction_required', 'incomplete', 'review_unavailable_reason', 'text', 'nova', 'af_nicole',
+  'from', 'request', 'media_ids', 'start_us', 'end_us', 'limit', 't_us', 'estimated_duration_us', 'review_required', 'correction_required', 'incomplete', 'review_unavailable_reason', 'text', 'nova', 'af_nicole',
   // Grounded protocol response fields, not additional tools/actions.
   'review_next', 'tool_call_examples',
   // motif-authoring.md — manifest fields

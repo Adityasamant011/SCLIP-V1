@@ -146,6 +146,11 @@ import {
 import { BUILTIN_IDS } from '../../shared/motifs/catalog'
 
 describe('writeMotifDraftCore', () => {
+  it('accepts omitted app-owned identity fields as advertised by the tool', () => {
+    const { id: _id, version: _version, ...authored } = m('Identity-free draft')
+    const id = writeMotifDraftCore(store, authored as any, '<body>Visible draft</body>', null)
+    expect(store.getDraft(id)?.manifest).toMatchObject({ id, version: 1, name: 'Identity-free draft' })
+  })
   it('mints a unique final-ready id, forces version 1, ignores claimed id', () => {
     const man = { ...m('Foo', 'claimed'), version: 9 }
     const id = writeMotifDraftCore(store, man, '<head></head><body>B<script>motif.define({setup(){}})</script></body>', null)

@@ -7,6 +7,16 @@ afterEach(async()=>{for(const m of managers.splice(0))await m.dispose();for(cons
 const server=`const http=require('node:http');const p=Number(process.env.SCLIP_VLM_PORT);http.createServer((q,r)=>{if(q.url==='/analyze'&&process.env.SCLIP_TEST_HANG==='1')return;r.setHeader('content-type','application/json');r.end(JSON.stringify(q.url==='/health'?{state:'ready'}:{description:'synthetic observed frame',input_frames:1}))}).listen(p,'127.0.0.1',()=>console.log('SCLIP_VLM_PORT='+p))`
 function launcher(scripts:string[]):typeof spawn{return ((_command:string,_args:string[],options:any)=>{const c=spawn(process.execPath,['-e',scripts.shift()??server],options);children.push(c);return c}) as typeof spawn}
 describe('vision process and HTTP failure recovery (real local children)',()=>{
+ it('releases an idle loaded model for generation while preserving in-flight inspection ownership',async()=>{
+  const loadedServer=`const http=require('node:http');let loaded=true;http.createServer((q,r)=>{r.setHeader('content-type','application/json');if(q.url==='/health')return r.end(JSON.stringify({state:loaded?'loaded':'ready',model_loaded:loaded}));if(q.url==='/unload'){loaded=false;return r.end('{}')}setTimeout(()=>r.end(JSON.stringify({description:'synthetic frame',input_frames:1})),120)}).listen(Number(process.env.SCLIP_VLM_PORT),'127.0.0.1',()=>console.log('SCLIP_VLM_PORT='+process.env.SCLIP_VLM_PORT))`
+  const m=new VisionSidecarManager('synthetic',{spawn:launcher([loadedServer]),startupTimeoutMs:1000,requestTimeoutMs:1000});managers.push(m)
+  const pending=m.analyze({question:'in-flight inspection'})
+  await expect(m.releaseIdleModel()).rejects.toThrow('busy')
+  expect((await pending).ok).toBe(true)
+  expect((await m.status()).modelLoaded).toBe(true)
+  await m.releaseIdleModel()
+  expect((await m.status()).modelLoaded).toBe(false)
+ })
  it('does not kill a replacement worker when disposing an older worker that ignores SIGTERM',async()=>{
   const m=new VisionSidecarManager('synthetic',{spawn:launcher([`process.on('SIGTERM',()=>{});${server}`,server]),startupTimeoutMs:1000,requestTimeoutMs:500});managers.push(m)
   expect((await m.analyze({question:'old'})).ok).toBe(true)

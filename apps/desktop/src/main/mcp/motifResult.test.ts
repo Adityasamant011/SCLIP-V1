@@ -15,6 +15,7 @@ describe('shapeMotifMcpResult', () => {
   })
   it('write_motif_draft / install_motif return a bare text id', () => {
     expect(shapeMotifMcpResult('write_motif_draft', 'foo-2').content[0].text).toBe('foo-2')
+    expect(shapeMotifMcpResult('write_hyperframes_draft', 'graphic').content[0].text).toBe('graphic')
     expect(shapeMotifMcpResult('install_motif', 'foo').content[0].text).toBe('foo')
   })
   it('delete_motif returns empty content', () => {

@@ -1,6 +1,8 @@
 import { shotCompute } from './state/shotCompute.js'
 import { createAudioUnderstanding, managedAudioPaths, prepareAudioRuntime } from './sclip/audioUnderstanding'
 import { createLocalGeneration } from './sclip/localGeneration'
+import { ExternalMediaService } from './media/external/externalMediaService'
+import { isProviderConfigured } from './media/external/credentials'
 import path from 'node:path'
 import { sourceSignature } from './state/mutations/textCorrection.js'
 import { locateLayer } from './state/mutations/helpers.js'
@@ -1061,14 +1063,12 @@ app.whenReady().then(async () => {
   app.once('before-quit', () => liveFeedback.dispose())
 
   const mcpHost = await startMcpHost(backend, {
+    enableExternalMedia: true,
+    externalMediaService: new ExternalMediaService(true),
     localGeneration: process.platform === 'darwin' && process.arch === 'arm64' ? createLocalGeneration({
       root: process.env.SCLIP_GENERATION_MODELS_DIR ?? path.join(app.getPath('userData'), 'generation-models'),
       worker: app.isPackaged ? path.join(process.resourcesPath, 'vision', 'sidecar', 'generation_worker.py') : path.resolve(__dirname, '../../src/vision/sidecar/generation_worker.py'),
-      releaseIdleVision: async () => {
-        const vision = getVisionSidecar(), status = await vision.status()
-        if (status.modelLoaded && status.state !== 'ready') throw new Error('Local vision is busy; retry generation after the inspection finishes')
-        if (status.modelLoaded) await vision.unloadModel()
-      },
+      releaseIdleVision: () => getVisionSidecar().releaseIdleModel(),
     }) : undefined,
     listSpeechVoices: listLocalSpeechVoices,
     audioUnderstanding,
@@ -1549,6 +1549,9 @@ app.whenReady().then(async () => {
     }
     // API-key writes need safeStorage (main-only) + a push into the backend
     // cache. Intercept here; status/test fall through to the Rust dispatcher.
+    if (channel === 'stock_media_status') {
+      return { providers: (['pexels', 'pixabay'] as const).map(provider => ({ provider, configured: isProviderConfigured(provider) })) }
+    }
     if (channel === 'settings_set_api_key') {
       const { provider, key } = (args ?? {}) as { provider: string; key: string }
       setKey(provider, key)

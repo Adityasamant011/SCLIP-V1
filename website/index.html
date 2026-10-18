@@ -1,0 +1,886 @@
+<!DOCTYPE html>
+<html lang="en" class="dark scroll-smooth selection:bg-amber-400 selection:text-black">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SCLIP V1 — The Autonomous Agentic NLE</title>
+  <meta name="description" content="An autonomous desktop video editor built for human-AI co-creation. Embedded with Sclip AI, local neural speech, WebGPU engine, and an open MCP tool surface.">
+  
+  <!-- Fonts: Syne (Massive Editorial Display) + Space Grotesk + JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,700;1,400&family=Space+Grotesk:wght@400;500;600;700&family=Syne:wght@700;800&display=swap" rel="stylesheet">
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            display: ['"Syne"', 'sans-serif'],
+            sans: ['"Space Grotesk"', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'monospace'],
+          },
+          colors: {
+            void: '#060709',
+            surface: '#0D0F14',
+            panel: '#13161F',
+            amberNeon: '#FFB020',
+            emeraldNeon: '#00F59B',
+            cyanNeon: '#00D8F6',
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    /* Awwwards Precision Base */
+    :root {
+      --cursor-size: 20px;
+    }
+    body {
+      background-color: #060709;
+      color: #E2E8F0;
+      font-family: 'Space Grotesk', sans-serif;
+      overflow-x: hidden;
+      cursor: crosshair;
+    }
+    
+    /* Film Grain Noise Overlay */
+    .bg-grain {
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 400 400' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.035'/%3E%3C/svg%3E");
+    }
+
+    /* Kinetic Marquee Ticker */
+    @keyframes marquee {
+      0% { transform: translateX(0%); }
+      100% { transform: translateX(-50%); }
+    }
+    .animate-marquee {
+      display: flex;
+      width: 200%;
+      animation: marquee 24s linear infinite;
+    }
+    .animate-marquee:hover {
+      animation-play-state: paused;
+    }
+
+    /* Glowing Edge Accents */
+    .glow-amber {
+      box-shadow: 0 0 35px -5px rgba(255, 176, 32, 0.25);
+    }
+    .glow-emerald {
+      box-shadow: 0 0 35px -5px rgba(0, 245, 155, 0.25);
+    }
+
+    /* Magnetic & Tactile Transitions */
+    .tactile-btn {
+      transition: transform 0.15s cubic-bezier(0.2, 0, 0, 1), box-shadow 0.15s ease, background-color 0.15s ease;
+    }
+    .tactile-btn:active {
+      transform: scale(0.96);
+    }
+
+    /* Monospace Tabular Numerals */
+    .tabular-nums {
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* Custom tactical scrollbar */
+    ::-webkit-scrollbar { width: 4px; height: 4px; }
+    ::-webkit-scrollbar-track { background: #060709; }
+    ::-webkit-scrollbar-thumb { background: #222634; border-radius: 2px; }
+    ::-webkit-scrollbar-thumb:hover { background: #FFB020; }
+  </style>
+</head>
+<body class="relative min-h-screen bg-grain antialiased flex flex-col justify-between selection:bg-amberNeon selection:text-black">
+
+  <!-- Interactive Background Canvas (Reactive Ambient Glow & Particle Field) -->
+  <canvas id="ambient-canvas" class="fixed inset-0 pointer-events-none z-0 opacity-60"></canvas>
+
+  <!-- ================= TOP FLUID ISLAND NAVIGATION ================= -->
+  <div class="fixed top-5 inset-x-0 z-50 flex justify-center px-4 pointer-events-none">
+    <nav class="pointer-events-auto bg-[#0E1118]/80 backdrop-blur-xl border border-white/10 rounded-full px-5 py-2.5 flex items-center gap-6 shadow-2xl">
+      <!-- Brand Pill -->
+      <a href="#" class="flex items-center gap-2.5 group">
+        <div class="w-6 h-6 rounded-md bg-amberNeon flex items-center justify-center font-black text-black text-xs font-display tracking-tighter group-hover:scale-110 transition-transform">
+          S
+        </div>
+        <div class="flex items-baseline gap-1.5 font-mono text-xs">
+          <span class="font-bold text-white tracking-wider">SCLIP</span>
+          <span class="text-[10px] text-zinc-500">v1.0-BETA</span>
+        </div>
+      </a>
+
+      <div class="h-4 w-px bg-white/10"></div>
+
+      <!-- Links -->
+      <div class="hidden md:flex items-center gap-6 text-xs font-mono text-zinc-400">
+        <a href="#editor-hero" class="hover:text-white transition-colors">Instrument</a>
+        <a href="#agent-loop" class="hover:text-white transition-colors">MCP Protocol</a>
+        <a href="#motif-engine" class="hover:text-white transition-colors">Code-as-Video</a>
+        <a href="#feedback" class="hover:text-white transition-colors">Feedback</a>
+      </div>
+
+      <div class="h-4 w-px bg-white/10 hidden md:block"></div>
+
+      <!-- Audio Synthesizer Toggle & Download Action -->
+      <div class="flex items-center gap-3">
+        <button id="sound-toggle" onclick="toggleAudio()" class="px-2.5 py-1 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-[10px] font-mono text-zinc-300 flex items-center gap-1.5 transition-all" title="Toggle Synthesizer Sound Design">
+          <span id="sound-dot" class="w-1.5 h-1.5 rounded-full bg-zinc-500"></span>
+          <span id="sound-label">SOUND [OFF]</span>
+        </button>
+
+        <a href="#download" class="tactile-btn px-4 py-1.5 rounded-full text-xs font-bold bg-amberNeon text-black hover:bg-amber-300 shadow-md flex items-center gap-1.5">
+          <span>Download</span>
+          <span class="font-mono text-[10px] opacity-75">.DMG</span>
+        </a>
+      </div>
+    </nav>
+  </div>
+
+  <!-- ================= HERO CHAPTER: THE AUTONOMOUS NLE ================= -->
+  <main class="relative z-10 pt-28 pb-20 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 w-full flex flex-col gap-16">
+    
+    <!-- Hero Header & Telemetry Grid -->
+    <section class="flex flex-col gap-6 pt-6">
+      
+      <!-- Top Telemetry Row -->
+      <div class="flex flex-wrap items-center justify-between gap-4 border-b border-white/10 pb-3 font-mono text-[11px] text-zinc-500">
+        <div class="flex items-center gap-3">
+          <span class="flex items-center gap-1.5 text-emeraldNeon">
+            <span class="w-1.5 h-1.5 rounded-full bg-emeraldNeon animate-ping"></span>
+            LOCAL ENGINE ONLINE
+          </span>
+          <span>•</span>
+          <span class="text-zinc-400">ARCH: APPLE SILICON METAL 3</span>
+        </div>
+        <div class="flex items-center gap-4">
+          <span id="clock-utc" class="tabular-nums">00:00:00 UTC</span>
+          <span>•</span>
+          <span class="text-amberNeon font-bold">100% AIR-GAPPED PRIVACY</span>
+        </div>
+      </div>
+
+      <!-- Monumental Headline -->
+      <div class="flex flex-col lg:flex-row lg:items-end justify-between gap-8 pt-4">
+        <div class="flex-1">
+          <span class="text-xs font-mono text-amberNeon uppercase tracking-widest block mb-2">// AUTONOMOUS DESKTOP NLE</span>
+          <h1 class="text-5xl sm:text-7xl lg:text-8xl font-black font-display tracking-tighter text-white leading-[0.92]">
+            THE EDITOR THAT <br/>
+            <span class="text-transparent bg-clip-text bg-gradient-to-r from-white via-zinc-300 to-zinc-600">EDITS ITSELF.</span>
+          </h1>
+        </div>
+
+        <div class="max-w-md flex flex-col gap-5 text-left">
+          <p class="text-sm sm:text-base text-zinc-400 leading-relaxed font-sans">
+            Forget chat modals and synthetic B-roll generators. SCLIP exposes a full-blown WebGPU timeline directly over localhost Model Context Protocol (MCP). Your agent cuts, mixes, and captions while you watch playback roll.
+          </p>
+
+          <div class="flex items-center gap-3">
+            <a href="#download" class="tactile-btn px-6 py-3.5 rounded-xl bg-amberNeon text-black font-bold text-xs uppercase tracking-wider flex items-center gap-2 shadow-lg hover:bg-amber-300">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+              <span>Download Beta for macOS</span>
+            </a>
+            <a href="https://github.com/Adityasamant011/SCLIP-V1" target="_blank" class="tactile-btn px-4 py-3.5 rounded-xl bg-panel border border-white/10 hover:border-white/20 text-zinc-300 font-mono text-xs flex items-center gap-2">
+              <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/></svg>
+              <span>GitHub</span>
+            </a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= THE PHYSICAL INSTRUMENT: LIVE INTERACTIVE TIMELINE ================= -->
+    <section id="editor-hero" class="relative rounded-2xl bg-surface border border-white/10 shadow-2xl overflow-hidden flex flex-col glow-amber">
+      
+      <!-- Studio Header Bar -->
+      <div class="px-4 py-3 bg-[#11141C] border-b border-white/10 flex flex-wrap items-center justify-between gap-3 text-xs font-mono">
+        <div class="flex items-center gap-3">
+          <div class="flex items-center gap-1.5">
+            <span class="w-2.5 h-2.5 rounded-full bg-red-500/80"></span>
+            <span class="w-2.5 h-2.5 rounded-full bg-yellow-500/80"></span>
+            <span class="w-2.5 h-2.5 rounded-full bg-emerald-500/80"></span>
+          </div>
+          <span class="text-zinc-500 font-bold ml-1">SCLIP STUDIO</span>
+          <span class="text-zinc-600">/</span>
+          <span class="text-zinc-300">raw_interview_master.sclip</span>
+        </div>
+
+        <!-- Live Agent Execution Controller -->
+        <div class="flex items-center gap-2">
+          <button id="btn-trigger-agent" onclick="runAgentSimulation()" class="tactile-btn px-3 py-1 rounded bg-amberNeon/10 border border-amberNeon/40 hover:bg-amberNeon/20 text-amberNeon font-bold text-[11px] flex items-center gap-1.5">
+            <span id="agent-pulse" class="w-2 h-2 rounded-full bg-amberNeon animate-ping"></span>
+            <span>SIMULATE AGENT EDIT</span>
+          </button>
+          <div class="hidden sm:flex items-center gap-2 text-zinc-500 text-[11px] pl-2 border-l border-white/10">
+            <span>SMPTE:</span>
+            <span id="smpte-display" class="text-zinc-200 tabular-nums font-bold">00:01:24:18</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Main Stage: Canvas Preview with Live Shaders -->
+      <div class="relative aspect-video sm:aspect-[21/9] bg-black overflow-hidden flex items-center justify-center select-none group">
+        
+        <!-- Video Simulation Canvas -->
+        <div id="video-stage" class="absolute inset-0 bg-gradient-to-tr from-zinc-950 via-zinc-900 to-black flex items-center justify-center p-8 transition-all duration-300">
+          
+          <!-- Cinematic Framing Overlay -->
+          <div class="absolute inset-0 border-[16px] sm:border-[24px] border-black/80 pointer-events-none z-20 flex flex-col justify-between p-4">
+            <div class="flex justify-between items-center text-[10px] font-mono text-zinc-500">
+              <span>CANVAS: 3840×2160 • 4K PRORES 422</span>
+              <span>RENDER: PIXIJS V8 WEBGPU</span>
+            </div>
+            <div class="flex justify-between items-center text-[10px] font-mono text-zinc-500">
+              <span id="stage-frame-count">FRAME: 2,548 / 6,000</span>
+              <span class="text-emeraldNeon">COLOR: REC.709 10-BIT</span>
+            </div>
+          </div>
+
+          <!-- Dynamic Scene Content -->
+          <div class="relative z-10 flex flex-col items-center text-center gap-4 max-w-2xl">
+            <span class="px-3 py-1 rounded-full bg-black/60 border border-white/10 text-xs font-mono text-zinc-300 backdrop-blur-md">
+              A-Roll Master • Interview Angle 01
+            </span>
+            <blockquote id="subtitles-live" class="text-xl sm:text-3xl font-bold font-sans text-white drop-shadow-2xl transition-all">
+              "We don't need another generic wrapper. We need software with taste."
+            </blockquote>
+
+            <!-- Dynamic Kinetic Motif Overlay (HTML in Video) -->
+            <div id="motif-overlay" class="mt-2 flex items-center gap-3 bg-amberNeon/10 border border-amberNeon/30 px-3 py-1.5 rounded-lg text-xs font-mono text-amberNeon backdrop-blur-md transition-all">
+              <span class="w-2 h-2 rounded-full bg-amberNeon"></span>
+              <span>Motif [KineticLowerThird.html]: "ADITYA SAMANT — CREATOR"</span>
+            </div>
+          </div>
+
+          <!-- Live Agent Vision Inspection Reticle -->
+          <div id="vision-reticle" class="absolute top-8 left-8 z-30 bg-black/85 border border-white/20 rounded-xl p-3 font-mono text-[10px] text-zinc-300 flex flex-col gap-1.5 shadow-2xl backdrop-blur-lg transition-all duration-500">
+            <div class="flex items-center justify-between text-amberNeon font-bold pb-1 border-b border-white/10">
+              <span>SCLIP VISION SCAN</span>
+              <span id="vision-score" class="text-emeraldNeon">PASS (98.4%)</span>
+            </div>
+            <div class="flex justify-between text-zinc-400">
+              <span>Typography Contrast:</span>
+              <span class="text-white">7.2:1 (AAA)</span>
+            </div>
+            <div class="flex justify-between text-zinc-400">
+              <span>Dead Air Excision:</span>
+              <span id="silence-stat" class="text-amberNeon">1.4s gap removed</span>
+            </div>
+            <div class="flex justify-between text-zinc-400">
+              <span>Audio Loudness:</span>
+              <span class="text-white">-14.1 LUFS</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Interactive Drag Scrubbing Instruction Overlay -->
+        <div class="absolute bottom-6 z-30 pointer-events-none opacity-60 group-hover:opacity-100 transition-opacity">
+          <span class="px-3 py-1 rounded bg-black/70 border border-white/10 text-[10px] font-mono text-zinc-300">
+            ← DRAG TIMELINE PLAYHEAD TO SCRUB →
+          </span>
+        </div>
+      </div>
+
+      <!-- ================= MULTI-TRACK TACTILE TIMELINE ================= -->
+      <div id="timeline-container" class="p-4 bg-[#0A0C10] border-t border-white/10 flex flex-col gap-2.5 select-none">
+        
+        <!-- Time Ruler & Draggable Playhead Scrubber Track -->
+        <div id="ruler-bar" class="relative h-6 bg-[#131620] rounded border border-white/10 flex items-center px-2 cursor-ew-resize overflow-hidden">
+          <div class="absolute inset-0 flex justify-between px-3 text-[9px] font-mono text-zinc-500 pointer-events-none">
+            <span>00:00:00</span>
+            <span>00:01:00</span>
+            <span class="text-amberNeon">00:01:24</span>
+            <span>00:02:00</span>
+            <span>00:03:00</span>
+            <span>00:04:00</span>
+          </div>
+
+          <!-- Physical Playhead Needle -->
+          <div id="playhead" class="absolute top-0 bottom-0 w-1 bg-amberNeon z-30 cursor-ew-resize left-[35%] flex flex-col items-center">
+            <div class="w-3.5 h-3.5 bg-amberNeon text-black text-[8px] font-bold flex items-center justify-center rounded-sm -mt-1 shadow-lg">▼</div>
+          </div>
+        </div>
+
+        <!-- Track V1: Video Primary -->
+        <div class="flex items-center gap-2">
+          <div class="w-12 text-[10px] font-mono text-zinc-500 font-bold">V1</div>
+          <div class="flex-1 h-7 bg-[#141722] rounded border border-white/5 flex gap-1 p-0.5 overflow-hidden">
+            <div id="clip-v1" class="w-[35%] bg-blue-600/40 border border-blue-500/50 rounded flex items-center px-2 text-[9px] font-mono text-blue-200 truncate">
+              Raw_Interview_01.mp4
+            </div>
+            <div id="clip-v2" class="w-[28%] bg-purple-600/40 border border-purple-500/50 rounded flex items-center px-2 text-[9px] font-mono text-purple-200 truncate border-l-2 border-amberNeon">
+              B-Roll_Studio_Cut.mov
+            </div>
+            <div class="flex-1 bg-blue-600/40 border border-blue-500/50 rounded flex items-center px-2 text-[9px] font-mono text-blue-200 truncate">
+              Raw_Interview_02.mp4
+            </div>
+          </div>
+        </div>
+
+        <!-- Track M1: Motifs (HTML/Canvas Motion Overlays) -->
+        <div class="flex items-center gap-2">
+          <div class="w-12 text-[10px] font-mono text-zinc-500 font-bold">M1</div>
+          <div class="flex-1 h-6 bg-[#141722] rounded border border-white/5 flex gap-1 p-0.5 overflow-hidden">
+            <div class="w-[20%]"></div>
+            <div id="clip-motif" class="w-[30%] bg-amberNeon/30 border border-amberNeon/60 rounded flex items-center px-2 text-[9px] font-mono text-amber-200 truncate">
+              KineticLowerThird.html [Canvas2D]
+            </div>
+          </div>
+        </div>
+
+        <!-- Track A1: Local Neural Voiceover (Kokoro 82M) -->
+        <div class="flex items-center gap-2">
+          <div class="w-12 text-[10px] font-mono text-zinc-500 font-bold">A1</div>
+          <div class="flex-1 h-6 bg-[#141722] rounded border border-white/5 flex gap-1 p-0.5 overflow-hidden">
+            <div class="w-full bg-emerald-600/30 border border-emerald-500/50 rounded flex items-center justify-between px-2 text-[9px] font-mono text-emerald-200">
+              <span>Voiceover • Local Kokoro Neural Engine</span>
+              <span class="text-emerald-400 font-bold">-14 LUFS (Normalized)</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Real-Time Activity Log & Atomic Checkpoint Pill -->
+        <div class="mt-1 pt-2 border-t border-white/5 flex flex-wrap items-center justify-between gap-2 text-[10px] font-mono">
+          <div class="flex items-center gap-2 text-zinc-400">
+            <span class="w-2 h-2 rounded-full bg-emeraldNeon"></span>
+            <span>ACTIVITY:</span>
+            <code id="agent-command-log" class="text-white font-bold bg-white/5 px-2 py-0.5 rounded">sclip.ripple_cut(track='V1', at=00:01:24:18)</code>
+          </div>
+          <div class="flex items-center gap-2 text-zinc-500">
+            <span class="text-emeraldNeon font-bold">CHECKPOINT #14 COMMITTED</span>
+            <span>•</span>
+            <span class="text-zinc-400">REVERSIBLE (0ms UNDO)</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= KINETIC MARQUEE TICKER TAPE ================= -->
+    <div class="w-full overflow-hidden border-y border-white/10 py-3 select-none">
+      <div class="animate-marquee font-mono text-xs text-zinc-400 uppercase tracking-widest flex items-center gap-12 whitespace-nowrap">
+        <span>MODEL CONTEXT PROTOCOL (MCP) NATIVE</span>
+        <span class="text-amberNeon">★</span>
+        <span>100% AIR-GAPPED ON-DEVICE INTELLIGENCE</span>
+        <span class="text-amberNeon">★</span>
+        <span>KOKORO NEURAL SPEECH SYNTHESIS</span>
+        <span class="text-amberNeon">★</span>
+        <span>PIXIJS V8 WEBGPU FRAMEWORK</span>
+        <span class="text-amberNeon">★</span>
+        <span>ZERO CLOUD SUBSCRIPTIONS</span>
+        <span class="text-amberNeon">★</span>
+        <span>CODE AS VIDEO: DETERMINISTIC MOTIFS</span>
+        <span class="text-amberNeon">★</span>
+        <span>MODEL CONTEXT PROTOCOL (MCP) NATIVE</span>
+        <span class="text-amberNeon">★</span>
+        <span>100% AIR-GAPPED ON-DEVICE INTELLIGENCE</span>
+      </div>
+    </div>
+
+    <!-- ================= CHAPTER 02: THE AGENTIC TAKE-OVER ================= -->
+    <section id="agent-loop" class="grid grid-cols-1 lg:grid-cols-3 gap-8 py-8">
+      
+      <!-- Column 1: The MCP Surface -->
+      <div class="bg-surface border border-white/10 rounded-2xl p-8 flex flex-col justify-between hover:border-white/20 transition-all">
+        <div class="flex flex-col gap-4">
+          <div class="w-10 h-10 rounded-xl bg-amberNeon/10 border border-amberNeon/30 flex items-center justify-center font-mono text-amberNeon text-sm font-bold">
+            01
+          </div>
+          <h3 class="text-2xl font-bold font-display text-white">Full MCP Tool Surface</h3>
+          <p class="text-xs sm:text-sm text-zinc-400 leading-relaxed font-sans">
+            SCLIP isn't an isolated sandbox. It runs a localhost Model Context Protocol server. Connect Claude Desktop, Cursor, Codex, or the embedded Sclip AI agent to trim, split, group, keyframe, and color grade directly over standard JSON-RPC.
+          </p>
+        </div>
+        <div class="mt-6 pt-4 border-t border-white/5 font-mono text-[10px] text-zinc-500 bg-black/40 p-3 rounded-lg">
+          <code>mcp://localhost:49221/v1/tools</code>
+        </div>
+      </div>
+
+      <!-- Column 2: On-Device Sensorium -->
+      <div class="bg-surface border border-white/10 rounded-2xl p-8 flex flex-col justify-between hover:border-white/20 transition-all">
+        <div class="flex flex-col gap-4">
+          <div class="w-10 h-10 rounded-xl bg-emeraldNeon/10 border border-emeraldNeon/30 flex items-center justify-center font-mono text-emeraldNeon text-sm font-bold">
+            02
+          </div>
+          <h3 class="text-2xl font-bold font-display text-white">On-Device Neural Voice</h3>
+          <p class="text-xs sm:text-sm text-zinc-400 leading-relaxed font-sans">
+            No cloud APIs, no \$30/month ElevenLabs bills, no Wi-Fi requirements. Bundled with on-device Kokoro TTS (82M) and Whisper/SenseVoice STT for automatic pause excision, instant narration, and frame-accurate word sync.
+          </p>
+        </div>
+        <div class="mt-6 pt-4 border-t border-white/5 font-mono text-[10px] text-zinc-500 bg-black/40 p-3 rounded-lg">
+          <code>Kokoro TTS • Whisper SenseVoice • 0ms Latency</code>
+        </div>
+      </div>
+
+      <!-- Column 3: The WebGPU Engine -->
+      <div class="bg-surface border border-white/10 rounded-2xl p-8 flex flex-col justify-between hover:border-white/20 transition-all">
+        <div class="flex flex-col gap-4">
+          <div class="w-10 h-10 rounded-xl bg-cyanNeon/10 border border-cyanNeon/30 flex items-center justify-center font-mono text-cyanNeon text-sm font-bold">
+            03
+          </div>
+          <h3 class="text-2xl font-bold font-display text-white">WebGPU & Rust Core</h3>
+          <p class="text-xs sm:text-sm text-zinc-400 leading-relaxed font-sans">
+            A real non-linear editing architecture. Multi-track SMPTE timecode accuracy, Bezier curve keyframing, hardware-accelerated decode pools via native FFmpeg, and pure 60FPS WebGPU canvas rendering.
+          </p>
+        </div>
+        <div class="mt-6 pt-4 border-t border-white/5 font-mono text-[10px] text-zinc-500 bg-black/40 p-3 rounded-lg">
+          <code>PixiJS v8 • WebCodecs • Rust napi-rs Core</code>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= CHAPTER 03: CODE AS VIDEO (MOTIFS ENGINE) ================= -->
+    <section id="motif-engine" class="bg-surface border border-white/10 rounded-3xl p-8 sm:p-12 flex flex-col gap-8 relative overflow-hidden">
+      <div class="flex flex-col lg:flex-row items-start lg:items-end justify-between gap-6 border-b border-white/10 pb-6">
+        <div>
+          <span class="text-xs font-mono text-amberNeon uppercase tracking-wider">// CODE AS VIDEO</span>
+          <h2 class="text-3xl sm:text-5xl font-black font-display text-white mt-1">
+            MOTIFS: THE WEB IS YOUR MOTION GRAPHICS ENGINE
+          </h2>
+        </div>
+        <p class="text-xs sm:text-sm text-zinc-400 max-w-md font-sans">
+          Stop struggling with archaic After Effects expressions. Motifs are pure functions of time authored in HTML, CSS, SVG, and Canvas2D.
+        </p>
+      </div>
+
+      <!-- Live Code-to-Video Sandbox -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 items-center">
+        <!-- Interactive Code Editor -->
+        <div class="bg-black/90 border border-white/10 rounded-xl p-5 flex flex-col gap-3 font-mono text-xs">
+          <div class="flex items-center justify-between text-zinc-500 pb-2 border-b border-white/10">
+            <span>MotifSource.html</span>
+            <div class="flex gap-2">
+              <button onclick="setMotifPreset('title')" class="px-2 py-0.5 rounded bg-white/10 text-zinc-200 hover:text-white">Title</button>
+              <button onclick="setMotifPreset('badge')" class="px-2 py-0.5 rounded bg-white/10 text-zinc-200 hover:text-white">Badge</button>
+              <button onclick="setMotifPreset('audio')" class="px-2 py-0.5 rounded bg-white/10 text-zinc-200 hover:text-white">Wave</button>
+            </div>
+          </div>
+          <pre id="code-snippet" class="text-zinc-300 leading-relaxed overflow-x-auto text-[11px]">
+<span class="text-purple-400">&lt;div</span> <span class="text-amberNeon">class</span>=<span class="text-emerald-400">"kinetic-box"</span><span class="text-purple-400">&gt;</span>
+  <span class="text-purple-400">&lt;h1</span> <span class="text-amberNeon">style</span>=<span class="text-emerald-400">"transform: scale(${time * 1.2})"</span><span class="text-purple-400">&gt;</span>
+    BREAKING: AUTONOMOUS CUT
+  <span class="text-purple-400">&lt;/h1&gt;</span>
+<span class="text-purple-400">&lt;/div&gt;</span></pre>
+          <span class="text-[10px] text-zinc-500 pt-1">Pure functions of timeline clock: identical in scrub, preview, and 4K export.</span>
+        </div>
+
+        <!-- Live Visual Result Card -->
+        <div class="aspect-video bg-gradient-to-br from-zinc-950 to-zinc-900 border border-white/10 rounded-xl flex items-center justify-center p-6 relative overflow-hidden shadow-2xl">
+          <div class="absolute inset-0 bg-grain opacity-20"></div>
+          <div id="motif-live-preview" class="z-10 p-4 rounded-xl bg-amberNeon/10 border border-amberNeon/40 backdrop-blur-xl flex flex-col items-center gap-1 shadow-2xl">
+            <span class="text-[10px] font-mono text-amberNeon uppercase tracking-widest">LIVE TIMELINE MOTIF</span>
+            <h4 class="text-lg sm:text-2xl font-bold font-display text-white text-center">BREAKING: AUTONOMOUS CUT</h4>
+            <span class="text-[9px] font-mono text-zinc-400">FPS: 60.00 • WebCodecs Decoded</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= THE BETA LAUNCHPAD FLIGHT DECK ================= -->
+    <section id="download" class="bg-surface border border-white/15 rounded-3xl p-8 sm:p-14 flex flex-col items-center text-center gap-8 relative overflow-hidden shadow-2xl glow-amber">
+      <div class="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-white/5 border border-white/10 text-xs text-amberNeon font-mono">
+        <span class="w-2 h-2 rounded-full bg-amberNeon animate-pulse"></span>
+        PUBLIC BETA BUILD 1.0.0 (ARM64)
+      </div>
+
+      <div class="max-w-2xl flex flex-col gap-3">
+        <h2 class="text-4xl sm:text-6xl font-black font-display text-white tracking-tight">
+          DOWNLOAD SCLIP FOR MAC
+        </h2>
+        <p class="text-sm sm:text-base text-zinc-400 font-sans leading-relaxed">
+          Air-gapped, zero cloud subscriptions, no tracking telemetry. Executes completely within your Apple Silicon unified memory headroom.
+        </p>
+      </div>
+
+      <!-- Action Cluster: DMG Download + Terminal Command -->
+      <div class="w-full max-w-md flex flex-col gap-3">
+        <a href="https://github.com/Adityasamant011/SCLIP-V1/releases" target="_blank" class="tactile-btn w-full py-4 rounded-xl font-bold font-sans text-sm bg-amberNeon text-black flex items-center justify-center gap-3 shadow-2xl hover:bg-amber-300">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+          <span>Download macOS Installer (.dmg)</span>
+        </a>
+
+        <!-- Terminal Quick Install -->
+        <div class="bg-black/80 border border-white/10 rounded-xl p-3 flex items-center justify-between font-mono text-xs text-zinc-300">
+          <span class="truncate mr-2 text-[11px]">curl -fsSL https://sclip.sh/install | sh</span>
+          <button onclick="copyInstallCmd()" id="btn-copy-cmd" class="text-amberNeon hover:text-white text-[10px] uppercase font-bold shrink-0">
+            [COPY]
+          </button>
+        </div>
+      </div>
+
+      <!-- Hardware Specs Radar -->
+      <div class="w-full max-w-3xl pt-8 border-t border-white/10 grid grid-cols-2 sm:grid-cols-4 gap-4 text-left font-mono text-xs">
+        <div class="bg-black/30 p-3 rounded-lg border border-white/5">
+          <span class="text-zinc-500 text-[10px] uppercase block">Platform</span>
+          <span class="font-bold text-white">Apple Silicon</span>
+          <span class="text-[10px] text-zinc-400 block mt-0.5">M1 / M2 / M3 / M4</span>
+        </div>
+        <div class="bg-black/30 p-3 rounded-lg border border-white/5">
+          <span class="text-zinc-500 text-[10px] uppercase block">Memory</span>
+          <span class="font-bold text-white">16 GB Unified</span>
+          <span class="text-[10px] text-zinc-400 block mt-0.5">4 GiB Generator Budget</span>
+        </div>
+        <div class="bg-black/30 p-3 rounded-lg border border-white/5">
+          <span class="text-zinc-500 text-[10px] uppercase block">Compositor</span>
+          <span class="font-bold text-white">Metal / WebGPU</span>
+          <span class="text-[10px] text-zinc-400 block mt-0.5">PixiJS v8 Pipeline</span>
+        </div>
+        <div class="bg-black/30 p-3 rounded-lg border border-white/5">
+          <span class="text-zinc-500 text-[10px] uppercase block">License</span>
+          <span class="font-bold text-white">MIT Core</span>
+          <span class="text-[10px] text-zinc-400 block mt-0.5">Open MCP Server</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= BETA FEEDBACK & CREATOR CHANNEL ================= -->
+    <section id="feedback" class="bg-surface border border-white/10 rounded-3xl p-8 sm:p-12 flex flex-col md:flex-row gap-10 items-start justify-between">
+      
+      <!-- Left Column: Creator Channel -->
+      <div class="flex-1 flex flex-col gap-4">
+        <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amberNeon/10 border border-amberNeon/20 text-xs text-amberNeon font-mono w-fit">
+          <span>✉️</span> DIRECT BETA CHANNEL
+        </div>
+        <h3 class="text-3xl sm:text-4xl font-extrabold font-display tracking-tight text-white">
+          Help shape the future of SCLIP.
+        </h3>
+        <p class="text-sm text-zinc-400 leading-relaxed font-sans">
+          Building software with genuine craft requires ruthless honesty. If you encounter an edge case on your Mac, have an architectural critique, or want to suggest a new MCP tool, reach out directly to the creators.
+        </p>
+
+        <!-- Direct Email Pill -->
+        <div class="pt-2 flex flex-col gap-2">
+          <span class="text-[10px] uppercase font-mono text-zinc-500 tracking-wider">CREATOR & SUPPORT CONTACT</span>
+          <div class="flex items-center gap-3">
+            <a href="mailto:sclipsas@gmail.com" class="tactile-btn px-4 py-2.5 rounded-xl bg-black/60 border border-white/10 hover:border-amberNeon text-white font-mono text-xs flex items-center gap-2.5 transition-all group">
+              <svg class="w-4 h-4 text-amberNeon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+              <span class="group-hover:text-amberNeon font-bold">sclipsas@gmail.com</span>
+            </a>
+            <button onclick="copyCreatorEmail()" id="btn-copy-creator" class="tactile-btn px-3 py-2.5 rounded-xl bg-black/60 border border-white/10 text-zinc-400 hover:text-white text-xs font-mono">
+              <span id="copy-creator-text">Copy</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right Column: Interactive Dispatch Console -->
+      <div class="w-full md:w-[420px] bg-black/70 border border-white/10 rounded-2xl p-6 flex flex-col gap-4 shadow-xl">
+        <div class="flex items-center justify-between pb-2 border-b border-white/10 text-xs font-mono">
+          <span class="text-white font-bold">Beta Feedback Dispatch</span>
+          <span class="text-amberNeon text-[10px]">● Direct to sclipsas@gmail.com</span>
+        </div>
+
+        <!-- Category Selector -->
+        <div class="flex flex-wrap gap-2 text-xs font-mono" id="feedback-chips">
+          <button type="button" onclick="selectCategory('Bug Report')" class="chip px-3 py-1 rounded-lg bg-amberNeon text-black font-bold border border-amberNeon">🐛 Bug</button>
+          <button type="button" onclick="selectCategory('MCP Tool Request')" class="chip px-3 py-1 rounded-lg bg-white/5 text-zinc-400 border border-white/10 hover:text-white">🤖 MCP</button>
+          <button type="button" onclick="selectCategory('Performance / WebGPU')" class="chip px-3 py-1 rounded-lg bg-white/5 text-zinc-400 border border-white/10 hover:text-white">⚡ Speed</button>
+          <button type="button" onclick="selectCategory('General Note')" class="chip px-3 py-1 rounded-lg bg-white/5 text-zinc-400 border border-white/10 hover:text-white">💬 Note</button>
+        </div>
+
+        <!-- Note Textarea -->
+        <textarea id="feedback-body" rows="3" placeholder="What happened on your timeline? What tool would make SCLIP irreplaceable for you?" class="w-full bg-[#0D0F14] border border-white/10 rounded-xl p-3 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-amberNeon transition-all font-sans resize-none"></textarea>
+
+        <!-- Submit Button -->
+        <button type="button" onclick="dispatchFeedback()" class="tactile-btn w-full py-3 bg-amberNeon hover:bg-amber-300 text-black text-xs font-bold font-mono rounded-xl flex items-center justify-center gap-2 shadow-lg">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/></svg>
+          <span>SEND TO SCLIPSAS@GMAIL.COM</span>
+        </button>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ================= TACTICAL FOOTER ================= -->
+  <footer class="relative z-10 border-t border-white/10 bg-[#060709] py-8 px-6 text-xs font-mono text-zinc-500">
+    <div class="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
+      <div class="flex items-center gap-3">
+        <span class="w-2 h-2 rounded-full bg-amberNeon"></span>
+        <span class="font-bold text-white font-display">SCLIP V1</span>
+        <span>— Human-Agent Collaborative Video Editing</span>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-6">
+        <a href="mailto:sclipsas@gmail.com" class="hover:text-amberNeon transition-colors">sclipsas@gmail.com</a>
+        <a href="https://github.com/Adityasamant011/SCLIP-V1" target="_blank" class="hover:text-white transition-colors">GitHub Repository</a>
+        <a href="https://github.com/Adityasamant011/SCLIP-V1/issues" target="_blank" class="hover:text-white transition-colors">Bug Tracker</a>
+        <span>MIT License</span>
+      </div>
+    </div>
+  </footer>
+
+  <!-- ================= INTERACTIVE ENGINE & SOUND DESIGN ================= -->
+  <script>
+    // --- 1. Synthesizer Sound Design via Web Audio API ---
+    let audioCtx = null;
+    let soundEnabled = false;
+
+    function initAudio() {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+    }
+
+    function toggleAudio() {
+      initAudio();
+      soundEnabled = !soundEnabled;
+      const dot = document.getElementById('sound-dot');
+      const label = document.getElementById('sound-label');
+      if (soundEnabled) {
+        dot.className = 'w-1.5 h-1.5 rounded-full bg-emeraldNeon animate-pulse';
+        label.innerText = 'SOUND [ON]';
+        playTone(440, 'sine', 0.1, 0.05); // confirmation beep
+      } else {
+        dot.className = 'w-1.5 h-1.5 rounded-full bg-zinc-500';
+        label.innerText = 'SOUND [OFF]';
+      }
+    }
+
+    function playTone(freq, type = 'sine', duration = 0.06, volume = 0.04) {
+      if (!soundEnabled || !audioCtx) return;
+      try {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+        gain.gain.setValueAtTime(volume, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + duration);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + duration);
+      } catch (e) {}
+    }
+
+    // Attach subtle auditory feedback to all tactile buttons
+    document.querySelectorAll('.tactile-btn').forEach(btn => {
+      btn.addEventListener('mouseenter', () => playTone(880, 'sine', 0.03, 0.015));
+      btn.addEventListener('click', () => playTone(120, 'triangle', 0.08, 0.05));
+    });
+
+    // --- 2. Live Interactive Canvas Scrubber ---
+    const ruler = document.getElementById('ruler-bar');
+    const playhead = document.getElementById('playhead');
+    const smpte = document.getElementById('smpte-display');
+    const subtitles = document.getElementById('subtitles-live');
+    const frameCount = document.getElementById('stage-frame-count');
+
+    let isScrubbing = false;
+
+    const dialogueTrack = [
+      { start: 0, text: '"We don\'t need another generic wrapper. We need software with taste."' },
+      { start: 30, text: '"SCLIP exposes the timeline itself over Model Context Protocol."' },
+      { start: 60, text: '"Sclip cuts, trims, and captions directly while playback runs."' },
+      { start: 85, text: '"100% on-device neural voice, zero cloud API bills."' }
+    ];
+
+    function updatePlayheadPosition(clientX) {
+      const rect = ruler.getBoundingClientRect();
+      let percent = (clientX - rect.left) / rect.width;
+      percent = Math.max(0, Math.min(1, percent));
+      
+      playhead.style.left = `${percent * 100}%`;
+      playTone(200 + percent * 600, 'sine', 0.02, 0.01);
+
+      // Calculate SMPTE timecode (4 minutes total = 240s)
+      const currentSeconds = percent * 240;
+      const mins = Math.floor(currentSeconds / 60);
+      const secs = Math.floor(currentSeconds % 60);
+      const frames = Math.floor((currentSeconds % 1) * 24);
+      smpte.innerText = `00:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}:${String(frames).padStart(2, '0')}`;
+      frameCount.innerText = `FRAME: ${Math.round(percent * 6000)} / 6,000`;
+
+      // Update Subtitles based on time
+      const match = dialogueTrack.slice().reverse().find(d => (percent * 100) >= d.start);
+      if (match) subtitles.innerText = match.text;
+    }
+
+    ruler.addEventListener('mousedown', e => {
+      isScrubbing = true;
+      updatePlayheadPosition(e.clientX);
+    });
+    window.addEventListener('mousemove', e => {
+      if (isScrubbing) updatePlayheadPosition(e.clientX);
+    });
+    window.addEventListener('mouseup', () => { isScrubbing = false; });
+
+    // --- 3. Live Agent Edit Simulation ---
+    let simulating = false;
+    function runAgentSimulation() {
+      if (simulating) return;
+      simulating = true;
+      initAudio();
+      
+      const log = document.getElementById('agent-command-log');
+      const reticle = document.getElementById('vision-reticle');
+      const clipV1 = document.getElementById('clip-v1');
+      const motifOverlay = document.getElementById('motif-overlay');
+      const pulse = document.getElementById('agent-pulse');
+
+      pulse.className = 'w-2 h-2 rounded-full bg-emeraldNeon animate-ping';
+      playTone(440, 'triangle', 0.15, 0.05);
+      log.innerText = 'sclip.scan_canvas(contrast=True, face_tracking=True)';
+      reticle.style.transform = 'scale(1.05)';
+      reticle.style.borderColor = '#00F59B';
+
+      setTimeout(() => {
+        playTone(660, 'sine', 0.08, 0.04);
+        log.innerText = 'sclip.excise_silence(track="A1", threshold_db=-32)';
+        clipV1.style.width = '30%';
+        document.getElementById('silence-stat').innerText = 'EXCISED (1.8s pause)';
+      }, 1000);
+
+      setTimeout(() => {
+        playTone(880, 'sine', 0.08, 0.04);
+        log.innerText = 'sclip.insert_motif(track="M1", preset="KineticLowerThird")';
+        motifOverlay.style.borderColor = '#FFB020';
+        motifOverlay.style.boxShadow = '0 0 25px rgba(255, 176, 32, 0.4)';
+      }, 2000);
+
+      setTimeout(() => {
+        playTone(1050, 'sine', 0.15, 0.05);
+        log.innerText = 'sclip.save_atomic_checkpoint(name="CleanInterviewCut")';
+        pulse.className = 'w-2 h-2 rounded-full bg-amberNeon animate-ping';
+        reticle.style.transform = 'scale(1)';
+        reticle.style.borderColor = 'rgba(255, 255, 255, 0.2)';
+        simulating = false;
+      }, 3000);
+    }
+
+    // --- 4. Interactive Motif Presets ---
+    function setMotifPreset(type) {
+      const snippet = document.getElementById('code-snippet');
+      const preview = document.getElementById('motif-live-preview');
+      playTone(600, 'sine', 0.05, 0.02);
+
+      if (type === 'title') {
+        snippet.innerHTML = `<span class="text-purple-400">&lt;div</span> <span class="text-amberNeon">class</span>=<span class="text-emerald-400">"kinetic-box"</span><span class="text-purple-400">&gt;</span>\n  <span class="text-purple-400">&lt;h1</span> <span class="text-amberNeon">style</span>=<span class="text-emerald-400">"transform: scale(${'time * 1.2'})"</span><span class="text-purple-400">&gt;</span>\n    BREAKING: AUTONOMOUS CUT\n  <span class="text-purple-400">&lt;/h1&gt;</span>\n<span class="text-purple-400">&lt;/div&gt;</span>`;
+        preview.innerHTML = `<span class="text-[10px] font-mono text-amberNeon uppercase tracking-widest">LIVE TIMELINE MOTIF</span><h4 class="text-lg sm:text-2xl font-bold font-display text-white text-center">BREAKING: AUTONOMOUS CUT</h4><span class="text-[9px] font-mono text-zinc-400">FPS: 60.00 • WebCodecs Decoded</span>`;
+      } else if (type === 'badge') {
+        snippet.innerHTML = `<span class="text-purple-400">&lt;div</span> <span class="text-amberNeon">class</span>=<span class="text-emerald-400">"speaker-pill"</span><span class="text-purple-400">&gt;</span>\n  <span class="text-cyanNeon">● GUEST:</span> ELON MUSK (FOUNDER)\n<span class="text-purple-400">&lt;/div&gt;</span>`;
+        preview.innerHTML = `<span class="text-[10px] font-mono text-cyanNeon uppercase tracking-widest">LOWER THIRD PILL</span><h4 class="text-base sm:text-xl font-bold text-white text-center">ELON MUSK — GUEST SPEAKER</h4><span class="text-[9px] font-mono text-zinc-400">SVG Spring Bezier Animation</span>`;
+      } else if (type === 'audio') {
+        snippet.innerHTML = `<span class="text-purple-400">&lt;canvas</span> <span class="text-amberNeon">draw</span>=<span class="text-emerald-400">"renderPCMWaveform(ctx, time)"</span><span class="text-purple-400">&gt;</span>\n<span class="text-zinc-500">// Real-time Audio Spectrum Overlay</span>\n<span class="text-purple-400">&lt;/canvas&gt;</span>`;
+        preview.innerHTML = `<span class="text-[10px] font-mono text-emeraldNeon uppercase tracking-widest">AUDIO SPECTRUM VISUALIZER</span><div class="flex gap-1 h-8 items-end py-1"><span class="w-1 h-6 bg-emeraldNeon animate-pulse"></span><span class="w-1 h-8 bg-emeraldNeon animate-pulse"></span><span class="w-1 h-4 bg-emeraldNeon animate-pulse"></span><span class="w-1 h-7 bg-emeraldNeon animate-pulse"></span></div><span class="text-[9px] font-mono text-zinc-400">Synced to Track A1: Kokoro Speech</span>`;
+      }
+    }
+
+    // --- 5. UTC Clock ---
+    setInterval(() => {
+      const now = new Date();
+      document.getElementById('clock-utc').innerText = `${String(now.getUTCHours()).padStart(2, '0')}:${String(now.getUTCMinutes()).padStart(2, '0')}:${String(now.getUTCSeconds()).padStart(2, '0')} UTC`;
+    }, 1000);
+
+    // --- 6. Feedback & Clipboard Functions ---
+    let selectedCategory = 'Bug Report';
+    function selectCategory(cat) {
+      selectedCategory = cat;
+      playTone(500, 'sine', 0.04, 0.02);
+      document.querySelectorAll('#feedback-chips .chip').forEach(btn => {
+        if (btn.innerText.includes(cat.split(' ')[0])) {
+          btn.className = 'chip px-3 py-1 rounded-lg bg-amberNeon text-black font-bold border border-amberNeon';
+        } else {
+          btn.className = 'chip px-3 py-1 rounded-lg bg-white/5 text-zinc-400 border border-white/10 hover:text-white';
+        }
+      });
+    }
+
+    function dispatchFeedback() {
+      const bodyText = document.getElementById('feedback-body').value.trim();
+      const subject = encodeURIComponent(`[SCLIP Beta Feedback] ${selectedCategory}`);
+      const body = encodeURIComponent(
+        `Category: ${selectedCategory}\n\n` +
+        `Feedback & Details:\n${bodyText || '(No additional text provided)'}\n\n` +
+        `---\nEnvironment: macOS Apple Silicon (Beta 1.0.0)`
+      );
+      playTone(700, 'sine', 0.1, 0.04);
+      window.location.href = `mailto:sclipsas@gmail.com?subject=${subject}&body=${body}`;
+    }
+
+    function copyCreatorEmail() {
+      navigator.clipboard.writeText('sclipsas@gmail.com').then(() => {
+        const text = document.getElementById('copy-creator-text');
+        text.innerText = 'COPIED!';
+        text.className = 'text-emeraldNeon font-bold';
+        playTone(880, 'sine', 0.06, 0.03);
+        setTimeout(() => {
+          text.innerText = 'Copy';
+          text.className = '';
+        }, 2000);
+      });
+    }
+
+    function copyInstallCmd() {
+      navigator.clipboard.writeText('curl -fsSL https://sclip.sh/install | sh').then(() => {
+        const btn = document.getElementById('btn-copy-cmd');
+        btn.innerText = '[COPIED]';
+        btn.className = 'text-emeraldNeon text-[10px] font-bold shrink-0';
+        playTone(880, 'sine', 0.06, 0.03);
+        setTimeout(() => {
+          btn.innerText = '[COPY]';
+          btn.className = 'text-amberNeon hover:text-white text-[10px] uppercase font-bold shrink-0';
+        }, 2000);
+      });
+    }
+
+    // --- 7. Ambient Particle Field on Canvas ---
+    const canvas = document.getElementById('ambient-canvas');
+    const ctx = canvas.getContext('2d');
+    let width, height;
+    let mouseX = -1000, mouseY = -1000;
+
+    function resizeCanvas() {
+      width = canvas.width = window.innerWidth;
+      height = canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    window.addEventListener('mousemove', e => {
+      mouseX = e.clientX;
+      mouseY = e.clientY;
+    });
+
+    const particles = Array.from({ length: 45 }, () => ({
+      x: Math.random() * window.innerWidth,
+      y: Math.random() * window.innerHeight,
+      vx: (Math.random() - 0.5) * 0.4,
+      vy: (Math.random() - 0.5) * 0.4,
+      radius: Math.random() * 1.5 + 0.5
+    }));
+
+    function drawAmbient() {
+      ctx.clearRect(0, 0, width, height);
+
+      // Draw subtle dynamic radial light around cursor
+      if (mouseX > 0) {
+        const grad = ctx.createRadialGradient(mouseX, mouseY, 0, mouseX, mouseY, 350);
+        grad.addColorStop(0, 'rgba(255, 176, 32, 0.06)');
+        grad.addColorStop(1, 'rgba(6, 7, 9, 0)');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, width, height);
+      }
+
+      // Draw floating technical particle grid
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.12)';
+      particles.forEach(p => {
+        p.x += p.vx;
+        p.y += p.vy;
+        if (p.x < 0) p.x = width;
+        if (p.x > width) p.x = 0;
+        if (p.y < 0) p.y = height;
+        if (p.y > height) p.y = 0;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+        ctx.fill();
+      });
+
+      requestAnimationFrame(drawAmbient);
+    }
+    drawAmbient();
+  </script>
+</body>
+</html>

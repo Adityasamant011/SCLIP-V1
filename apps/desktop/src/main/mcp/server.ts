@@ -180,7 +180,7 @@ const GET_SOURCE_OBSERVATIONS_TOOL = {
 
 export const VIDEO_SEARCH_EXTERNAL_MEDIA_TOOL = {
   name: 'video_search_external_media',
-  description: 'Search for real external B-roll visuals across authentic discovery sources (YouTube, Wikimedia Commons, Openverse) and stock fallback providers (Pexels, Pixabay). Returns normalized candidate metadata with provenance, license, and import mode. Read-only evidence tool.',
+  description: 'Search for real external B-roll visuals using configured providers. The desktop app enables Pexels and Pixabay stock images/video. Returns normalized candidate metadata with provenance, license, and import mode. Read-only evidence tool.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -655,7 +655,9 @@ export async function handleCallTool(
         const mediaId = String(args.media_id ?? '')
         const media = snap.media_pool[mediaId]
         if (!media) throw new Error('Source inspection requires an existing media_id')
-        const sourceTime = validateEvidenceTime('source', args.source_t_us, media.metadata.duration_us ?? 0, { media_id: mediaId })
+        const sourceTime = media.kind === 'Image'
+          ? (() => { if (args.source_t_us !== 0) throw new Error('Still images use source_t_us=0'); return 0 })()
+          : validateEvidenceTime('source', args.source_t_us, media.metadata.duration_us ?? 0, { media_id: mediaId })
         const uri = `media://${mediaId}/frame/${sourceTime}`
         const raw: any = await handleReadResource(backend, getTsHost, uri, getVlm)
         const frame = raw.contents?.find((c: any) => typeof c.blob === 'string' && c.mimeType?.startsWith('image/'))
@@ -886,15 +888,28 @@ export async function handleCallTool(
       }
       try {
         const wsDir = tsHost.mcpHybridDeps.workspaceDir()
-        const targetDir = wsDir ? path.join(wsDir, 'Media') : path.join(os.tmpdir(), 'sclip-external-media')
-        const dl = await downloadExternalMediaCandidate(candidate, targetDir)
-        const mediaId = String(await runHybrid('import_media', { path: dl.filePath }, tsHost.mcpHybridDeps))
-        const snap = tsHost.actor.snapshot()
-        const importedItem = snap.media_pool[mediaId]
-        const obligation = buildAttributionObligation(candidate, mediaId)
-        if (importedItem) {
-          attachAttributionMetadata(importedItem, obligation, dl.provenancePath)
+        if (!wsDir) throw new Error('Save the project before importing stock media')
+        const projectId = tsHost.actor.snapshot().project_id
+        const opening = tsHost.mcpHybridDeps.projectOpening?.()
+        const assertCurrent = () => {
+          signal?.throwIfAborted(); assertAuthority?.()
+          if (getTsHost() !== tsHost || tsHost.actor.snapshot().project_id !== projectId ||
+              tsHost.mcpHybridDeps.projectOpening?.() !== opening || tsHost.mcpHybridDeps.workspaceDir() !== wsDir)
+            throw new Error('Project opening changed; stock import has no authority to publish')
         }
+        assertCurrent()
+        const dl = await downloadExternalMediaCandidate(candidate, path.join(wsDir, 'Media'), { signal })
+        assertCurrent()
+        const mediaId = String(await runHybrid('import_media', { path: dl.filePath }, tsHost.mcpHybridDeps, {
+          signal, assertAuthority: assertCurrent,
+          prepareImportedMedia: item => {
+            const decorated = { ...item, metadata: { ...item.metadata } }
+            attachAttributionMetadata(decorated, buildAttributionObligation(candidate, item.id), dl.provenancePath)
+            return decorated
+          },
+        }))
+        const importedItem = tsHost.actor.snapshot().media_pool[mediaId]
+        const obligation = buildAttributionObligation(candidate, mediaId)
         return {
           content: [
             {
@@ -916,7 +931,7 @@ export async function handleCallTool(
                 source_page_url: candidate.source_page_url,
                 local_path: dl.filePath,
                 provenance_path: dl.provenancePath,
-                note: 'External asset successfully imported into project media pool. Use get_source_observations to inspect visual contents and select the exact useful range before placing on the timeline.',
+                note: 'External asset imported into the media pool with source/license provenance. Inspect images with vision_inspect at source_t_us=0; inspect video ranges before deciding placement. Stock is illustrative and is not evidence of a specific historical event.',
               }, null, 2),
             },
           ],
@@ -1012,9 +1027,10 @@ export async function handleCallTool(
   if (name === 'preview_motif_draft') {
     const a = args as { id?: string; motif_id?: string; t_sec?: number; props?: unknown; width?: number; height?: number }
     const motifId = a.id ?? a.motif_id ?? ''
+    const source = getTsHost()?.motifTool('get_motif_source', { id: motifId }) as { manifest: { size: [number, number] } } | undefined
     const b64 = await captureMotifFrameB64({
       motifId, tSec: a.t_sec ?? 0, propsJson: JSON.stringify(a.props ?? {}),
-      width: a.width ?? 480, height: a.height ?? 480, settleRafs: null, contentHash: '',
+      width: a.width ?? source?.manifest?.size[0] ?? 480, height: a.height ?? source?.manifest?.size[1] ?? 480, settleRafs: null, contentHash: '',
     })
     return { content: [{ type: 'image', data: b64, mimeType: 'image/png' }] } as unknown as ServerResult
   }
@@ -1035,7 +1051,9 @@ export async function handleReadResource(
   if (sourceFrame) {
     const media = getTsHost()?.actor.snapshot().media_pool[sourceFrame[1]!]
     if (!media) throw new Error('Source frame media_id does not exist')
-    validateEvidenceTime('source', Number(sourceFrame[2]), media.metadata.duration_us ?? 0, { media_id: sourceFrame[1] })
+    if (media.kind === 'Image') {
+      if (Number(sourceFrame[2]) !== 0) throw new Error('Still images use source_t_us=0')
+    } else validateEvidenceTime('source', Number(sourceFrame[2]), media.metadata.duration_us ?? 0, { media_id: sourceFrame[1] })
   }
   const tsHost = getTsHost()
   if (tsHost) {
@@ -1556,7 +1574,9 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
         return { content: [{ type: 'text', text: JSON.stringify(status) }] } as ServerResult
       }
       if (REVISION_INSPECTION_TOOLS.has(name)) {
-        const refusal = revisionGuard.beforeInspection(name, args)
+        const refusal = revisionGuard.beforeInspection(name, args, completion?.started && snapshot ? {
+          state: reviewState(snapshot), required: requiredRenderedDimensions(snapshot,completion.requirements),
+        } : undefined)
         if (refusal) return { isError: true, content: [{ type: 'text', text: JSON.stringify({ error: refusal, review_session: revisionGuard.status }) }] } as ServerResult
       }
       // A speech audition creates a cache asset, not a project mutation. It

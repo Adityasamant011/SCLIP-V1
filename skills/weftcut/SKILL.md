@@ -65,6 +65,32 @@ the work yourself; a prose response alone never certifies a finished video.
 
 ## Agentic editing guidance
 
+Choose capabilities from the brief, existing assets and current tool availability:
+
+| Need | Useful tool path | When to keep it simpler |
+| --- | --- | --- |
+| A static caption/title or simple fade/slide of an existing layer | Native text, layer parameters and keyframes | A new coded graphic is unnecessary for one ordinary editable text cue. |
+| A new custom animated chart, composed lower third or coordinated graphic | `write_hyperframes_draft` → `preview_motif_draft` → `add_motif`; install reusable assets only with user approval | Reuse an existing suitable Motif; retain its native format when modifying it. |
+| Many already-selected source ranges in a decided order | `validate_rough_cut_plan` / `apply_rough_cut_plan` for atomic assembly | Use trim/split/move for a localized change; never replace the whole track for a tiny adjustment. |
+| Finding relevant passages across a substantial cached transcript | Optional authorized `evaluate_source_passages`, then exact source-context reads | Known/short ranges can be read directly. No arbitrary Jev quota or mandatory scoring step. |
+| Explain a comparison, quantity, process, chronology or relationship | Consider an editable HyperFrames cutaway or overlay; `get_hyperframes_recipe` offers starting points, and custom code remains available | Real-world demonstrations need appropriate footage. An ordinary label/subtitle stays native text. |
+| Illustrative real-world coverage absent from the creator's media | Pexels/Pixabay search or visual-intent resolution → inspect candidate → `import_external_media` → ordinary placement | Keep the speaker or use creator footage when it serves the brief. Stock is illustration, not evidence of a specific real event. |
+| A requested short instrumental texture or background bed | `get_local_generation_status` → installed `generate_music` → `import_media` / `add_media_layer` → `inspect_rendered_audio` and role gain after placement | Reuse supplied audio when suitable; preserve intentional silence. Local music accepts 1–11 seconds and is not full-song generation. |
+| Spoken narration | `list_speech_voices` / `synthesize_speech` (optional preview_only audition), then explicit placement and `inspect_rendered_audio` | Music generation does not create a voiceover. |
+
+`preview_motif_draft` previews graphic frames only. Audio candidates are returned
+as local files for playback; after timeline placement `inspect_rendered_audio`
+checks the actual mix and local recognition. Never use a graphic preview tool to
+audition music or speech, and never claim a transcript proves vocal delivery.
+
+Discover the exact schema once, reuse it, check actual returned status and execute
+only the needed path. Missing keys/model packs are prerequisites to report, not
+permission to use another paid service or invent assets. Tool selection is your
+judgment, not a fixed pipeline. Background observations are advisory: consider
+significant concerns against the brief and relevant output, choose repair or
+reasoned no repair, and preserve intentional choices. A signal measurement alone
+is not a defect. Never perform an edit simply to satisfy every feedback flag.
+
 Optional `generate_image` and `generate_music` create local media candidates when
 their model packs are installed. `get_local_generation_status` reports availability
 without loading a model. These tools never choose an edit or place a layer: you
@@ -73,6 +99,10 @@ Music generation is short-form (1–11 seconds), not full-song synthesis. Kokoro
 speech-only; do not offer it as a music generator. Missing generation packs stay
 unavailable; do not invent a substitute, accept provider terms or download models
 through terminal commands unless the user authorizes that setup.
+The music model is Stable Audio Open Small. Treat output as an auditionable
+candidate: it is stronger at short sounds/textures than full music, and neither
+seamless looping nor absence of vocals is guaranteed. Audition before mixing
+under dialogue. Generation latency has not been benchmarked for the user's Mac.
 
 Keep the overall user goal and important unfinished work in view. Choose your
 own next action: you may skip, reorder or revisit editing categories, read
@@ -94,7 +124,7 @@ rendered modalities, actual receipt/issue IDs and `tool_call_examples`. Use the
 discovered full tool names and that legal argument shape; replace judgment text
 with your own observed reasoning. A flat `record_issue` already registers its
 diagnosis: select its returned ID, checkpoint, make your chosen repair, inspect
-the changed result, `revision_control(action="finish_issue")`, then
+the changed result, `revision_control(action="finish_issue")`, then acquire any remaining current rendered modalities offered in `review_next`,
 `revision_control(action="complete")` and `end_agent_session`.
 This flat path does not need another nested review or
 `revision_control(action="finalize")`. For a valid current result, choose a
@@ -222,80 +252,18 @@ Tool choices below are options, not stages or creative recipes:
   sub-second word-level timing is genuinely needed to set accurate cut boundaries.
   Full/detailed transcript resources and range reads remain available whenever
   you need original evidence or precise speech boundaries.
-- Jev — when and how to use it: Jev (`typesafe/jev-1.13`) is a small, fast
-  classification model that answers structured yes/no questions with Noul
-  probability scores (0.0–1.0). It is excellent at filtering, ranking, and
-  routing over text. It does NOT understand raw video/audio, cannot make
-  creative decisions, and cannot manage a workflow — Hermes does all of that.
-  The division is: **Jev filters the possibilities → Hermes makes the creative
-  choices → Sclip executes the edits.** Jev uses the OpenRouter credential
-  and adds cost/latency; treat its Noul scores as fallible, non-exhaustive
-  evidence. Always read original transcript context around promising passages
-  to recover setup/payoff. Hermes makes every editorial choice.
-
-  **Priority-ordered use cases — reach for Jev in this order:**
-
-  1. **Semantic Passage Search** *(highest value)*: When you need to find the
-     best moments across a long cached transcript without reading every 60-second
-     window, call `evaluate_source_passages` with a focused `request` question,
-     `media_ids: [<imported UUID>]`, and a `limit` (top-K, max 12). Use
-     `get_media_context detail="segments"` with flat `start_us`/`end_us` to
-     inspect surrounding context. Do NOT read word arrays for the full video.
-     `detail="range"` and full transcript resources remain available for precise
-     speech boundaries once candidates are selected.
-
-  2. **Hook & Cold-Open Scouting**: Ask Jev to rank the top 3–5 passages most
-     likely to make a compelling 5-second hook — something surprising, emotional,
-     or that poses an unresolved question. Formulate the question around viewer
-     retention rather than topic.
-
-  3. **Multi-Take Winner Selection**: When the same scene was shot multiple
-     times, present each take's transcript excerpt to Jev and ask which is most
-     energetic, most natural, or best matches the creative brief. Jev ranks;
-     Hermes selects and cuts.
-
-  4. **Fluff & Tangent Pruning**: Ask Jev to score each segment for whether it
-     directly advances the video's stated goal/brief. Score below ~0.35 flags
-     candidate sections to trim. Verify flagged clips with `vision_inspect`
-     before cutting.
-
-  5. **Chapter & Section Boundary Detection**: When building a structured video
-     (tutorial, explainer, documentary), ask Jev to identify where topic or
-     scene shifts occur across the transcript. Use detected boundaries as chapter
-     cut candidates; Hermes chooses the final in/out points.
-
-  6. **Pacing & Energy Curve Mapping**: Score transcript segments for spoken
-     energy (fast delivery, punchy language, enthusiastic tone) vs calm/slow
-     sections. Map the resulting Noul curve to identify where the video needs
-     B-roll acceleration or music swells.
-
-  7. **Semantic B-Roll Matching**: Given a list of available B-roll clip labels
-     or descriptions, ask Jev which best matches a specific dialogue passage
-     ("which of these clips best illustrates what is being said here?"). Jev
-     narrows; Hermes confirms with `vision_inspect`.
-
-  8. **Music Mood Matching**: When selecting background music from a library,
-     pass track metadata/descriptions alongside the video brief and ask Jev to
-     rank tracks by mood alignment. Always confirm final choice aurally.
-
-  9. **Sound Effect (SFX) Motivation**: Score each edit cut or visual moment
-     for whether it would benefit from a punctuating sound effect (impact,
-     whoosh, etc.). High-scoring cuts become candidates for SFX placement.
-
-  10. **Caption Punch-Word Highlighting**: Ask Jev to identify which word(s) in
-      each caption should receive emphasis styling (bold, color pop, scale-up).
-      Provide the caption text and the creative brief; Jev scores each candidate
-      word. Apply with Motif or text-style params.
-
-  11. **On-Screen Motif / Sticker Triggering**: When placing reaction stickers
-      or animated overlays, ask Jev to score moments across the transcript for
-      emotional intensity, humor, or surprise — these become Motif trigger
-      candidates. Hermes reviews, user approves all Motifs.
-
-  For all use cases: find `evaluate_source_passages` with `tool_search`, inspect
-  its schema with `tool_describe` if needed, scope with optional
-  `start_us`/`end_us`, and never treat a Noul ranking as a final editorial
-  decision — it is evidence, not instruction.
+- Jev (`evaluate_source_passages`) is optional, paid, read-only semantic retrieval
+  over imported media's cached transcripts. Use imported `media_ids`, a focused
+  `request`, bounded `start_us`/`end_us` and top-K `limit` to shortlist relevant
+  passages across substantial source material.
+  It returns relevance, self-containedness and context-needed judgments; read
+  promising passages in context before choosing edits. Prefer ordinary cached
+  transcript reads for a short source, a known timestamp or exact word timing.
+  Check availability and the user's spending authorization before invoking it.
+  Missing cached evidence stays explicit; this tool does not transcribe, rank
+  arbitrary music/stock metadata, assess vocal delivery or choose a final story.
+  Noul values are fallible judgments, not calibrated correctness or automatic
+  cut thresholds. No repair or omission is required because of a score.
 - Already-decided assembly: `apply_rough_cut_plan` places all ranges in your
   structured plan in one atomic operation, in exactly your specified order,
   with linked A/V and returned layer/link mappings. It does not choose ranges.
@@ -361,7 +329,7 @@ Tool choices below are options, not stages or creative recipes:
   - Check creator/user footage first: always inspect local project media (`get_source_observations`, transcripts, visual observations) to find relevant visual coverage, reaction shots, or cutaways.
   - Editorial purpose: visual cutaways must have an editorial reason (visual proof, cutaway, explanation, atmosphere). No B-roll is always a valid editorial decision when the primary footage is compelling.
   - User-provided assets: user-imported videos, still images, and audio in the project media pool are first-class assets. Use `get_source_observations`; when useful, `calculate_video_fit` supplies cover/contain arithmetic. Choose framing from the brief and actual composition.
-  - Sclip V1 focuses on autonomous editing quality with creator media, cutting/pacing/structure, captions/overlays/effects, and self-correction. External web/stock discovery is an experimental background capability that is disabled by default in V1.
+  - Sclip V1 focuses on autonomous editing quality with creator media, cutting/pacing/structure, captions/overlays/effects, and self-correction. External stock discovery is available in the desktop app when Pexels/Pixabay keys are configured; it is an explicit foreground tool choice, not automatic background downloading.
 
 
 ## Evidence and sync rules
@@ -384,19 +352,78 @@ Tool choices below are options, not stages or creative recipes:
 
 ## Motifs (animated overlays)
 
+### Recognize useful visual explanations
+
+For ordinary briefs such as "make this clearer" or "add useful B-roll", consider
+what the viewer needs to understand; the user need not name an animation tool.
+HyperFrames can supply full-frame illustrative cutaways as well as overlays.
+A five-tools-to-one explanation might use a merging diagram; a supplied cost
+comparison might use proportional bars; an onboarding explanation might use
+three steps; a product screenshot might benefit from a targeted callout. These
+are possibilities, not a quota or a mandatory sequence. A clear demonstration,
+an expressive speaker or an intentional quiet beat may need no added graphic.
+
+Before authoring, identify the relevant source passage/timeline range, the
+graphic's purpose and the facts/assets it needs. Use actual source context and
+timeline mappings after edits; source time is not automatically composition time.
+Never invent numbers, dates, quotations, product screens or event footage.
+Use a conceptual diagram when appropriate, and identify illustration when it
+could be mistaken for evidence. Preserve speech beneath cutaways and avoid
+covering faces, captions or important source detail. Do not animate every noun.
+
+`get_hyperframes_recipe` without arguments lists six optional starting points;
+request compact prop definitions with detail="schema", the project's exact
+width/height (or matching orientation), and duration chosen for the spoken
+passage and reading time. The result is definitions/source, not a draft or placed graphic.
+For a recipe that fits, call `write_hyperframes_draft` with recipe, grounded props,
+exact width/height and duration_s. This creates editable defaults without copying
+the returned HTML back through the model. The process recipe includes connections
+and a moving marker. For a different design, adapt the source and use custom
+manifest + HTML instead; do not mix the two modes. Recipes do not limit
+custom HyperFrames designs. Numeric bars require comparable units; timeline
+recipe spacing is ordinal, not a scaled date axis; process/timeline reveal times
+can be set to the actual narration beats. Image annotations require an
+authorized embedded source image, with points relative to that contained image.
+
+Preview entrance, reading and exit frames and changed props; check backward
+seeking. Inspect the actual composed result, not only the isolated graphic.
+If text does not fit, simplify grounded wording or revise the layout rather than
+claiming success. Check rendered dialogue when placement or timing changes.
+Explain relevant choices briefly; never claim completed editing from a plan.
+
 To author or update a Motif, first read `motif-authoring.md` next to this file
 — the document contract, whose one law is that visible state is a function of
 `t`, never an accumulation. Then:
 
 1. `list_motifs`, and read the closest existing Motif with `get_motif_source`
    — base your draft on what already renders correctly.
-2. `write_motif_draft` (pass `from` when your draft updates an existing Motif).
+2. For a new custom animated graphic, optionally read `get_hyperframes_recipe`,
+   then prefer `write_hyperframes_draft` and
+   follow the HyperFrames contract below. Reuse a suitable existing Motif when
+   it already serves the brief. Use `write_motif_draft` with `from` when editing
+   an existing native Motif; retain its authoring format. Ordinary clip
+   transitions and property keyframes continue to use their editing tools.
 3. **The user approves, not you.** Place the draft with `add_motif`, ask the
    user to play it in the app, and call `install_motif` only after they
    confirm. If you can read images, pre-check with `preview_motif_draft` at
    three timestamps (start, middle, near the end) and once with non-default
    props before involving the user — their confirmation is still the gate.
 4. After installing, remove the trial layer unless the user wants it kept.
+
+HyperFrames is the default authoring choice for new custom motion graphics,
+including animated titles, lower thirds, charts and callouts. Use
+`write_hyperframes_draft` with a
+manifest and one self-contained HTML composition. GSAP is bundled; omit script
+imports. Register `gsap.timeline({paused:true})` at
+`window.__timelines[compositionId]`, matching the root's `data-composition-id`.
+Editable props are available through `window.__sclipProps`. Supply finite
+timelines up to 180 seconds, embed assets as data URLs, and add video/audio with
+ordinary media tools. Nested compositions, HyperFrames media primitives and
+external files are unsupported. The returned id follows the same draft,
+preview, placement and user approval workflow above. Check backward seeking
+as well as start/middle/end frames. For embedded-image decoding or font-dependent
+layout, assign a Promise to window.__sclipReady; capture awaits it and reports
+failure rather than exporting a partially loaded graphic.
 
 ### Initial editorial evidence and modality verification
 
@@ -436,7 +463,7 @@ contrast, rhythm or requested style. Existing transform/crop/parameter/keyframe
 and fit tools, local imported-media upper-track placement, caption restyling,
 and audio gain/pan/fades/mute controls are available. Relevant supplied footage
 may help show a spoken physical action/feature; you decide whether it helps.
-External B-roll remains disabled. No helper chooses a visual treatment for you.
+External stock B-roll is enabled in the desktop app for Pexels/Pixabay when the user configures keys in Settings → Stock media. Use video_search_external_media, then import_external_media for an eligible candidate, then ordinary media placement. You choose whether a visual serves the brief; user assets and leaving the speaker visible remain options. Stock assets are illustrative, not proof of specific events. Preserve provider/source/license details. No paid generator or download is an implicit fallback.
 
 **Review — inspect the actual current result.** Use the production
 `render_timeline_range` (default resource ceiling 120s, configurable up to 300s)

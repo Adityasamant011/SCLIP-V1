@@ -38,6 +38,39 @@ beforeEach(() => {
 })
 
 describe('runMotifTool', () => {
+  it('creates a recipe draft from short grounded values without echoing HTML, preserving editable defaults', () => {
+    const id = runMotifTool('write_hyperframes_draft', { recipe: 'process', width: 640, height: 360, duration_s: 5, props: { title: 'A real workflow', step_1: 'Inspect', step_2: 'Edit', step_3: 'Review', second_at: 1.7, third_at: 3 } }, deps) as string
+    const draft = store.getDraft(id)!
+    expect(draft.manifest.size).toEqual([640, 360])
+    expect(draft.manifest.props_schema.title.default).toBe('A real workflow')
+    expect(draft.html).toContain('process-marker')
+    expect(draft.html).toContain('seekFrame')
+    expect(emitted).toBe(1)
+  })
+  it('rejects ambiguous source modes, invented props and reversed beats without creating a draft', () => {
+    for (const args of [{ recipe: 'process', html: 'x' }, { recipe: 'process', props: { invented: 1 } }, { recipe: 'process', props: { second_at: 3, third_at: 2 } }]) {
+      expect(() => runMotifTool('write_hyperframes_draft', args, deps)).toThrow()
+    }
+    expect(store.listDraftIds()).toEqual([]); expect(emitted).toBe(0)
+  })
+  it('reads recipe source without creating drafts, emitting changes or editing the actor', () => {
+    const before = store.listDraftIds()
+    const result = runMotifTool('get_hyperframes_recipe', { recipe: 'comparison', aspect: 'portrait' }, deps) as { manifest: Manifest; html: string }
+    expect(result.manifest.size).toEqual([720, 1280])
+    const id = runMotifTool('write_hyperframes_draft', { manifest: result.manifest, html: result.html }, deps) as string
+    expect(store.getDraft(id)?.html).toContain('seekFrame')
+    expect(store.listDraftIds()).toHaveLength(before.length + 1)
+    expect(emitted).toBe(1); expect(refreshed).toBe(1); expect(rebinds).toEqual([])
+  })
+  it('creates a HyperFrames draft with normalized identity and keeps caller arguments unchanged', () => {
+    const args = { manifest: { name: 'Graphic', size: [100, 100], default_duration_s: 1, props_schema: {} },
+      html: '<div data-composition-id="intro"></div><script>window.__timelines.intro=gsap.timeline({paused:true}).to({}, {duration:1});</script>' }
+    const before = JSON.stringify(args)
+    const id = runMotifTool('write_hyperframes_draft', args, deps) as string
+    expect(store.getDraft(id)?.html).toContain('seekFrame')
+    expect(JSON.stringify(args)).toBe(before)
+    expect(emitted).toBe(1)
+  })
   it('list_motifs returns the full payload with html', () => {
     const out = runMotifTool('list_motifs', {}, deps) as Record<string, unknown>[]
     expect(out.find((e) => e.id === 'countdown')!.status).toBe('builtin')

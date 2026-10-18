@@ -26,6 +26,7 @@ import {
 } from "../state/playbackStore";
 import { previewLocalUs } from "../state/playheadProjection";
 import { playheadTimeUs } from "../state/playheadStore";
+import { snapFrameFloor } from "../frames";
 import { compositionOrRoot, rootCompositionOf, useProjectStore } from "../state/projectStore";
 import {
   previewRenderTargetId,
@@ -931,6 +932,10 @@ export const PixiPreview = forwardRef<PixiPreviewHandle, Props>(function PixiPre
             }
             const current = useProjectStore.getState().summary;
             const composition = current && compositionOrRoot(current, previewRenderTargetId());
+            // compositeFrame paints the project-frame floor. A subframe sample
+            // near a frame's end must validate that same source instant, rather
+            // than wait forever for a different decoded frame to be bound.
+            const renderedFrameUs = composition ? snapFrameFloor(targetUs, composition.fps_num, composition.fps_den) : targetUs;
             const activeVideos = composition?.tracks.filter(track=>track.enabled!==false).flatMap((track) => track.layers)
               .filter((layer) => layer.enabled && layer.params.kind === 'VideoClip' && layer.t_start_us <= targetUs && targetUs < layer.t_end_us) ?? [];
 
@@ -947,7 +952,7 @@ export const PixiPreview = forwardRef<PixiPreviewHandle, Props>(function PixiPre
                 const ready = activeVideos.every((layer) => {
                   if (layer.params.kind !== 'VideoClip') return true;
                   const probe = compositor.activeClipProbe(layer.id);
-                  const clipTargetUs = layer.params.src_in_us + (targetUs - layer.t_start_us) * layer.params.speed;
+                  const clipTargetUs = layer.params.src_in_us + (renderedFrameUs - layer.t_start_us) * layer.params.speed;
                   return probe?.spriteBound === true
                     && probe.boundFramePtsUs !== null
                     && probe.boundFrameDurationUs !== null
@@ -1001,6 +1006,7 @@ export const PixiPreview = forwardRef<PixiPreviewHandle, Props>(function PixiPre
             return {
               pngBase64: btoa(binary),
               tUs: targetUs,
+              renderedFrameUs,
               width: out.width,
               height: out.height,
               factualEvidence, textCrops,

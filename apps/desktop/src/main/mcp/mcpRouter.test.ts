@@ -17,8 +17,8 @@ describe('routeMcpTool', () => {
   it('add_motif routes to ts (pure TS mutation)', () => {
     expect(routeMcpTool('add_motif')).toBe('ts')
   })
-  it('routes the 5 MCP motif tools to the motif route', () => {
-    for (const t of ['list_motifs', 'get_motif_source', 'write_motif_draft', 'delete_motif', 'install_motif'])
+  it('routes MCP motif authoring tools to the motif route', () => {
+    for (const t of ['list_motifs', 'get_motif_source', 'get_hyperframes_recipe', 'write_hyperframes_draft', 'write_motif_draft', 'delete_motif', 'install_motif'])
       expect(routeMcpTool(t), t).toBe('motif')
   })
   it('routes motif_staleness_report and acknowledge_motif_staleness to the motif route', () => {

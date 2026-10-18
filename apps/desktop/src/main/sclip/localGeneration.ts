@@ -15,16 +15,34 @@ export interface GenerationRequest { kind: GenerationKind; prompt: string; seed:
 export interface GenerationPack {
   schema: 1; model: string; revision: string; runtime: string; runtime_version: string
   python: string; license_acknowledged: true; files: Record<string, string>
+  text_revision?: string; runtime_versions?: Record<string, string>
 }
 export interface GenerationBinding { directory: string; assertCurrent(): void }
 export interface GenerationDeps {
   root: string; worker: string; platform?: string; arch?: string
-  memory?: () => { total: number; available: number }
+  memory?: () => { total: number; available: number } | Promise<{ total: number; available: number }>
   diskFree?: (directory: string) => number
   releaseIdleVision?: () => Promise<void>
   run?: (python: string, worker: string, input: Record<string, unknown>, signal: AbortSignal) => Promise<void>
 }
 const digest = (data: string | Buffer) => createHash('sha256').update(data).digest('hex')
+
+/** macOS eagerly uses idle RAM for caches/compression. os.freemem() counts only
+ * unused pages and can report <1 GiB while the kernel reports ample headroom.
+ * Query without creating memory pressure; fall back conservatively on failure.
+ */
+export function memoryHeadroomFromQuery(output: string, total: number): number | null {
+  const match = /System-wide memory free percentage:\s*(\d+(?:\.\d+)?)%/.exec(output)
+  const percentage = match ? Number(match[1]) : NaN
+  return Number.isFinite(percentage) && percentage >= 0 && percentage <= 100 ? Math.floor(total * percentage / 100) : null
+}
+export function readGenerationMemory(): Promise<{ total: number; available: number }> {
+  const total = os.totalmem()
+  if (process.platform !== 'darwin') return Promise.resolve({ total, available: os.freemem() })
+  return new Promise(resolve => execFile('/usr/bin/memory_pressure', ['-Q'], { timeout: 750, maxBuffer: 4096 }, (error, stdout) => {
+    resolve({ total, available: !error ? memoryHeadroomFromQuery(stdout, total) ?? os.freemem() : os.freemem() })
+  }))
+}
 export function validateGenerationRequest(value: Record<string, unknown>, kind: GenerationKind): GenerationRequest {
   const allowed = kind === 'image' ? ['prompt', 'seed', 'width', 'height'] : ['prompt', 'seed', 'duration_seconds']
   if (Object.keys(value).some(k => !allowed.includes(k))) throw new Error('Unknown generation argument; inspect the tool schema')
@@ -44,19 +62,39 @@ export function validateGenerationRequest(value: Record<string, unknown>, kind: 
 }
 
 function readPack(root: string, kind: GenerationKind): { directory: string; pack: GenerationPack; identity: string } {
-  const directory = path.join(root, kind)
+  const directory = fs.realpathSync(path.join(root, kind))
   const text = fs.readFileSync(path.join(directory, 'manifest.json'), 'utf8')
   if (Buffer.byteLength(text) > 1024 * 1024) throw new Error('Generation model manifest is too large')
   const pack = JSON.parse(text) as GenerationPack
   const expected = GENERATORS[kind]
   if (pack.schema !== 1 || pack.model !== expected.model || pack.runtime !== expected.runtime || !/^[a-f0-9]{40}$/.test(pack.revision) ||
       !pack.runtime_version || !path.isAbsolute(pack.python) || !fs.statSync(pack.python).isFile() || pack.license_acknowledged !== true ||
-      !pack.files || Array.isArray(pack.files) || !Object.keys(pack.files).length) throw new Error('Invalid generation pack; revision, runtime, files and explicit license acknowledgement are required')
+      !pack.files || typeof pack.files !== 'object' || Array.isArray(pack.files) || !Object.keys(pack.files).length) throw new Error('Invalid generation pack; revision, runtime, files and explicit license acknowledgement are required')
   for (const [name, hash] of Object.entries(pack.files)) {
     const target = path.resolve(directory, 'weights', name), relative = path.relative(path.join(directory, 'weights'), target)
     if (!relative || relative.startsWith('..') || path.isAbsolute(relative) || !/^[a-f0-9]{64}$/.test(hash) ||
         !fs.lstatSync(target).isFile() || fs.realpathSync(target) !== target) throw new Error('Unsafe or missing generation pack file')
   }
+  if (kind === 'music') {
+    if (pack.runtime_version !== '0.0.19' || !/^[a-f0-9]{40}$/.test(pack.text_revision ?? '')) throw new Error('Music requires the supported runtime and a pinned text encoder')
+    const t5 = `hub/models--t5-base/snapshots/${pack.text_revision}`
+    for (const name of ['model_config.json', 'model.safetensors', 'hub/version.txt', 'hub/models--t5-base/refs/main', `${t5}/config.json`, `${t5}/model.safetensors`, `${t5}/spiece.model`]) {
+      if (!pack.files[name]) throw new Error(`Incomplete music pack: ${name}`)
+    }
+    if (fs.readFileSync(path.join(directory, 'weights/hub/models--t5-base/refs/main'), 'utf8') !== pack.text_revision) throw new Error('Text encoder revision differs from manifest')
+    if (fs.readFileSync(path.join(directory, 'weights/hub/version.txt'), 'utf8') !== '1') throw new Error('Music text cache requires a prepared migration marker')
+    if (!pack.runtime_versions || pack.runtime_versions['stable-audio-tools'] !== pack.runtime_version) throw new Error('Music runtime versions are missing')
+  }
+  // Libraries may read config/tokenizer files too. Every installed file must be
+  // in the integrity manifest, not merely the main model checkpoint.
+  const visit = (relative: string) => {
+    for (const name of fs.readdirSync(path.join(directory, 'weights', relative))) {
+      const child = path.posix.join(relative, name), stat = fs.lstatSync(path.join(directory, 'weights', child))
+      if (stat.isDirectory()) visit(child)
+      else if (!stat.isFile() || !pack.files[child]) throw new Error('Unverified file in generation pack')
+    }
+  }
+  visit('')
   return { directory, pack, identity: digest(text) }
 }
 
@@ -103,10 +141,11 @@ export function runGenerationWorker(python: string, worker: string, input: Recor
     const stop = (reason: Error) => { error ??= reason; child.kill('SIGKILL') }
     const abort = () => stop(new DOMException('Generation cancelled', 'AbortError'))
     const timeout = setTimeout(() => stop(new Error('Generation exceeded the 5-minute execution limit')), 300_000)
-    const monitor = setInterval(() => {
+    const monitor = setInterval(async () => {
       if (checking || !child.pid) return
-      if (os.freemem() < 2 * GiB) { stop(new Error('Generation stopped to preserve system memory')); return }
       checking = true
+      const current = await readGenerationMemory()
+      if (current.available < 2 * GiB) { checking = false; stop(new Error('Generation stopped to preserve system memory')); return }
       execFile('/bin/ps', ['-o', 'rss=', '-p', String(child.pid)], { timeout: 1000, maxBuffer: 1024 }, (_err, stdout) => {
         checking = false
         const rss = Number(stdout.trim()) * 1024
@@ -131,7 +170,7 @@ export function runGenerationWorker(python: string, worker: string, input: Recor
 
 export function createLocalGeneration(deps: GenerationDeps) {
   let busy = false
-  const memory = deps.memory ?? (() => ({ total: os.totalmem(), available: os.freemem() }))
+  const memory = deps.memory ?? readGenerationMemory
   const diskFree = deps.diskFree ?? (dir => { const s = fs.statfsSync(dir); return s.bavail * s.bsize })
   function status() {
     return { local_only: true, busy, model_root: deps.root, provider_calls: 0, timeline_mutations: false,
@@ -164,7 +203,11 @@ export function createLocalGeneration(deps: GenerationDeps) {
         } catch { /* Corrupt/unverified assets are preserved, not credited as cache hits. */ }
         throw new Error('An invalid generated cache entry exists; preserve it for diagnosis or choose another seed')
       }
-      const m = memory(), required = GENERATORS[request.kind].workingBytes
+      // Release only an idle vision model before measuring headroom; a busy
+      // inspection is rejected by the owner rather than evicted mid-request.
+      await deps.releaseIdleVision?.()
+      sig.throwIfAborted(); binding.assertCurrent()
+      const m = await memory(), required = GENERATORS[request.kind].workingBytes
       if (m.total < 16 * GiB || m.available < required + 4 * GiB) throw new Error('Insufficient memory headroom for this generator; close other heavy apps and retry. No model was loaded.')
       if (diskFree(target) < 2 * GiB) throw new Error('Generation requires at least 2 GiB free output space; no model was loaded')
       // Verify complete local weights/config files before any package/model execution.
@@ -172,15 +215,14 @@ export function createLocalGeneration(deps: GenerationDeps) {
         sig.throwIfAborted(); binding.assertCurrent()
         if (await hashFile(path.join(model.directory, 'weights', name), sig) !== hash) throw new Error(`Generation pack integrity check failed: ${name}`)
       }
-      await deps.releaseIdleVision?.()
       sig.throwIfAborted(); binding.assertCurrent()
-      const after = memory()
+      const after = await memory()
       if (after.available < required + 4 * GiB) throw new Error('Memory headroom changed before generation; no model was loaded')
       fs.mkdirSync(directory, { recursive: true })
       temp = fs.mkdtempSync(path.join(directory, '.generation-'))
       const staged = path.join(temp, `asset.${ext}`)
       await (deps.run ?? runGenerationWorker)(model.pack.python, deps.worker, { ...request, output: staged, weights: path.join(model.directory, 'weights'),
-        runtime_version: model.pack.runtime_version, working_bytes: required }, sig)
+        runtime_version: model.pack.runtime_version, runtime_versions: model.pack.runtime_versions, working_bytes: required }, sig)
       sig.throwIfAborted(); binding.assertCurrent()
       const asset = validateGeneratedAsset(staged, request)
       const saved = { cache_key: key, ...result(false, asset), runtime: model.pack.runtime, runtime_version: model.pack.runtime_version,

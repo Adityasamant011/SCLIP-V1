@@ -26,6 +26,8 @@ export class RevisionLoopGuard {
   private rollbackRegrounding = false
   private lastRollback: { checkpoint_id: string; abandoned_state_version: string; restored_state_version: string; invalidated_evidence_ids: string[] } | undefined
   private finalInspections = 0
+  private completionInspections = 0
+  private static readonly COMPLETION_INSPECTION_LIMIT = 4
   private readonly verifiedDimensions = new Set<EvidenceDimension>()
   private readonly issueRanges = new Map<string, [number, number]>()
   private readonly recordedIssues = new Map<string, RecordedIssue>()
@@ -51,6 +53,7 @@ export class RevisionLoopGuard {
       phase_budget_ms: this.phase === 'initial' ? RevisionLoopGuard.INITIAL_MS : null,
       attempts: Object.fromEntries(this.attempts), outcomes: Object.fromEntries(this.outcomes),
       verification_pending: this.verificationPending, repair_cycles_limit: 3,
+      completion_inspections: this.completionInspections, completion_inspection_limit: RevisionLoopGuard.COMPLETION_INSPECTION_LIMIT,
       next_action: this.phase === 'decision' ? 'Decide now: record_issue with receipt IDs, then select it and repair, or conclude_no_repair with a current evidence_id and reason. Further inspection requires one specific unresolved question.' : this.phase === 'initial' ? 'Inspect current timeline briefly, then record_issue for up to three prioritized issues.'
         : this.phase === 'repair' ? this.verificationPending ? 'Reinspect the changed timeline range before another edit or resolving the issue.'
           : this.rollbackRegrounding ? 'Checkpoint restored; the attempted repair was abandoned, not resolved. Gather fresh relevant evidence before another repair, withdraw with current evidence, or finish unresolved and stop.'
@@ -84,7 +87,9 @@ export class RevisionLoopGuard {
     if(this.phase==='repair'){
       if(!this.activeIssue){
         if(open.length)offer('revision_control',{action:'select_issue',issue_id:open[0]})
-        else offer('revision_control',{action:'complete'})
+        else if(!missing.length)offer('revision_control',{action:'complete'})
+        else if(this.canInspectCompletion(state,required))actions.push('current_rendered_inspection')
+        else offer('end_agent_session',{review_unavailable_reason:'Replace with the actual missing verification and why it could not be acquired; do not claim completion.'})
       }else if(this.verificationPending||this.rollbackRegrounding){actions.push('current_rendered_inspection')}
       else {
         if(!this.checkpointSeen)offer('checkpoint',{label:`Before repair of ${this.activeIssue}`})
@@ -129,9 +134,32 @@ export class RevisionLoopGuard {
     return this.status
   }
 
-  beforeInspection(name = 'get_timeline_context', args: Record<string, unknown> = {}): string | null {
+  private canInspectCompletion(state: string, required: EvidenceDimension[]) {
+    return this.phase === 'repair' && !this.activeIssue && !this.verificationPending &&
+      this.reviewedState === state && ![...(this.reviewedIssueIds ?? [])].some(id => !this.outcomes.has(id)) &&
+      this.completionInspections < RevisionLoopGuard.COMPLETION_INSPECTION_LIMIT &&
+      required.some(d => !this.hasCurrentRenderedEvidence(state,[d]))
+  }
+
+  beforeInspection(name = 'get_timeline_context', args: Record<string, unknown> = {}, completion?: { state: string; required: EvidenceDimension[] }): string | null {
     if (this.phase === 'repair') {
-      if (!this.activeIssue) return 'Diagnosis is complete. Select a registered issue before focused inspection; checkpoint before mutation. If none needs repair, conclude_no_repair or complete after closing issues.'
+      if (!this.activeIssue) {
+        // Closing a visual repair invalidates the old state's audio receipts too.
+        // Permit only bounded acquisition of still-missing final modalities, not
+        // a new diagnosis, source inspection, mutation or automatic repair.
+        if (completion && this.canInspectCompletion(completion.state,completion.required)) {
+          const timeline = !('media_id' in args || 'source_t_us' in args || 'image_path' in args) &&
+            (name === 'inspect_timeline_frame' || typeof (args.timeline_t_us ?? args.t_us ?? args.start_us) === 'number')
+          const potential: EvidenceDimension[] = name === 'inspect_rendered_audio' ? ['audio','speech']
+            : ['vision_inspect','inspect_timeline_frame','inspect_timeline_range_visuals','inspect_timeline_temporal_window'].includes(name) ? ['visual','geometry']
+            : name === 'render_timeline_range' ? ['visual','audio'] : []
+          if (timeline && completion.required.some(d => potential.includes(d) && !this.hasCurrentRenderedEvidence(completion.state,[d]))) {
+            this.completionInspections++
+            return null
+          }
+        }
+        return 'Diagnosis is complete. Select a registered issue before focused inspection; only bounded current rendered checks of missing completion modalities are allowed after all issues close. If verification is unavailable, report it honestly.'
+      }
       if (this.verificationPending && !this.isRelevantTimelineInspection(name, args)) return 'Verification requires current timeline evidence overlapping the changed issue range, not unrelated/source-only evidence.'
       if (this.repairInspections >= 2) {
         // Metadata can consume the exploratory budget without satisfying the

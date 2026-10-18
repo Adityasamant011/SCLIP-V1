@@ -30,7 +30,7 @@ const ALL_CHANNELS: readonly string[] = [
   'project_summary', 'project_history_view', 'get_project_settings', 'project_open', 'project_save_as',
   'project_new_workspace', 'project_save', 'agent_session_end', 'agent_session_begin',
   // motif route (TS authoring + read + install + staleness)
-  'list_motifs', 'get_motif_source', 'write_motif_draft', 'amend_motif_draft',
+  'list_motifs', 'get_motif_source', 'write_hyperframes_draft', 'write_motif_draft', 'amend_motif_draft',
   'create_edit_draft', 'import_motif', 'delete_motif', 'install_motif',
   'motif_staleness_report', 'acknowledge_motif_staleness',
   // pure native (no project actor)
@@ -247,7 +247,7 @@ describe('routeChannel', () => {
     }
   })
   it('routes motif authoring/read/install/staleness channels to the motif route', () => {
-    for (const ch of ['list_motifs', 'get_motif_source', 'write_motif_draft', 'amend_motif_draft', 'create_edit_draft', 'import_motif', 'delete_motif', 'install_motif', 'motif_staleness_report', 'acknowledge_motif_staleness'])
+    for (const ch of ['list_motifs', 'get_motif_source', 'write_hyperframes_draft', 'write_motif_draft', 'amend_motif_draft', 'create_edit_draft', 'import_motif', 'delete_motif', 'install_motif', 'motif_staleness_report', 'acknowledge_motif_staleness'])
       expect(routeChannel(ch).kind, ch).toBe('motif')
   })
   it('never routes a category-A state mutation to rust', () => {

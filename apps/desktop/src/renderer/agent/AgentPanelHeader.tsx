@@ -34,7 +34,7 @@ export function AgentPanelHeader({ onRestartTerminal, onClearTerminal, isRestart
   }, [])
 
   const modelLabel = config?.model ? config.model.split('/').pop() : 'default'
-  const providerLabel = config?.provider || 'hermes'
+  const providerLabel = config?.provider || 'sclip'
 
   return (
     <div className="sclip-agent-header">
@@ -42,8 +42,8 @@ export function AgentPanelHeader({ onRestartTerminal, onClearTerminal, isRestart
         type="button"
         className="sclip-agent-model-badge"
         onClick={() => openSclipSettings('agent')}
-        title="Click to configure Hermes model or provider"
-        aria-label="Hermes Model Configuration"
+        title="Click to configure Sclip AI model or provider"
+        aria-label="Sclip Model Configuration"
       >
         <span className={`sclip-agent-status-dot ${isOnline ? 'online' : 'offline'}`} />
         <Bot size={13} className="sclip-agent-bot-icon" />
@@ -68,8 +68,8 @@ export function AgentPanelHeader({ onRestartTerminal, onClearTerminal, isRestart
             type="button"
             className={`sclip-agent-action-btn ${isRestarting ? 'spinning' : ''}`}
             onClick={onRestartTerminal}
-            title="Restart Hermes Terminal (reloads config & environment)"
-            aria-label="Restart Hermes terminal"
+            title="Restart Sclip Terminal (reloads config & environment)"
+            aria-label="Restart Sclip terminal"
             disabled={isRestarting}
           >
             <RotateCcw size={13} />
@@ -79,8 +79,8 @@ export function AgentPanelHeader({ onRestartTerminal, onClearTerminal, isRestart
           type="button"
           className="sclip-agent-action-btn sclip-agent-settings-btn"
           onClick={() => openSclipSettings('agent')}
-          title="Hermes Agent Settings (Model, Provider, API Keys)"
-          aria-label="Hermes settings"
+          title="Sclip Agent Settings (Model, Provider, API Keys)"
+          aria-label="Sclip settings"
         >
           <Settings size={13} />
         </button>

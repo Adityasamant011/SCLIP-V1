@@ -32,7 +32,7 @@ export function BackgroundFeedback({ projectId }: { projectId: string }) {
         if (updated.project_id === projectId) setValue(current => ({ ...current, live_feedback: updated }))
       } catch { /* Next poll reports availability; a project change cannot toggle the new project. */ }
     }}>{feedback.enabled ? 'Pause local sensing' : 'Resume local sensing'}</button>}
-    <p>Partial local observations. Hermes decides what to change; this does not certify the edit.</p>
+    <p>Partial local observations. Sclip AI decides what to change; this does not certify the edit.</p>
     {feedback?.reason && <p>{feedback.reason}</p>}
     {value?.issues?.slice(0, 4).map(issue => <p key={issue.id}>{issue.description}</p>)}
     {observation && <>

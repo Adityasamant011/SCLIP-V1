@@ -205,6 +205,19 @@ describe("MotifSprite.refreshMotif", () => {
     return calls[calls.length - 1]![0];
   }
 
+  it("binds pre-baked export frames without a user manifest in the Worker catalog", () => {
+    getMotifMock.mockReset(); getMotifMock.mockReturnValue(null); getFrameMock.mockClear();
+    const sprite = new MotifSprite({ layerId: "export-user", motifId: "user-graphic", fpsNum: 30, fpsDen: 1 });
+    const frames = [{ width: 320, height: 180 }, { width: 320, height: 180 }] as ImageBitmap[];
+    sprite.update(view, 0, 1_000_000, frames);
+    expect(sprite.stageReady).toBe(true);
+    const first = sprite.sprite.texture;
+    sprite.update(view, 33_334, 1_000_000, frames);
+    expect(sprite.sprite.texture).not.toBe(first);
+    expect(getFrameMock).not.toHaveBeenCalled();
+    sprite.dispose();
+  });
+
   it("refreshMotif re-fetches the motif so the next update re-evaluates the key", () => {
     getFrameMock.mockClear();
     // getMotif: construction (#1) sees "A"; refreshMotif() re-fetch (#2) sees "B".

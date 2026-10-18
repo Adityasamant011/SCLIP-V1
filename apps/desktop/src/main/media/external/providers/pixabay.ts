@@ -11,6 +11,7 @@ export class PixabayProvider implements ExternalMediaProvider {
 
   async search(options: ExternalMediaSearchOptions): Promise<ExternalMediaCandidate[]> {
     const { query, media_type = 'either', limit = 10, orientation } = options
+    const pageSize = Math.max(3, Math.min(200, limit))
     const apiKey = getProviderKey('pixabay')
 
     if (!apiKey) {
@@ -18,12 +19,13 @@ export class PixabayProvider implements ExternalMediaProvider {
     }
 
     const candidates: ExternalMediaCandidate[] = []
+    const failures: unknown[] = []
     const orientationParam = orientation ? `&orientation=${orientation === 'portrait' ? 'vertical' : 'horizontal'}` : ''
 
     if (media_type === 'either' || media_type === 'video') {
       try {
         const videoRes = await fetch(
-          `https://pixabay.com/api/videos/?key=${apiKey}&q=${encodeURIComponent(query)}&per_page=${limit}${orientationParam}`,
+          `https://pixabay.com/api/videos/?key=${encodeURIComponent(apiKey)}&q=${encodeURIComponent(query)}&per_page=${pageSize}${orientationParam}`,
           { signal: AbortSignal.timeout(8000) },
         )
         if (videoRes.ok) {
@@ -65,6 +67,7 @@ export class PixabayProvider implements ExternalMediaProvider {
           throw new Error(`Pixabay video search failed (${videoRes.status})`)
         }
       } catch (err) {
+        failures.push(err)
         if (media_type === 'video') throw err
       }
     }
@@ -72,7 +75,7 @@ export class PixabayProvider implements ExternalMediaProvider {
     if (media_type === 'either' || media_type === 'image') {
       try {
         const imageRes = await fetch(
-          `https://pixabay.com/api/?key=${apiKey}&q=${encodeURIComponent(query)}&image_type=all&per_page=${limit}${orientationParam}`,
+          `https://pixabay.com/api/?key=${encodeURIComponent(apiKey)}&q=${encodeURIComponent(query)}&image_type=all&per_page=${pageSize}${orientationParam}`,
           { signal: AbortSignal.timeout(8000) },
         )
         if (imageRes.ok) {
@@ -114,10 +117,12 @@ export class PixabayProvider implements ExternalMediaProvider {
           throw new Error(`Pixabay image search failed (${imageRes.status})`)
         }
       } catch (err) {
+        failures.push(err)
         if (media_type === 'image') throw err
       }
     }
 
+    if (failures.length === 2) throw new Error('Pixabay stock searches failed; check your API key, quota and network connection.')
     return candidates.slice(0, limit)
   }
 }
