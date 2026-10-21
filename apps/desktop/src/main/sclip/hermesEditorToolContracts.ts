@@ -19,7 +19,7 @@ export function creatorMemoryProvenanceIds(context:string):string[] {
   } catch {return []}
 }
 
-export const HERMES_EDITOR_TOOL_CONTRACT_PLUGIN = `import os,json,re
+export const HERMES_EDITOR_TOOL_CONTRACT_PLUGIN = `import os,json,re,threading,time
 DESCRIPTION=${JSON.stringify(GENERAL_MEMORY_CONTRACT)}
 def register(ctx):
     if not os.environ.get("SCLIP_ACTIVE_PROJECT_ID"): return
@@ -51,9 +51,25 @@ def register(ctx):
     def scoped_memory(args,**kwargs):
         failure=memory_gate(args)
         return failure if failure is not None else original(args,**kwargs)
+    visual_turns={}
+    visual_lock=threading.Lock()
     def pre_tool_call(tool_name="",args=None,**kwargs):
-        if tool_name!="memory": return None
         args=args if isinstance(args,dict) else {}
+        if os.environ.get("SCLIP_LEARNING_ONLY")=="1":
+            canonical="mcp__weftcut__creator_style_memory"
+            allowed=tool_name in ("tool_search","tool_describe",canonical) or tool_name=="tool_call" and args.get("name")==canonical
+            if not allowed: return {"action":"block","message":"This labelled learning-only continuation permits canonical creator memory discovery/review only. No timeline edits, generic memory/skill writes or external work are authorized. Record insufficient evidence or finish with remaining observations disclosed."}
+        if tool_name=="vision_analyze":
+            # Native image fallback must not become an unlimited second source
+            # scanner after the project MCP budget is exhausted. Never decide
+            # an edit or infer an image's meaning here.
+            key=(kwargs.get("session_id",""),kwargs.get("turn_id","") or "session")
+            with visual_lock:
+                if key not in visual_turns and len(visual_turns)>=32: visual_turns.pop(next(iter(visual_turns)))
+                count=visual_turns.get(key,0)
+                if count>=6: return {"action":"block","message":"Native image fallback budget reached for this turn. Reuse observed facts and make the justified requested edit, or report the specific insufficient evidence. Do not keep extracting/cropping frames or bypass with terminal. Use Sclip current-timeline inspection for verification after editing; do not fabricate names or completion."}
+                visual_turns[key]=count+1
+        if tool_name!="memory": return None
         failure=memory_gate(args)
         if failure is not None: return {"action":"block","message":failure}
         # The same native fast path omits the advertised single-op new_text
@@ -82,6 +98,10 @@ export function stageHermesEditorToolContracts(home:string) {
   fs.writeFileSync(path.join(target,'__init__.py'),HERMES_EDITOR_TOOL_CONTRACT_PLUGIN,{mode:0o600})
   plugins.enabled=[...new Set([...(Array.isArray(plugins.enabled)?plugins.enabled:[]),'sclip-editor-tool-contracts'])]
   config.plugins=plugins
+  // Native editing should not inherit an unbounded provider thinking default.
+  // Explicit global/per-model choices, including false/none, remain intact.
+  config.agent ??= {}
+  if(typeof config.agent === 'object' && !Array.isArray(config.agent) && !Object.hasOwn(config.agent,'reasoning_effort')) config.agent.reasoning_effort='low'
   fs.writeFileSync(`${file}.tool-contracts.tmp`,stringify(config),{mode:0o600});fs.renameSync(`${file}.tool-contracts.tmp`,file)
   return true
 }

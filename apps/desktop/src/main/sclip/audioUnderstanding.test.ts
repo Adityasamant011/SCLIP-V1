@@ -20,7 +20,18 @@ describe('bounded local audio observation, no creative brain',()=>{
   try{const r=await f.backend.understand(pcm(12),3e6);expect(r.status).toBe('available');expect(r.windows.map(w=>w.timeline_range_us)).toEqual([[3e6,13e6],[13e6,15e6]]);const argv=run.mock.calls[0];expect(argv[1]).toContain('--provider=cpu');expect(argv[1]).toContain('--num-threads=1');expect(argv[1].slice(-2).every((p:string)=>!fs.existsSync(p))).toBe(true);const cached=await f.backend.understand(pcm(12),20e6);expect(cached.windows[0].timeline_range_us).toEqual([20e6,30e6]);expect(run).toHaveBeenCalledTimes(1);expect(cached.provider_calls).toBe(0);fs.writeFileSync(f.paths.model,'new synthetic model');await f.backend.understand(pcm(12),0);expect(run).toHaveBeenCalledTimes(2)}finally{f.cleanup()}
  })
  it('caps range and reports missing/unsupported installations without inference',async()=>{const f=fixture();try{expect((await f.backend.understand(pcm(31),0)).status).toBe('range_too_long');fs.rmSync(f.paths.model);expect(f.backend.status().missing).toContain('model');expect((await f.backend.understand(pcm(),0)).status).toBe('unavailable');expect(f.run).not.toHaveBeenCalled();expect(createAudioUnderstanding(()=>f.paths,f.run,'linux','x64').status().status).toBe('unsupported_platform')}finally{f.cleanup()}})
- it('one concurrent job; cancellation and failures leave no resident work or failed cache',async()=>{let finish!:(value:string)=>void;const run=vi.fn((..._args:any[])=>new Promise<string>(resolve=>finish=resolve)),f=fixture(run);try{const first=f.backend.understand(pcm(),0);expect((await f.backend.understand(pcm(2),0)).status).toBe('busy');finish(json());expect((await first).status).toBe('available');const c=new AbortController();c.abort();await expect(f.backend.understand(pcm(),0,c.signal)).rejects.toThrow();const failed=fixture(vi.fn(async(..._args:any[])=>{throw Error('native failure')}));try{expect((await failed.backend.understand(pcm(),0)).status).toBe('unavailable');await failed.backend.understand(pcm(),0);expect(failed.run).toHaveBeenCalledTimes(2)}finally{failed.cleanup()}}finally{f.cleanup()}})
+ it('queues concurrent work and cancellation/failure never publishes a cache hit',async()=>{
+  let finish!:(value:string)=>void
+  const run=vi.fn(async(..._args:any[])=>json()).mockImplementationOnce(()=>new Promise<string>(resolve=>finish=resolve)),f=fixture(run)
+  try {
+   const first=f.backend.understand(pcm(),0),second=f.backend.understand(pcm(2),0)
+   expect(run).toHaveBeenCalledTimes(1)
+   finish(json());expect((await first).status).toBe('available');expect((await second).status).toBe('available');expect(run).toHaveBeenCalledTimes(2)
+   const c=new AbortController();c.abort();await expect(f.backend.understand(pcm(),0,c.signal)).rejects.toThrow()
+   const failed=fixture(vi.fn(async(..._args:any[])=>{throw Error('native failure')}))
+   try {expect((await failed.backend.understand(pcm(),0)).status).toBe('unavailable');await failed.backend.understand(pcm(),0);expect(failed.run).toHaveBeenCalledTimes(2)}finally{failed.cleanup()}
+  }finally{f.cleanup()}
+ })
  it('active cancellation cleans temporary windows without caching cancelled observations',async()=>{
   const ctrl=new AbortController(),run=vi.fn(async(..._args:any[])=>{ctrl.abort();return json()}),f=fixture(run)
   try{await expect(f.backend.understand(pcm(),0,ctrl.signal)).rejects.toThrow();expect(run.mock.calls[0][1].slice(-1).every((p:string)=>!fs.existsSync(p))).toBe(true);await f.backend.understand(pcm(),0);expect(run).toHaveBeenCalledTimes(2)}finally{f.cleanup()}

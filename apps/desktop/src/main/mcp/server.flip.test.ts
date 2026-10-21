@@ -6,6 +6,7 @@ import { blankProject } from '../state/model'
 import { mediaItemTemplate } from '../state/mutations/media'
 import { root } from '../state/__tests__/fixtures/project'
 import { assertModelsIdle } from '../model-usage'
+import { runtimeScheduler } from '../sclip/runtimeScheduler'
 
 const MID = '00000000-0000-0000-0000-0000000000aa'
 
@@ -203,6 +204,16 @@ describe('handleCallTool flip routing', () => {
     // the actor does not hold — Rust owns the not-found refusal).
     expect(sent).toHaveProperty('layer')
     expect(sent).toHaveProperty('media')
+  })
+  it('admits automatic whole-video selection through the shared local-model lane', async () => {
+    let release!:()=>void
+    const held=runtimeScheduler.run('synthetic_active_model',['local_model'],()=>new Promise<void>(resolve=>release=resolve))
+    const spy=vi.fn(okEnvelope)
+    const work=callClipComputeTool(fakeBackend(spy),tsHostStub(),'describe_clip',{layer_id:'gone'},()=>null,()=>({config:{qwen3_vl:{binary:'q'}},preferred:'auto',language:null,fps:null,focus:null}))
+    const callsWhileOccupied=spy.mock.calls.length
+    release();await Promise.all([held,work])
+    expect(callsWhileOccupied).toBe(0)
+    expect(spy).toHaveBeenCalledOnce()
   })
   it('injects the VLM config snapshot when called directly for describe_clip', async () => {
     const ts = tsHostStub()

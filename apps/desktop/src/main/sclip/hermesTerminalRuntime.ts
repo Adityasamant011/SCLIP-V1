@@ -1,6 +1,6 @@
-import { stageHermesLifecycle, type HermesLifecycleLease } from './hermesLifecycle.js'
+import { stageHermesLifecycle, type HermesLifecycleLease, type HermesTurnObserver } from './hermesLifecycle.js'
+import { isHostFeedback } from './creatorLearning.js'
 import { stageHermesEditorToolContracts,creatorMemoryProvenanceIds } from './hermesEditorToolContracts.js'
-import type { HermesTurnEvent } from './completionCheckpoint.js'
 import { SubmittedPrompt } from './editingBrief.js'
 import path from 'node:path'
 import { startAutonomousReview, initialEditorialEvidence, stageEditorialEvidence } from './autonomousReview.js'
@@ -15,7 +15,7 @@ import type { HermesProfileConfig } from './hermesRuntime.js'
 // The WeftCut editor tools arrive through the authenticated MCP server in the
 // generated Hermes profile. In Hermes CLI, passing the configured MCP server name
 // `weftcut` matches CLI_CONFIG.mcp_servers and dynamically aliases to `mcp-weftcut`,
-// ensuring all 93 WeftCut tools are enabled without triggering startup warnings.
+// enabling the current authenticated editor catalog.
 const EDITOR_TOOLSETS = 'terminal,file,web,vision,skills,todo,memory,clarify,weftcut'
 const MAX_HISTORY_BYTES = 256 * 1024
 const MAX_INPUT_BYTES = 64 * 1024
@@ -33,7 +33,8 @@ export interface HermesTerminalOptions {
   getCreatorContext?: (projectId: string) => string
   getCreatorHome?: (baseHome: string, projectId: string) => string
   getCreatorSessionKey?: (projectId: string) => string
-  registerLifecycle?: (projectId: string, sessionId: string, handler: (event: HermesTurnEvent) => void) => HermesLifecycleLease
+  registerLifecycle?: (projectId: string, sessionId: string, handler: HermesTurnObserver) => HermesLifecycleLease
+  prepareCreatorTurn?: (projectId: string, sessionId: string, turnId: string, text: string) => string
   onSubmittedPrompt?: (projectId: string, brief: string | null) => void
   onOutput: (event: { projectId: string; sessionId: string; sequence: number; data: string }) => void
   onExit: (event: { projectId: string; sessionId: string; code: number }) => void
@@ -43,13 +44,7 @@ interface TerminalSession {
   mode: 'edit' | 'review'
   creatorKey?: string
   lifecycle?: HermesLifecycleLease
-  firstTurnAt?: number
-  followups: number
-  inputGeneration: number
-  inputReady: boolean
-  readyTail: string
   cancelled: boolean
-  pendingFollowup?: {text:string;generation:number}
   submittedPrompt: SubmittedPrompt
   pty: pty.IPty
   history: string
@@ -115,20 +110,27 @@ export class HermesTerminalRuntime {
     const providerEnv = this.options.getProviderEnvironment(profile)
     const creatorContext=this.options.getCreatorContext?.(projectId) ?? ''
     const stagedEvidence=stageEditorialEvidence(home,packet,creatorContext)
-    const lifecycle=this.options.registerLifecycle?.(projectId,sessionId,event=>{
+    const lifecycle=this.options.registerLifecycle?.(projectId,sessionId,async event=>{
       const live=this.sessions.get(key);if(!live)return
       if(event.kind==='start'){
-        live.firstTurnAt??=Date.now();live.inputReady=false
-        try{live.lifecycle?.start(event)}catch{this.checkpointMessage(projectId,sessionId,live,'Native lifecycle is stale; current output remains unverified.')}
-      } else {
-        const generation=live.inputGeneration
-        const allow=live.followups<2&&Date.now()-(live.firstTurnAt??0)<600000&&!live.cancelled
-        void live.lifecycle?.finish(event,allow,live.cancelled).then(result=>{
-          if(this.sessions.get(key)!==live||generation!==live.inputGeneration)return
-          this.checkpointMessage(projectId,sessionId,live,`Completion checkpoint: ${result.status}. ${result.reason??result.scope??''}`)
-          if(result.followup&&allow){live.pendingFollowup={text:result.followup,generation};this.flushFollowup(live)}
-        }).catch(()=>{if(this.sessions.get(key)===live)this.checkpointMessage(projectId,sessionId,live,'Completion checkpoint could not verify the current task; output remains unverified.')})
+        live.lifecycle?.start(event)
+        const context=this.options.prepareCreatorTurn?.(projectId,sessionId,event.turn_id,isHostFeedback(event.user_message??'')?'':event.user_message??'')
+        const fresh=await initialEditorialEvidence(mcp,projectId).catch(()=>({identity:{project_id:projectId},project:{status:'fresh_context_unavailable',recovery:'Read get_editorial_evidence_packet/project://media before relying on startup media IDs.'},media_inventory:{status:'unavailable'}}))
+        if(this.sessions.get(key)!==live||live.cancelled)return
+        const current=fresh as Record<string,unknown>
+        return {context:['Fresh accepted-turn project/media context (supersedes the startup snapshot):',JSON.stringify({identity:current.identity,project:current.project,media_inventory:current.media_inventory}),context].filter(Boolean).join('\n').slice(0,24000)}
       }
+      if(event.kind==='check'){
+        if(live.cancelled)return {action:'incomplete' as const,message:'The creator cancelled this request; no completed edit is claimed.'}
+        const result=await live.lifecycle?.check?.(event)
+        if(this.sessions.get(key)!==live || live.cancelled)return {action:'incomplete' as const,message:'The request was superseded; its output remains unverified.'}
+        if(!result)return {action:'incomplete' as const,message:'Native completion integration is unavailable; output remains unverified.'}
+        if(result.followup)return {action:'continue' as const,message:result.followup}
+        if(!['completed','response_only'].includes(result.status))return {action:'incomplete' as const,message:`The edit remains ${result.status}: ${result.reason??result.scope??'current review could not complete'}. Committed work is retained.`}
+        return
+      }
+      const result=await live.lifecycle?.finish(event,false,live.cancelled)
+      if(this.sessions.get(key)===live && result)this.checkpointMessage(projectId,sessionId,live,`Delivery: ${result.status==='completed'?'VERIFIED':result.status==='response_only'?'RESPONSE ONLY':'INCOMPLETE / UNVERIFIED'} (${result.status}). ${result.reason??result.scope??''}`)
     })
     const lifecycleEnabled=lifecycle?stageHermesLifecycle(home):false
     const toolUrl=new URL(review?.url??mcp.url)
@@ -159,7 +161,7 @@ export class HermesTerminalRuntime {
       'chat',
       '--toolsets', EDITOR_TOOLSETS,
       '--skills', `weftcut,${stagedEvidence.name}`,
-      '--provider', profile.provider,
+      '--provider', profile.provider === 'sclip-managed' ? 'custom' : profile.provider,
       '-m', profile.model,
       // Hermes limits session titles to 100 chars; renderer-generated project
       // and session ids can be longer than that. Hash the ownership pair into
@@ -181,14 +183,11 @@ export class HermesTerminalRuntime {
       cwd: launch.cwd,
       env: env as Record<string, string>,
     })
-    const session: TerminalSession = { pty: terminal, mode, creatorKey, lifecycle, followups:0,inputGeneration:0,inputReady:false,readyTail:'',cancelled:false, submittedPrompt: new SubmittedPrompt(), history: '', sequence: 0 }
+    const session: TerminalSession = { pty: terminal, mode, creatorKey, lifecycle, cancelled:false, submittedPrompt: new SubmittedPrompt(), history: '', sequence: 0 }
     this.sessions.set(key, session)
     const redactor = createHermesOutputRedactor([...Object.values(providerEnv), mcp.bearer_token,...(lifecycle?[lifecycle.token]:[])])
     terminal.onData(data => {
       if (this.sessions.get(key) !== session) return
-      const readyScan=session.readyTail+data
-      session.readyTail=readyScan.slice(-32)
-      if(readyScan.includes('\x1b[?2004h')){session.inputReady=true;session.readyTail='';this.flushFollowup(session)}
       data = redactor.push(data)
       if (!data) return
       // Keep a bounded in-memory replay buffer. It is never persisted because
@@ -238,10 +237,9 @@ export class HermesTerminalRuntime {
     if (Buffer.byteLength(data, 'utf8') > MAX_INPUT_BYTES) throw new Error('Terminal input is too large')
     const session = this.getCurrentCreatorSession(projectId, sessionId)
     if (!session) throw new Error('Open the Hermes terminal before sending input')
-    session.inputGeneration++;delete session.pendingFollowup
     if(data.includes('\x03')){session.cancelled=true;session.lifecycle?.cancel?.()}
     for(const brief of session.submittedPrompt.feed(data)) {
-      session.cancelled=false;session.firstTurnAt=undefined;session.followups=0;session.inputReady=false
+      session.cancelled=false
       if(brief===null||(!brief.startsWith('/')&&brief.trim().length>8))this.options.onSubmittedPrompt?.(projectId,brief)
     }
     session.pty.write(data)
@@ -275,15 +273,6 @@ export class HermesTerminalRuntime {
     try { session.pty.kill() } catch { /* already gone */ }
     this.sessions.delete(key)
     throw new Error('Creator context changed; reopen the Hermes terminal')
-  }
-  private flushFollowup(session:TerminalSession) {
-    const pending=session.pendingFollowup
-    if(!pending||!session.inputReady||session.cancelled||pending.generation!==session.inputGeneration)return
-    delete session.pendingFollowup;session.followups++;session.inputReady=false
-    // This is labelled host feedback through the SAME native conversation.
-    // It is not a forged model tool call or a replacement editing loop.
-    session.pty.write(`\x1b[200~${pending.text}\x1b[201~`)
-    setTimeout(()=>{if([...this.sessions.values()].includes(session)&&pending.generation===session.inputGeneration&&!session.cancelled)session.pty.write('\r')},300)
   }
 
   private key(projectId: string, sessionId: string): string { return `${projectId}\u0000${sessionId}` }

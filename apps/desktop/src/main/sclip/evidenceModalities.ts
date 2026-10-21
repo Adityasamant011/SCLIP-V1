@@ -1,4 +1,4 @@
-export const EVIDENCE_DIMENSIONS = ['visual', 'audio', 'speech', 'text', 'geometry', 'timeline'] as const
+export const EVIDENCE_DIMENSIONS = ['visual', 'audio', 'speech', 'text', 'geometry', 'timeline', 'alignment'] as const
 export type EvidenceDimension = typeof EVIDENCE_DIMENSIONS[number]
 /** Types describe observations, never editorial problems. multimodal expands to explicit dimensions. */
 export function evidenceDimensions(value: unknown): EvidenceDimension[] {
@@ -6,6 +6,7 @@ export function evidenceDimensions(value: unknown): EvidenceDimension[] {
   return [...new Set(value)] as EvidenceDimension[]
 }
 export function toolDimensions(tool: string, data: any = {}): EvidenceDimension[] {
+  if (tool === 'inspect_audio_visual_alignment') return data.status==='available' ? ['visual','geometry','audio','speech','alignment'] : []
   if (tool === 'inspect_rendered_audio') return data.observed_dimensions ?? []
   if (tool === 'inspect_timeline_range_visuals' || tool === 'inspect_timeline_temporal_window') return Array.isArray(data.frame_observations) && !data.frame_observations.some((f:any)=>f.inference_ok) ? ['geometry'] : ['visual', 'geometry']
   if (['vision_inspect','inspect_timeline_frame'].includes(tool)) return data.composed_frame_facts ? ['visual','geometry'] : ['visual']
@@ -21,6 +22,7 @@ export function toolDimensions(tool: string, data: any = {}): EvidenceDimension[
 
 /** Actual sampled/represented intervals, not a range-level claim inferred from sparse samples. */
 export function evidenceCoverage(tool:string,data:any,range:[number,number]): Partial<Record<EvidenceDimension,[number,number][]>> {
+  if(tool==='inspect_audio_visual_alignment')return {alignment:data.status==='available'?(data.covered_ranges_us??[]):[],...evidenceCoverage('inspect_timeline_range_visuals',data,range),...evidenceCoverage('inspect_rendered_audio',data.audio,range)}
   if(tool==='inspect_rendered_audio'){
     const observedEnd=Math.min(range[1],range[0]+Number(data.signal?.duration_us??0))
     return Object.fromEntries(toolDimensions(tool,data).map(d=>[d,observedEnd>range[0]?[[range[0],observedEnd]]:[]]))

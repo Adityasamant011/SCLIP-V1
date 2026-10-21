@@ -273,128 +273,42 @@ export function createEditingLayout(
 ): WeftCutLayout {
   const width = sizeOf(viewport.width) ?? 1_000;
   const height = sizeOf(viewport.height) ?? 720;
-  const contextual: PanelId[] = ["attribute", "effect"];
-  const library: PanelId[] = ["media", "transitions"];
+  // Match the Sclip editing reference: picture over timeline on the left,
+  // one full-height contextual column on the right, Agent selected.
+  const rightTabs: PanelId[] = ["agent", "attribute", "effect", "playhead", "media", "transitions", "caption"];
   const placements: PanelPlacements = {
     "quick-actions": { siblings: ["quick-actions"], index: 0 },
-    media: { siblings: library, index: 0 },
-    transitions: { siblings: library, index: 1 },
     preview: { siblings: ["preview"], index: 0 },
     timeline: { siblings: ["timeline"], index: 0 },
-    playhead: { siblings: ["playhead"], index: 0 },
-    attribute: { siblings: contextual, index: 0 },
-    effect: { siblings: contextual, index: 1 },
   };
-  // The Quick Actions strip is a full-height edge bar, so it claims a fixed
-  // slice of the remaining editor width rather than a proportion.
+  rightTabs.forEach((id, index) => { placements[id] = { siblings: rightTabs, index }; });
   const stripWidth = STRIP_THICKNESS;
   const bodyWidth = Math.max(1, width - stripWidth);
+  const rightWidth = Math.round(bodyWidth * 0.30);
   const editorHeight = Math.round(height * 0.72);
-  const timelineHeight = Math.round(height * 0.28);
-  const columnWidth = Math.round(bodyWidth * 0.25);
-  /* The Playhead Panel owns the top of the right column outright instead of
-   * sleeping behind an Attribute tab: A/B-Roll is the editing model this app
-   * defaults to, and the stack under the playhead is what that model is read
-   * from — a user who never finds the tab never learns the model. The
-   * inspector keeps the larger share below it because it holds far more rows
-   * than the stack ever does. */
-  const playheadHeight = Math.round(editorHeight * 0.4);
   const layout = normalizeLayout({
     version: WEFTCUT_LAYOUT_VERSION,
     empty: false,
     dockview: {
       grid: {
-        // Grid branches ALTERNATE axes, and a node's `size` is measured along
-        // its PARENT's axis. A horizontal root gives the full-height Quick
-        // Actions strip beside everything else (sizes = widths); the body
-        // branch then alternates to vertical for the 72/28 editor/timeline
-        // rows (sizes = heights); the editor row alternates back to horizontal
-        // for its three columns (sizes = widths); and the right column
-        // alternates once more to vertical for Playhead over the inspector
-        // (sizes = heights again).
-        orientation: "HORIZONTAL",
-        width,
-        height,
-        root: {
-          type: "branch",
-          size: width,
-          data: [
-            {
-              type: "leaf",
-              size: stripWidth,
-              data: {
-                id: "editing-quick-actions",
-                views: ["quick-actions"],
-                activeView: "quick-actions",
-              },
-            },
-            {
-              type: "branch",
-              size: bodyWidth,
-              data: [
-                {
-                  type: "branch",
-                  size: editorHeight,
-                  data: [
-                    {
-                      type: "leaf",
-                      size: Math.round(bodyWidth * 0.22),
-                      data: {
-                        id: "editing-media",
-                        views: library,
-                        activeView: "media",
-                      },
-                    },
-                    {
-                      type: "leaf",
-                      size: Math.round(bodyWidth * 0.53),
-                      data: {
-                        id: "editing-preview",
-                        views: ["preview"],
-                        activeView: "preview",
-                      },
-                    },
-                    {
-                      type: "branch",
-                      size: columnWidth,
-                      data: [
-                        {
-                          type: "leaf",
-                          size: playheadHeight,
-                          data: {
-                            id: "editing-playhead",
-                            views: ["playhead"],
-                            activeView: "playhead",
-                          },
-                        },
-                        {
-                          type: "leaf",
-                          size: editorHeight - playheadHeight,
-                          data: {
-                            id: "editing-context",
-                            views: contextual,
-                            activeView: "attribute",
-                          },
-                        },
-                      ],
-                    },
-                  ],
-                },
-                {
-                  type: "leaf",
-                  size: timelineHeight,
-                  data: {
-                    id: "editing-timeline",
-                    views: ["timeline"],
-                    activeView: "timeline",
-                  },
-                },
-              ],
-            },
-          ],
-        },
+        orientation: "HORIZONTAL", width, height,
+        root: { type: "branch", size: width, data: [
+          { type: "leaf", size: stripWidth, data: {
+            id: "editing-quick-actions", views: ["quick-actions"], activeView: "quick-actions",
+          } },
+          { type: "branch", size: bodyWidth - rightWidth, data: [
+            { type: "leaf", size: editorHeight, data: {
+              id: "editing-preview", views: ["preview"], activeView: "preview",
+            } },
+            { type: "leaf", size: height - editorHeight, data: {
+              id: "editing-timeline", views: ["timeline"], activeView: "timeline",
+            } },
+          ] },
+          { type: "leaf", size: rightWidth, data: {
+            id: "editing-context", views: rightTabs, activeView: "agent",
+          } },
+        ] },
       },
-      // normalizeLayout derives trusted definitions for every referenced Panel.
       panels: {},
     },
     placements,

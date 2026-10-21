@@ -1,9 +1,10 @@
+import {deliveryWindowsCovered,verifyDeliveryWindows} from './deliveryWindows.js'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { Project, Layer } from '../state/model.js'
-import { currentOutput, explicitOutputDuration, type DurationRequirement } from './editingBrief.js'
+import { currentOutput, explicitOutputDuration, revisesOutputDuration, type DurationRequirement } from './editingBrief.js'
 import { audioAudibility } from './audioAudibility.js'
 import { avRelationships } from './mediaRelationships.js'
 import { renderComposedTimelineRange, resolveFfmpegPath, MAX_RANGE_RENDER_DURATION_US } from './rangeRender.js'
@@ -20,13 +21,23 @@ export function outputRequirements(brief: string, project: Project): OutputRequi
   const positive = brief.replace(/\b(?:no|without|omit|exclude|do not include|don't include)\s+(?:(?:any|the|a|background)\s+)?(?:audio|sound|soundtrack|music|narration|voice[- ]?over|speech|spoken dialogue|dialogue|video|footage)\b/gi, '')
   const silent = /\b(?:silent|video[- ]only|(?:no|without)\s+(?:any\s+)?(?:audio|sound))\b/i.test(brief)
   const noVideo = /\b(?:audio[- ]only|soundtrack only|(?:no|without)\s+(?:any\s+)?(?:video|footage))\b/i.test(brief)
-  const video = !noVideo && /\b(?:video|footage|tutorial|highlight|showcase|reel|title|draft|clip)\b/i.test(positive)
+  const video = !noVideo && /\b(?:video|footage|tutorial|highlight|showcase|reel|title|draft|clip|teaser|trailer|montage|slideshow)\b/i.test(positive)
   const audio = !silent && /\b(?:audio|podcast|soundtrack|music|narration|voice[- ]?over|speech|spoken|dialogue|talking[- ]head)\b/i.test(positive)
   const requiresSpeech = !silent && /\b(?:narration|voice[- ]?over|speech|spoken|dialogue|talking[- ]head)\b/i.test(positive)
   const existingVisual = project.compositions[project.root_id]?.tracks.some(t => t.enabled && t.layers.some(l => l.enabled && l.params.kind !== 'Audio'))
-  const requiresVideo = video || !noVideo && !audio && !!existingVisual
+  const explicitAudioFormat = /\b(?:podcast|music track|audio track|soundtrack only)\b/i.test(positive)
+  const requiresVideo = video || !noVideo && !explicitAudioFormat && !!existingVisual
   const requiresAudio = audio || requiresSpeech
   return {requiresVideo, requiresAudio, requiresSpeech, media: requiresVideo ? 'video' : requiresAudio ? 'audio' : 'unspecified', speech: requiresSpeech, duration: explicitOutputDuration(brief)}
+}
+/** Explicit follow-up revisions retain prior output intent unless the new request
+ * chooses/removes audio. New projects have no prior requirements to inherit. */
+export function followupRequirements(brief:string,project:Project,previous?:OutputRequirements) {
+ const next=outputRequirements(brief,project)
+ const followup=!!previous && /\b(?:this|that|same|again|instead|rebuild|start from scratch|change|replace|fix|redo|remake|delete|actually|make it|keep it)\b/i.test(brief)
+ const audioChoice=/\b(?:audio|sound|music|narration|voice[- ]?over|speech|spoken|dialogue|silent|podcast)\b/i.test(brief)
+ if(followup){if(!revisesOutputDuration(brief))next.duration??=previous?.duration;if(!audioChoice){next.requiresAudio=previous!.requiresAudio;next.requiresSpeech=previous!.requiresSpeech}}
+ return {requirements:next,followup}
 }
 function invisible(layer: Layer) {
   const p = layer.params
@@ -81,10 +92,12 @@ export function validateOutputState(project: Project, requirements?: OutputRequi
   return {valid:errors.length===0,errors,warnings,current_output:output,visual_output:visual,audio_output:audio,relationships,time_units:'Integer microseconds: 1 second = 1000000 us',duration_seconds:output.duration_us/1e6}
 }
 export function requiredRenderedDimensions(project: Project, requirements?: OutputRequirements) {
-  const dims: Array<'visual'|'audio'|'speech'>=[]
+  const dims: Array<'visual'|'audio'|'speech'|'alignment'>=[]
   if (requirements?.media !== 'audio' && visualOutput(project).potential_visual_ranges_us.length) dims.push('visual')
   if (audioAudibility(project).selected_count>0) dims.push('audio')
-  if (requirements?.requiresSpeech) dims.push('speech')
+  const narration = audioAudibility(project).layers.some(l=>l.selected_by_mix_gates&&l.role==='voiceover')
+  if (requirements?.requiresSpeech || narration) dims.push('speech')
+  if(dims.includes('visual') && (requirements?.requiresSpeech || narration))dims.push('alignment')
   return dims
 }
 export function sourceFingerprint(project: Project, additionalMediaIds: string[] = []) {
@@ -93,20 +106,20 @@ export function sourceFingerprint(project: Project, additionalMediaIds: string[]
     const m=project.media_pool[id];try {const s=fs.statSync(m.path_abs);return [id,s.size,s.mtimeMs]} catch {return [id,'unavailable']}
   }))).digest('hex')
 }
-export interface DeliveryProof { valid: boolean; reason?: string; duration_us?: number; has_video?: boolean; has_audio?: boolean; decoded?: boolean; artifact_sha256?: string }
+export interface DeliveryProof { valid: boolean; reason?: string; duration_us?: number; has_video?: boolean; has_audio?: boolean; decoded?: boolean; artifact_sha256?: string; chunk_count?: number; verified_ranges_us?: Array<[number,number]>; artifact_kind?: string }
 /** Never promote a bare success flag without decoded, duration and required stream facts. */
 export function deliveryProofValid(project: Project, requirements: OutputRequirements | undefined, proof: DeliveryProof) {
   const duration=project.compositions[project.root_id].duration_us
   const frame=1e6*project.compositions[project.root_id].fps.den/project.compositions[project.root_id].fps.num
   const needVideo=requirements?.requiresVideo||requirements?.media!=='audio'&&visualOutput(project).potential_visual_ranges_us.length>0
   const needAudio=requirements?.requiresAudio||audioAudibility(project).selected_count>0
-  return proof.valid && proof.decoded===true && Number.isFinite(proof.duration_us) && Math.abs(proof.duration_us!-duration)<=Math.max(frame,100000) && (!needVideo||proof.has_video===true) && (!needAudio||proof.has_audio===true)
+  return deliveryWindowsCovered(proof,duration) && proof.valid && proof.decoded===true && Number.isFinite(proof.duration_us) && Math.abs(proof.duration_us!-duration)<=Math.max(frame,100000) && (!needVideo||proof.has_video===true) && (!needAudio||proof.has_audio===true)
 }
 /** Full temporary production-compositor artifact, then actual stream decode.
  * This is host technical QA, never a Hermes review receipt or final export. */
-export async function verifyDelivery(project: Project, requirements: OutputRequirements | undefined, getActiveWindow: Parameters<typeof renderComposedTimelineRange>[1]['getActiveWindow'], signal?: AbortSignal): Promise<DeliveryProof> {
-  const duration = project.compositions[project.root_id].duration_us
-  if (duration>MAX_RANGE_RENDER_DURATION_US) return {valid:false,reason:'Full output exceeds the bounded completion render window; whole-output decodability remains unproven.'}
+export async function verifyDelivery(project: Project, requirements: OutputRequirements | undefined, getActiveWindow: Parameters<typeof renderComposedTimelineRange>[1]['getActiveWindow'], signal?: AbortSignal, windowRange?: [number,number]): Promise<DeliveryProof> {
+  const duration = windowRange ? windowRange[1]-windowRange[0] : project.compositions[project.root_id].duration_us
+  if (!windowRange && duration>MAX_RANGE_RENDER_DURATION_US) return verifyDeliveryWindows(duration,MAX_RANGE_RENDER_DURATION_US,(start,end)=>verifyDelivery(project,requirements,getActiveWindow,signal,[start,end]))
   let file: string | undefined
   try {
     const window=getActiveWindow()
@@ -117,7 +130,7 @@ export async function verifyDelivery(project: Project, requirements: OutputRequi
       if(!source||!fs.statSync(source.path_abs,{throwIfNoEntry:false})?.isFile())throw new Error('Required source file unavailable; current output provenance cannot be verified')
     }
     const audioOnly=requirements?.media==='audio'||requirements?.media!=='video'&&!visualOutput(project).potential_visual_ranges_us.length&&audioAudibility(project).selected_count>0
-    const rendered=await renderComposedTimelineRange(project,{start_us:0,end_us:duration,audioOnly,getActiveWindow:()=>window,signal});file=rendered.path
+    const rendered=await renderComposedTimelineRange(project,{start_us:windowRange?.[0]??0,end_us:windowRange?.[1]??duration,audioOnly,getActiveWindow:()=>window,signal});file=rendered.path
     const ffmpeg=resolveFfmpegPath(),ffprobe=ffmpeg.replace(/ffmpeg(\.exe)?$/,'ffprobe$1')
     const probe=await exec(ffprobe,['-v','error','-show_streams','-show_format','-of','json',file],{timeout:30000,signal,maxBuffer:2e6})
     const info=JSON.parse(probe.stdout),hasVideo=info.streams?.some((s:any)=>s.codec_type==='video'),hasAudio=info.streams?.some((s:any)=>s.codec_type==='audio')

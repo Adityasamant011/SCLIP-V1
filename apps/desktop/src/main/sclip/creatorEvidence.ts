@@ -19,17 +19,22 @@ export function summarizeCreatorEvidence(e: CreatorEvidence) {
   }
   return { id: e.id, kind: e.kind, authority: e.authority, projectId: e.projectId, scope: e.scope,
     relationship: e.data.relationship, operationCount: e.data.operationCount, summary: e.data.summary,
-    changes: deltas.slice(0, 3).map(d => ({ layerId: d.layerId, proposalOpId: d.proposalOpId, properties: d.properties,
+    changes: deltas.slice(0, 3).map(d => ({ layerId: d.layerId, proposalOpId: d.proposalOpId, proposalPromptId:d.proposalPromptId, properties: d.properties,
+      before_authority: d.proposalOpId ? 'matched_agent_proposal' : 'prior_project_state', after_authority: e.authority === 'ProjectActor' ? 'creator_commit' : 'unattributed',
       values: ((d.properties ?? []) as string[]).slice(0, 6).map(property => ({ property, before:valueAt(d.before,property), after:valueAt(d.after,property) })) })),
-    ...(e.kind === 'explicit_instruction' ? { quote: e.data.quote } : {}),
+    ...(e.kind === 'explicit_instruction' || e.kind === 'user_prompt' ? { quote: String(e.data.quote).slice(0, 500), quoteTruncated: e.data.quoteTruncated || String(e.data.quote).length > 500 } : {}),
+    preceding_prompt_id: e.data.precedingPromptId, review: e.review,
+    structural_changes:e.data.structureProperties,structure_proposal_op_id:e.data.structureProposalOpId,structure_proposal_prompt_id:e.data.structureProposalPromptId,
+    ...(e.authority === 'ProjectActor' ? { change_actor:e.data.actor, value_direction:'Before is the state preceding the creator action; after is the creator action result. A matched proposal ID identifies the prior AI proposal, not the creator result. These facts do not establish motive.' } : {}),
     ...(e.kind === 'reference' ? { reference: JSON.stringify(e.data).slice(0, 450) } : {}),
+    ...(e.kind === 'legacy_note' ? { historical_note_count: Array.isArray(e.data.notes)?e.data.notes.length:0, source:'Historical generic memory; not direct creator feedback or confirmed taste.' } : {}),
     uncertainty: e.data.intention, details: 'Use action=evidence with this id for retained before/after facts; summary is bounded.' }
 }
 
 /** Adjacent same-property committed adjustments are one observation sequence,
  * not proof of one gesture/intent. Never rewrite evidence already used by a hypothesis. */
 export function canGroupAdjustments(previous: CreatorEvidence | undefined, next: CreatorEvidence, used: boolean): boolean {
-  if (!previous || used || previous.suppressed || previous.kind === 'undo' || next.kind === 'undo' || previous.kind === 'reference' || previous.kind === 'explicit_instruction') return false
+  if (!previous || used || previous.review || previous.suppressed || !['manual_edit','correction'].includes(previous.kind) || !['manual_edit','correction'].includes(next.kind)) return false
   const signature = (e: CreatorEvidence) => JSON.stringify((e.data.deltas as any[]).map(d => ({ layerId: d.layerId, properties: d.properties })).sort((a, b) => a.layerId.localeCompare(b.layerId)))
   return previous.creatorId === next.creatorId && previous.projectId === next.projectId && previous.seriesId === next.seriesId && previous.data.summary === next.data.summary && previous.data.afterState === next.data.beforeState && signature(previous) === signature(next) && !next.data.structureBefore
 }

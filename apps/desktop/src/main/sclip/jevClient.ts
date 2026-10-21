@@ -11,7 +11,7 @@ export interface JevResult {
 export type JevDecide = (state: unknown, questions: Record<string, JevQuestion>, signal?: AbortSignal) => Promise<JevResult>
 export type JevReceipt = { model: string; id: string; input_tokens: number | null; cost: number | null; latency_ms: number; status: 'ok' | 'error'; error_code?: string }
 
-export function createJevClient(getCredential: () => string, request: typeof fetch = fetch, onReceipt?: (receipt: JevReceipt) => void): JevDecide {
+export function createJevClient(getCredential: () => string, request: typeof fetch = fetch, onReceipt?: (receipt: JevReceipt) => void, getEndpoint: () => string = () => 'https://openrouter.ai/api/alpha/decisions'): JevDecide {
   return async (state, questions, signal) => {
     const body = JSON.stringify({ model: JEV_MODEL, state, questions })
     // Conservative byte bound <= token budget, including questions. No truncation.
@@ -22,7 +22,7 @@ export function createJevClient(getCredential: () => string, request: typeof fet
     const record = (receipt: JevReceipt) => { try { onReceipt?.(receipt) } catch { /* diagnostics cannot change evidence */ } }
     const timeout = AbortSignal.timeout(30_000)
     try {
-      const response = await request('https://openrouter.ai/api/alpha/decisions', {
+      const response = await request(getEndpoint(), {
         method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
         body, signal: signal ? AbortSignal.any([signal, timeout]) : timeout, redirect: 'error',
       })

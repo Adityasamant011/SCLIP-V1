@@ -3,7 +3,7 @@ import type { Project, Layer } from '../state/model.js'
 /** Native mix.rs placement convention: root t = child t + ref start - src_in.
  * Facts only. Never generates partner edits or changes mute/solo settings. */
 export function placedLayers(project: Project, compositionId = project.root_id, start = 0, end = project.compositions[compositionId]?.duration_us ?? 0) {
-  const out: Array<{ layer: Layer; start_us: number; end_us: number; composition_id: string; instance_path: string }> = []
+  const out: Array<{ layer: Layer; start_us: number; end_us: number; composition_id: string; instance_path: string; offset_us:number }> = []
   function walk(id: string, offset: number, lo: number, hi: number, path: string, depth: number) {
     if (depth > 32 || lo >= hi) return
     for (const track of project.compositions[id]?.tracks ?? []) {
@@ -14,7 +14,7 @@ export function placedLayers(project: Project, compositionId = project.root_id, 
         if (a >= b) continue
         if (layer.params.kind === 'CompositionRef') {
           walk(layer.params.composition, offset + layer.t_start_us - layer.params.src_in_us, a, b, `${path}${layer.id}/`, depth + 1)
-        } else out.push({ layer, start_us: a, end_us: b, composition_id: id, instance_path: path })
+        } else out.push({ layer, start_us: a, end_us: b, composition_id: id, instance_path: path, offset_us:offset })
       }
     }
   }
@@ -22,7 +22,7 @@ export function placedLayers(project: Project, compositionId = project.root_id, 
   return out
 }
 
-export function audioAudibility(project: Project, compositionId = project.root_id, start = 0, end = project.compositions[compositionId]?.duration_us ?? 0) {
+export function audioAudibility(project: Project, compositionId = project.root_id, start = 0, end = project.compositions[compositionId]?.duration_us ?? 0, detailLimit=32) {
   const anySolo = Object.values(project.audio_roles).some(r => r.solo)
   const layers = placedLayers(project, compositionId, start, end).flatMap(p => {
     const q = p.layer.params
@@ -36,7 +36,7 @@ export function audioAudibility(project: Project, compositionId = project.root_i
   })
   return { evidence_class: 'AUTHORITATIVE_STATE', coordinate_space: 'timeline', timeline_range_us: [start, end], any_role_solo: anySolo,
     roles: project.audio_roles, candidate_count: layers.length, selected_count: layers.filter(l => l.selected_by_mix_gates).length,
-    layers: layers.slice(0, 32), omitted_layers: Math.max(0, layers.length - 32),
+    layers: layers.slice(0, detailLimit), omitted_layers: Math.max(0, layers.length - detailLimit),
     limitation: 'Enabled in-window layers after native mute/solo/lock gates. Gains are exposed, not judged. Selection does not prove signal, successful decoding or audible speech; inspect_rendered_audio measures the actual mix. No settings are changed.' }
 }
 

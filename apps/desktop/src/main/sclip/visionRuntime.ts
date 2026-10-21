@@ -12,7 +12,7 @@
 import * as os from 'os'
 import * as path from 'path'
 import * as fs from 'fs'
-import { getVisionSidecar, type AnalyzeRequest, type AnalyzeResult, type SidecarStatus } from './visionSidecar.js'
+import { getVisionSidecar, disposeVisionSidecar, type AnalyzeRequest, type AnalyzeResult, type SidecarStatus } from './visionSidecar.js'
 
 export { type AnalyzeRequest, type AnalyzeResult, type SidecarStatus }
 
@@ -100,13 +100,13 @@ class LlamaMtmdVisionBackend implements VisionBackend {
   async status(): Promise<SidecarStatus> {
     const hasBin = this.findBinary() !== null
     return {
-      running: hasBin,
-      state: hasBin ? 'ready' : 'not_downloaded',
+      running: false,
+      state: hasBin ? 'not_configured' : 'not_downloaded',
       modelLoaded: false,
       model: 'Qwen3-VL-2B-GGUF',
       idleS: 0,
       port: null,
-      error: hasBin ? null : 'llama-mtmd-cli.exe not found',
+      error: hasBin ? 'Windows frame inference is not configured; binary presence does not establish readiness' : 'llama-mtmd-cli.exe not found',
     }
   }
 
@@ -167,8 +167,10 @@ export function getVisionRuntime(): VisionBackend {
 }
 
 export async function disposeVisionRuntime(): Promise<void> {
-  if (_backendInstance) {
-    await _backendInstance.dispose()
-    _backendInstance = null
-  }
+  const backend = _backendInstance
+  _backendInstance = null
+  // Source indexing can start the shared sidecar before this abstraction is
+  // requested. Retire that worker too; do not create one merely to shut down.
+  try { await backend?.dispose() }
+  finally { await disposeVisionSidecar() }
 }

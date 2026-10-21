@@ -29,6 +29,12 @@ describe('Real MCP creator memory integration without inference', () => {
       const result:any=await client.callTool({name:tool.name,arguments:{action:'hypothesis',creator_id:packet.binding.creatorId,expected_revision:store.view(projectId).revision,hypothesis:'Perhaps natural framing matters',dimension:'visual',evidence_ids:[store.view(projectId).preferences[0]!.support[0]]}})
       expect(result.isError).not.toBe(true)
       expect(new CreatorStyleStore(directory).view(projectId).preferences.at(-1)).toMatchObject({hypothesis:'Perhaps natural framing matters',status:'candidate'})
+      const observations:any=await client.callTool({name:tool.name,arguments:{action:'observations',creator_id:'local',expected_revision:0,filter:'all'}})
+      expect(observations.isError).not.toBe(true)
+      expect(JSON.parse(observations.content[0].text).observations[0].kind).toBe('explicit_instruction')
+      const preference=store.view(projectId).preferences.at(-1)!
+      const reviewed:any=await client.callTool({name:tool.name,arguments:{action:'review',creator_id:'local',expected_revision:store.view(projectId).revision,evidence_ids:preference.support,preference_ids:[preference.id],outcome:'learned',reason:'Persisted one grounded candidate; actual video applicability remains tentative.'}})
+      expect(reviewed.isError).not.toBe(true)
       const invalid:any=await client.callTool({name:tool.name,arguments:{action:'hypothesis',creator_id:packet.binding.creatorId,expected_revision:store.view(projectId).revision,hypothesis:'Unsupported',dimension:'pacing',evidence_ids:['invented']}})
       expect(invalid.isError).toBe(true);expect(invalid.content.some((c:any)=>c.type==='text'&&c.text.includes('creator_memory_next'))).toBe(true)
       expect(actor.snapshot()).toBe(before);expect(actor.historyView(100)).toEqual(history)

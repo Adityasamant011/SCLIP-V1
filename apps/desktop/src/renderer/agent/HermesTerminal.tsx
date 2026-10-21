@@ -10,6 +10,7 @@ interface Props {
   projectId: string
   sessionId: string
   onTerminalReady?: (actions: { clear: () => void }) => void
+  onRetry?: () => void | Promise<void>
 }
 
 function transformTerminalOutput(data: string): string {
@@ -30,14 +31,35 @@ function transformTerminalOutput(data: string): string {
 }
 
 /** The real PTY surface. Its process is Hermes-only; it is not a system shell. */
-export function HermesTerminal({ projectId, sessionId, onTerminalReady }: Props) {
+export function HermesTerminal({ projectId, sessionId, onTerminalReady, onRetry }: Props) {
   const host = useRef<HTMLDivElement>(null)
   const [error, setError] = useState<string | null>(null)
+  const [starting, setStarting] = useState(true)
+  const retry = useRef(onRetry)
+  retry.current = onRetry
 
   useEffect(() => {
     const node = host.current
     if (!node) return undefined
     let active = true
+    let failed = false
+    let outputSeen = false
+    setError(null)
+    setStarting(true)
+    const fail = (message: string) => {
+      failed = true
+      if (active) { setStarting(false); setError(message) }
+    }
+    const startupTimeout = setTimeout(() => {
+      if (!outputSeen) fail('The terminal did not produce output. Retry the connection.')
+    }, 30_000)
+    const noteOutput = (data: string) => {
+      const visible = data.replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/[\x00-\x20\x7f]/g, '')
+      if (!visible || failed || !active) return
+      outputSeen = true
+      clearTimeout(startupTimeout)
+      setStarting(false)
+    }
     const terminal = new Terminal({
       cursorBlink: true,
       convertEol: true,
@@ -84,6 +106,7 @@ export function HermesTerminal({ projectId, sessionId, onTerminalReady }: Props)
     const acceptOutput = (event: { sequence: number; data: string }) => {
       if (event.sequence <= lastSequence) return
       lastSequence = event.sequence
+      noteOutput(event.data)
       terminal.write(transformTerminalOutput(event.data))
     }
     const writeOutput = (payload: unknown) => {
@@ -96,6 +119,12 @@ export function HermesTerminal({ projectId, sessionId, onTerminalReady }: Props)
     }
 
     const unsubscribe = window.api.on('sclip:terminal_output', writeOutput)
+    const unsubscribeExit = window.api.on('sclip:terminal_exit', payload => {
+      const event = payload as { projectId?: string; sessionId?: string; code?: number }
+      if (event.projectId !== projectId || event.sessionId !== sessionId) return
+      clearTimeout(startupTimeout)
+      fail(`Sclip terminal stopped${typeof event.code === 'number' ? ` (exit ${event.code})` : ''}. Retry the connection.`)
+    })
     let openPromise: Promise<SclipTerminalSnapshot> | undefined
     let inputQueue: Promise<void> = Promise.resolve()
     const disposable = terminal.onData(data => {
@@ -104,7 +133,7 @@ export function HermesTerminal({ projectId, sessionId, onTerminalReady }: Props)
       inputQueue = inputQueue.then(async () => {
         await openPromise
         await startupReady
-        if (active) {
+        if (active && !failed) {
           // Keep typing visible even if the user previously scrolled up, and
           // synchronize the PTY width before it renders another input row.
           terminal.scrollToBottom()
@@ -127,7 +156,7 @@ export function HermesTerminal({ projectId, sessionId, onTerminalReady }: Props)
     }
 
     const resize = () => {
-      if (!active) return
+      if (!active || failed) return
       try {
         fit.fit()
         if (ready) {
@@ -153,12 +182,12 @@ export function HermesTerminal({ projectId, sessionId, onTerminalReady }: Props)
 
     openPromise = sclipOpenTerminal(projectId, sessionId, terminal.cols, terminal.rows)
     void openPromise.then(snapshot => {
-      if (!active) return
+      if (!active || failed) return
       lastSequence = snapshot.sequence
       const finishReplay = () => {
         replayHandlers.forEach(handler => handler.dispose())
         replayHandlers = []
-        if (!active) return
+        if (!active || failed) return
         terminal.scrollToBottom()
         ready = true
         finishStartup()
@@ -167,6 +196,7 @@ export function HermesTerminal({ projectId, sessionId, onTerminalReady }: Props)
         queuedOutput.length = 0
       }
       if (snapshot.history) {
+        noteOutput(snapshot.history)
         // History is already answered output, not a fresh child request. Consume
         // only historical queries, never user input or live terminal responses.
         // xterm parses asynchronously: keep hooks until the write callback and
@@ -175,21 +205,27 @@ export function HermesTerminal({ projectId, sessionId, onTerminalReady }: Props)
         terminal.write(transformTerminalOutput(snapshot.history), finishReplay)
       } else finishReplay()
     }).catch(problem => {
-      if (active) setError(problem instanceof Error ? problem.message : String(problem))
+      clearTimeout(startupTimeout)
+      fail(problem instanceof Error ? problem.message : String(problem))
     })
     return () => {
       active = false
+      clearTimeout(startupTimeout)
       finishStartup()
       observer.disconnect()
       disposable.dispose()
       unsubscribe()
+      unsubscribeExit()
       replayHandlers.forEach(handler => handler.dispose())
       terminal.dispose()
     }
   }, [projectId, sessionId])
 
   return <div className="sclip-live-terminal" aria-label="Sclip interactive terminal">
-    {error && <div className="sclip-terminal-error" role="alert">{error}</div>}
+    {starting && !error && <div className="sclip-terminal-starting" role="status">Opening Sclip terminal…</div>}
+    {error && <div className="sclip-terminal-error" role="alert">{error}
+      {onRetry && <button type="button" className="sclip-terminal-retry-btn" onClick={() => void retry.current?.()}>Retry Connection</button>}
+    </div>}
     <div ref={host} className="sclip-terminal-host" />
   </div>
 }

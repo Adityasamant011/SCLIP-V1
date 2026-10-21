@@ -272,3 +272,16 @@ describe("hashCacheKey", () => {
 // reference keeps the import meaningful to the type checker.
 const _typecheck: Closeable = { close: () => {} };
 void _typecheck;
+
+test('bounds real bitmap payload by bytes rather than counting 1080p frames as tiny entries',()=>{
+ const cache=new MotifFrameCache(240,1920*1080*4*2)
+ const make=()=>({width:1920,height:1080,close:vi.fn()})
+ const a=make(),b=make(),c=make();cache.setFrame('a',0,a as any);cache.setFrame('a',1,b as any);cache.setFrame('a',2,c as any)
+ expect(a.close).toHaveBeenCalledOnce();expect(cache.getFrame('a',0)).toBeNull();expect(cache.getFrame('a',2)).toBe(c)
+})
+
+test('does not detach a displayed bitmap when background warming evicts its cache entry',()=>{
+ const cache=new MotifFrameCache(1),a={close:vi.fn()},b={close:vi.fn()}
+ cache.setFrame('a',0,a as any);const release=cache.retainFrame(a);cache.setFrame('b',0,b as any)
+ expect(a.close).not.toHaveBeenCalled();release();release();expect(a.close).toHaveBeenCalledOnce()
+})

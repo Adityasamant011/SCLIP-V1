@@ -37,7 +37,8 @@ describe('existing rough-cut MCP contract disclosure', () => {
   it('apply and validator publish the same complete inline nested contract', () => {
     for (const name of ['apply_rough_cut_plan', 'validate_rough_cut_plan']) {
       const input = MCP_TOOL_DEFS.find(t => t.name === name)!.inputSchema as any
-      expect(input.required).toContain('plan')
+      if(name === 'validate_rough_cut_plan') expect(input.required).toContain('plan')
+      else {expect(input.oneOf).toEqual([{required:['plan']},{required:['clips']}]);expect(input.properties.clips.items.required).toEqual(['media_id','source_start_us','source_end_us'])}
       expect(input.properties.plan).toBe(ROUGH_CUT_PLAN_INPUT_SCHEMA)
       // Actual tools/list JSON retains every nested field after serialization.
       const wire = JSON.parse(JSON.stringify(input)).properties.plan

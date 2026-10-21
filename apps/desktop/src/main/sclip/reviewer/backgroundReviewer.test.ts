@@ -1,3 +1,4 @@
+import { evidenceStore } from '../evidenceStore'
 import { describe, it, expect, vi } from 'vitest'
 import { BackgroundReviewer } from './backgroundReviewer.js'
 
@@ -517,126 +518,25 @@ describe('Jev Narrative Coherence Audit', () => {
     return proj
   }
 
-  it('flags a broken thought (dangling sentence) via Jev when score >= 0.72', async () => {
-    const proj = makeArollProject(
-      ['and', 'then', 'if', 'you', 'look', 'at', 'the', 'numbers', 'which', 'show'],
-      ['the', 'weather', 'is', 'great', 'today'],
-    )
-
-    const mockHost = {
-      actor: { snapshot: () => proj, subscribe: vi.fn() },
-    } as any
-
-    const mockJev = vi.fn().mockResolvedValue({
-      answers: { broken_0: 0.85, whiplash_0: 0.1 },
-      id: 'test-jev-1',
-      model: 'typesafe/jev-1.13',
-      usage: { input_tokens: 50, cost: 0.001 },
-      latency_ms: 100,
-    })
-
-    const reviewer = new BackgroundReviewer(mockHost, undefined, 50, undefined, undefined, mockJev, { jev: () => true })
-    const summary = await reviewer.runReview()
-
-    expect(mockJev).toHaveBeenCalledOnce()
-    expect(summary.issues.some((i) => i.id.startsWith('broken_thought_'))).toBe(true)
-    const broken = summary.issues.find((i) => i.id.startsWith('broken_thought_'))
-    expect(broken?.category).toBe('audio_cutoff')
-    expect(broken?.description).toContain('Frankenbite')
-    expect(broken?.description).toContain('uncalibrated Jev score 0.85')
+  it('does not substitute legacy inline source words for actual rendered-mix speech',async()=>{
+    const proj=makeArollProject(['a','source','fragment'],['another','source','fragment'])
+    const mockHost={actor:{snapshot:()=>proj,subscribe:()=>()=>{}}} as any,jev=vi.fn()
+    const reviewer=new BackgroundReviewer(mockHost,undefined,50,undefined,undefined,jev,{jev:()=>true})
+    await reviewer.runReview();expect(jev).not.toHaveBeenCalled();reviewer.dispose()
   })
-
-  it('flags narrative whiplash (abrupt topic jump) via Jev when score >= 0.72', async () => {
-    const proj = makeArollProject(
-      ['I', 'love', 'making', 'pasta', 'every', 'weekend'],
-      ['the', 'rocket', 'launched', 'at', 'dawn', 'successfully'],
-    )
-
-    const mockHost = {
-      actor: { snapshot: () => proj, subscribe: vi.fn() },
-    } as any
-
-    const mockJev = vi.fn().mockResolvedValue({
-      answers: { broken_0: 0.1, whiplash_0: 0.9 },
-      id: 'test-jev-2',
-      model: 'typesafe/jev-1.13',
-      usage: { input_tokens: 60, cost: 0.001 },
-      latency_ms: 120,
-    })
-
-    const reviewer = new BackgroundReviewer(mockHost, undefined, 50, undefined, undefined, mockJev, { jev: () => true })
-    const summary = await reviewer.runReview()
-
-    expect(summary.issues.some((i) => i.id.startsWith('narrative_whiplash_'))).toBe(true)
-    const whiplash = summary.issues.find((i) => i.id.startsWith('narrative_whiplash_'))
-    expect(whiplash?.category).toBe('pacing')
-    expect(whiplash?.description).toContain('whiplash')
-    expect(whiplash?.description).toContain('uncalibrated Jev score 0.90')
+  it('uses current rendered speech and preserves its partial evidence basis for optional Jev concerns',async()=>{
+    const proj=makeArollProject(['old','inline','source'],['old','inline','source'])
+    const cached=vi.spyOn(evidenceStore,'currentAudio').mockReturnValue([{start:0,end:6000000,result:{transcript:{status:'available',segments:[{t_start_us:0,t_end_us:2900000,text:'Actual mixed speech before.'},{t_start_us:3000000,t_end_us:6000000,text:'Actual mixed speech after.'}]}}}])
+    try {
+      const mockHost={actor:{snapshot:()=>proj,subscribe:()=>()=>{}}} as any,jev=vi.fn(async()=>({answers:{boundary_0:0.85}} as any))
+      const reviewer=new BackgroundReviewer(mockHost,undefined,50,undefined,undefined,jev,{jev:()=>true})
+      const summary=await reviewer.runReview();expect(jev).toHaveBeenCalledOnce();expect(JSON.stringify(jev.mock.calls)).toContain('Actual mixed speech');expect(JSON.stringify(jev.mock.calls)).not.toContain('old inline source')
+      const issue=summary.issues.find(i=>i.id.startsWith('narrative_whiplash_'));expect(issue?.evidence_basis).toContain('rendered-mix');expect(issue?.requires_inspection).toBe(true);reviewer.dispose()
+    }finally{cached.mockRestore()}
   })
-
-  it('does not flag anything when both Jev scores are below threshold', async () => {
-    const proj = makeArollProject(
-      ['The', 'battery', 'lasts', 'all', 'day'],
-      ['It', 'also', 'charges', 'super', 'fast'],
-    )
-
-    const mockHost = {
-      actor: { snapshot: () => proj, subscribe: vi.fn() },
-    } as any
-
-    const mockJev = vi.fn().mockResolvedValue({
-      answers: { broken_0: 0.2, whiplash_0: 0.15 },
-      id: 'test-jev-3',
-      model: 'typesafe/jev-1.13',
-      usage: { input_tokens: 40, cost: 0.0005 },
-      latency_ms: 80,
-    })
-
-    const reviewer = new BackgroundReviewer(mockHost, undefined, 50, undefined, undefined, mockJev, { jev: () => true })
-    const summary = await reviewer.runReview()
-
-    expect(
-      summary.issues.filter((i) => i.id.startsWith('broken_thought_') || i.id.startsWith('narrative_whiplash_')),
-    ).toHaveLength(0)
-  })
-
-  it('gracefully skips narrative audit when jevDecide is not provided', async () => {
-    const proj = makeArollProject(
-      ['and', 'then', 'which', 'means'],
-      ['rockets', 'are', 'cool'],
-    )
-
-    const mockHost = {
-      actor: { snapshot: () => proj, subscribe: vi.fn() },
-    } as any
-
-    // No jevDecide passed — should run normally without errors
-    const reviewer = new BackgroundReviewer(mockHost, undefined, 50)
-    const summary = await reviewer.runReview()
-
-    expect(
-      summary.issues.filter((i) => i.id.startsWith('broken_thought_') || i.id.startsWith('narrative_whiplash_')),
-    ).toHaveLength(0)
-  })
-
-  it('gracefully handles Jev errors without crashing the reviewer', async () => {
-    const proj = makeArollProject(
-      ['hello', 'world'],
-      ['foo', 'bar'],
-    )
-
-    const mockHost = {
-      actor: { snapshot: () => proj, subscribe: vi.fn() },
-    } as any
-
-    const mockJevThatThrows = vi.fn().mockRejectedValue(new Error('Jev provider HTTP 429 (credit/key spending limit)'))
-
-    const reviewer = new BackgroundReviewer(mockHost, undefined, 50, undefined, undefined, mockJevThatThrows, { jev: () => true })
-    // Should not throw
-    const summary = await reviewer.runReview()
-
-    expect(
-      summary.issues.filter((i) => i.id.startsWith('broken_thought_') || i.id.startsWith('narrative_whiplash_')),
-    ).toHaveLength(0)
+  it('retains deterministic facts when optional Jev is disabled or fails',async()=>{
+    const proj=makeArollProject(['first'],['second']),mockHost={actor:{snapshot:()=>proj,subscribe:()=>()=>{}}} as any
+    const denied=vi.fn(),reviewer=new BackgroundReviewer(mockHost,undefined,50,undefined,undefined,denied,{jev:()=>false})
+    const summary=await reviewer.runReview();expect(denied).not.toHaveBeenCalled();expect(summary.readiness).toBe('not_certified');reviewer.dispose()
   })
 })

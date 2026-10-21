@@ -51,7 +51,7 @@ function resolveFfmpegPath(resourcesPath?: string): string {
  * In headless / tests: offers only a reduced FFmpeg fallback. Callers asking
  * for composition-faithful evidence must require the live compositor.
  */
-export async function inspectTimelineFrame(
+async function inspectTimelineFrameOwned(
   project: Project,
   options: TimelineFrameOptions,
 ): Promise<TimelineFrameResult> {
@@ -74,7 +74,7 @@ export async function inspectTimelineFrame(
   let liveCaptureError: string | undefined
   if (win && !win.isDestroyed()) {
     try {
-      const code = `window.__weftcutPreview ? window.__weftcutPreview.captureFrameAt(${typeof t_us === 'number' && Number.isFinite(t_us) ? Math.trunc(t_us) : 'undefined'}, ${JSON.stringify(compId)}, ${options.passive === true}) : null`
+      const code = `(async()=>{const deadline=Date.now()+1500;while(typeof window.__weftcutPreview?.captureFrameAt!=='function' && Date.now()<deadline)await new Promise(r=>setTimeout(r,30));return window.__weftcutPreview?.captureFrameAt ? window.__weftcutPreview.captureFrameAt(${typeof t_us === 'number' && Number.isFinite(t_us) ? Math.trunc(t_us) : 'undefined'}, ${JSON.stringify(compId)}, ${options.passive === true}) : null})()`
       const capture = await win.webContents.executeJavaScript(code)
       if (capture && typeof capture.pngBase64 === 'string') {
         const base64 = capture.pngBase64
@@ -97,7 +97,7 @@ export async function inspectTimelineFrame(
   }
 
   if (options.requireLiveCompositor) {
-    throw new Error(`Composed frame inspection requires the live Sclip preview; open the project in the desktop window and retry${liveCaptureError ? ` (${liveCaptureError})` : ''}`)
+    throw new Error(`CURRENT_FRAME_UNAVAILABLE: requested exact compositor frame was unavailable; check the specific hidden-preview, raster, decode or interruption detail${liveCaptureError ? ` (${liveCaptureError})` : ''}`)
   }
 
   if (typeof t_us !== 'number' || t_us < 0) {
@@ -251,4 +251,13 @@ export async function inspectTimelineFrame(
     source: 'headless_compositor',
     coordinate_space: 'timeline', timeline_t_us: t_us,
   }
+}
+
+const inspectionQueues=new WeakMap<object,Promise<unknown>>()
+/** One live playhead: serialize acquisition and restore before the next seek. */
+export async function inspectTimelineFrame(project:Project,options:TimelineFrameOptions):Promise<TimelineFrameResult>{
+ const win=options.getActiveWindow?.();if(!win)return inspectTimelineFrameOwned(project,options)
+ const work=(inspectionQueues.get(win)??Promise.resolve()).catch(()=>{}).then(()=>inspectTimelineFrameOwned(project,options))
+ inspectionQueues.set(win,work)
+ try{return await work}finally{if(inspectionQueues.get(win)===work)inspectionQueues.delete(win)}
 }

@@ -7,6 +7,9 @@ const PROVIDER_SECRET_ENV_NAMES = [
 export function hermesBaseEnvironment(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const base = { ...source }
   for (const name of PROVIDER_SECRET_ENV_NAMES) delete base[name]
+  // Account/billing infrastructure belongs to the gateway, never an agent's
+  // inherited shell environment, including when developing the two together.
+  for (const name of ['SUPABASE_SERVICE_ROLE_KEY','STRIPE_SECRET_KEY','STRIPE_WEBHOOK_SECRET','OPENROUTER_MANAGEMENT_KEY']) delete base[name]
   return base
 }
 

@@ -1,3 +1,5 @@
+import { evidenceStore } from './evidenceStore.js'
+import { runtimeScope } from './runtimeScheduler.js'
 import type { AudioUnderstandingBackend } from './audioUnderstanding'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -50,9 +52,9 @@ export function renderedTranscriptArgs(file:string, contentHash:string, start:nu
   return {layer_id:id,backend:'whisper_cpp',word_timestamps:true,
     layer:{id,label:null,t_start_us:start,t_end_us:start+duration,enabled:true,locked:false,metadata:{},effects:[],params:audioParams(media.id,0,duration)},media}
 }
-type Deps = { understand?: AudioUnderstandingBackend['understand']; render: typeof renderComposedTimelineRange; decode: typeof decodeRenderedPcm; transcribe:(args:ReturnType<typeof renderedTranscriptArgs>)=>Promise<any> }
+type Deps = { modelIdentity?: string; understand?: AudioUnderstandingBackend['understand']; render: typeof renderComposedTimelineRange; decode: typeof decodeRenderedPcm; transcribe:(args:ReturnType<typeof renderedTranscriptArgs>)=>Promise<any> }
 const cache=new Map<string,unknown>()
-export async function inspectRenderedAudio(project:Project,args:Record<string,unknown>,getActiveWindow:()=>any,deps:Deps,signal?:AbortSignal) {
+async function captureRenderedAudio(project:Project,args:Record<string,unknown>,getActiveWindow:()=>any,deps:Deps,signal?:AbortSignal) {
   if(args.include_understanding !== undefined && typeof args.include_understanding !== 'boolean')throw new Error('include_understanding must be boolean')
   const compId=String(args.composition_id??project.root_id)
   const comp=project.compositions[compId]
@@ -106,4 +108,20 @@ export async function inspectRenderedAudio(project:Project,args:Record<string,un
     if(facts){cache.set(key,facts);if(cache.size>8)cache.delete(cache.keys().next().value!)}
     return evidence
   }finally{fs.rmSync(path.dirname(rendered.path),{recursive:true,force:true})}
+}
+
+export async function inspectRenderedAudio(project:Project,args:Record<string,unknown>,getActiveWindow:()=>any,deps:Deps,signal?:AbortSignal) {
+  const sig=signal??runtimeScope.getStore()?.signal;sig?.throwIfAborted()
+  const comp=String(args.composition_id??project.root_id),start=Number(args.start_us),end=Number(args.end_us)
+  if(!project.compositions[comp])throw new Error('Composition not found')
+  validateTimelineRange(start,end,project.compositions[comp].duration_us,comp)
+  const variant={include_understanding:args.include_understanding===true,model:deps.modelIdentity??null,version:1}
+  // Callers without a model/configuration identity cannot reuse recognition.
+  const cached=deps.modelIdentity?evidenceStore.get<Awaited<ReturnType<typeof captureRenderedAudio>>>(project,start,end,'audio',variant,comp):undefined
+  if(cached)return {...cached,cached:true}
+  const result=await captureRenderedAudio(project,args,getActiveWindow,deps,sig)
+  sig?.throwIfAborted()
+  if(deps.modelIdentity&&result.transcript.status==='available'&&(!args.include_understanding||(result.audio_understanding as {status?:string}|undefined)?.status==='available'))
+    evidenceStore.put(project,start,end,'audio',variant,result,comp)
+  return result
 }

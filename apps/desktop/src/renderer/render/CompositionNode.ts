@@ -992,6 +992,10 @@ export class CompositionNode {
   /// choice so the rectangle drawn is the rectangle being dragged; a Group is
   /// its composition's frame. `getBounds()` would also fold in filter padding
   /// and draw an oversized box on a blurred layer.
+  motifFrameReady(layerId: string): boolean {
+    return this.activeMotifs.get(layerId)?.sprite.inspectionReady === true;
+  }
+
   naturalSizeOf(layerId: string): { w: number; h: number } | null {
     const clip = this.clips.get(layerId);
     if (clip) {

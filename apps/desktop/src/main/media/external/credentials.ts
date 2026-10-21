@@ -1,5 +1,6 @@
 import type { ExternalMediaProviderName } from './types.js'
 import { loadAllKeys } from '../../keys.js'
+import { sharedStockAvailable } from './sharedStock.js'
 
 export function getProviderKey(provider: ExternalMediaProviderName): string | null {
   let stored: Record<string, string> = {}
@@ -34,5 +35,5 @@ export function getProviderKey(provider: ExternalMediaProviderName): string | nu
 
 export function isProviderConfigured(provider: ExternalMediaProviderName): boolean {
   if (provider === 'wikimedia' || provider === 'openverse') return true
-  return Boolean(getProviderKey(provider))
+  return Boolean(getProviderKey(provider)) || (['pexels','pixabay'].includes(provider) && sharedStockAvailable())
 }

@@ -1,3 +1,4 @@
+import { runtimeScope } from '../runtimeScheduler.js'
 import fs from 'node:fs'
 import os from 'node:os'
 import { memoryHeadroom } from './memoryHeadroom'
@@ -33,7 +34,7 @@ export function compactFrameFacts(value: unknown) {
 /** Observe the paused playhead and at most six seconds of actual mixed audio.
  * No raw-source substitution, cloud inference, downloads, edits, or A-roll gate. */
 export function createLocalFeedbackObserver(deps: LocalFeedbackDeps): FeedbackObserver {
-  return async (project: Project, signal: AbortSignal) => {
+  return async (project: Project, signal: AbortSignal) => runtimeScope.run({signal,priority:0,project_id:project.project_id},async()=>{
     signal.throwIfAborted()
     const win = deps.window()
     if (!win || win.isDestroyed()) throw new Error('Open the preview to receive local observations.')
@@ -104,5 +105,5 @@ export function createLocalFeedbackObserver(deps: LocalFeedbackDeps): FeedbackOb
       } finally { if (rendered) fs.rmSync(path.dirname(rendered.path), { recursive: true, force: true }) }
     }
     return observation
-  }
+  })
 }

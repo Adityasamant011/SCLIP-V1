@@ -1103,6 +1103,7 @@ export async function runHybrid(tool: string, args: Record<string, unknown>, dep
     case 'synthesize_speech': {
       if (args.engine !== undefined && !['kokoro','auto','openai'].includes(String(args.engine))) throw new Error('Invalid engine; choose kokoro, auto or openai.')
       if (args.preview_only !== undefined && typeof args.preview_only !== 'boolean') throw new Error('preview_only must be boolean')
+      if(args.after_layer_id!==undefined&&(typeof args.after_layer_id!=='string'||args.t_start_us!==undefined))throw new Error('after_layer_id requires a current layer ID and replaces t_start_us')
       // Validate obvious placement mistakes before expensive synthesis.
       const startingProjectId = deps.actor.snapshot().project_id
       const opening = deps.projectOpening?.()
@@ -1116,6 +1117,15 @@ export async function runHybrid(tool: string, args: Record<string, unknown>, dep
       const requestedTrack = args.target_track_id as string | undefined
       if (requestedTrack && !Object.values(deps.actor.snapshot().compositions).some(c => c.tracks.some(t => t.id === requestedTrack)))
         throw new Error('TrackNotFound: target_track_id must name a current track. Read the current timeline IDs before retrying.')
+      const speechAnchor = () => {
+        if(args.after_layer_id===undefined)return undefined
+        const current=deps.actor.snapshot()
+        const comp=requestedTrack?Object.values(current.compositions).find(c=>c.tracks.some(t=>t.id===requestedTrack)):current.compositions[current.root_id]
+        const layer=comp?.tracks.flatMap(t=>t.layers).find(l=>l.id===args.after_layer_id)
+        if(!layer)throw new Error('after_layer_id must name a current layer in the target composition; no placement committed')
+        return layer
+      }
+      speechAnchor()
       const computed = JSON.parse(await deps.compute.synthesizeSpeechCompute(JSON.stringify(args), request.signal)) as {
         media_item: MediaItem; duration_us: number; cached: boolean; synthesis?: unknown
       }
@@ -1123,7 +1133,9 @@ export async function runHybrid(tool: string, args: Record<string, unknown>, dep
       assertPlacementAuthority()
       if (!Number.isSafeInteger(duration_us) || duration_us <= 0) throw new Error('Synthesis returned no valid audio duration; no project mutation committed.')
       if (args.preview_only === true) return JSON.stringify({file_path: media_item.path_abs, duration_us, cached, synthesis, placed: false})
-      const tStart = (args.t_start_us as number | undefined) ?? deps.snapshotComposition().duration_us
+      const anchor=speechAnchor()
+      if(args.after_layer_id!==undefined&&!anchor)throw new Error('after_layer_id is no longer a current layer; no placement committed')
+      const tStart = anchor?.t_end_us ?? (args.t_start_us as number | undefined) ?? deps.snapshotComposition().duration_us
       const tEnd = tStart + duration_us
       const trackId = requestedTrack ?? ensureAudioTrack(deps)
       assertPlacementAuthority()

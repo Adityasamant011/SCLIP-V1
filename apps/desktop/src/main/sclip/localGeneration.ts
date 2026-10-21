@@ -1,3 +1,4 @@
+import { runtimeScheduler, runtimeScope } from './runtimeScheduler.js'
 /** Optional local asset generation. No actor writes, provider calls or model downloads. */
 import fs from 'node:fs'
 import os from 'node:os'
@@ -11,7 +12,7 @@ export const GENERATORS = {
   image: { model: 'black-forest-labs/FLUX.2-klein-4B', runtime: 'mflux', license: 'Apache-2.0', workingBytes: 8 * GiB },
   music: { model: 'stabilityai/stable-audio-open-small', runtime: 'stable-audio-tools', license: 'Stability AI Community License', workingBytes: 4 * GiB },
 } as const
-export interface GenerationRequest { kind: GenerationKind; prompt: string; seed: number; width?: number; height?: number; duration_seconds?: number }
+export interface GenerationRequest { kind: GenerationKind; prompt: string; seed: number; width?: number; height?: number; duration_seconds?: number; intended_use?:'music'|'sfx'|'texture' }
 export interface GenerationPack {
   schema: 1; model: string; revision: string; runtime: string; runtime_version: string
   python: string; license_acknowledged: true; files: Record<string, string>
@@ -44,7 +45,7 @@ export function readGenerationMemory(): Promise<{ total: number; available: numb
   }))
 }
 export function validateGenerationRequest(value: Record<string, unknown>, kind: GenerationKind): GenerationRequest {
-  const allowed = kind === 'image' ? ['prompt', 'seed', 'width', 'height'] : ['prompt', 'seed', 'duration_seconds']
+  const allowed = kind === 'image' ? ['prompt', 'seed', 'width', 'height'] : ['prompt', 'seed', 'duration_seconds','intended_use']
   if (Object.keys(value).some(k => !allowed.includes(k))) throw new Error('Unknown generation argument; inspect the tool schema')
   if (typeof value.prompt !== 'string' || !value.prompt.trim() || value.prompt.length > 1000) throw new Error('prompt must contain 1–1000 characters')
   if (!Number.isSafeInteger(value.seed) || Number(value.seed) < 0 || Number(value.seed) > 2147483647) throw new Error('seed must be an integer in 0..2147483647')
@@ -57,6 +58,7 @@ export function validateGenerationRequest(value: Record<string, unknown>, kind: 
     const duration = value.duration_seconds ?? 8
     if (typeof duration !== 'number' || !Number.isFinite(duration) || duration < 1 || duration > 11) throw new Error('duration_seconds must be in 1..11; this model does not generate full songs')
     result.duration_seconds = duration
+    if(value.intended_use!==undefined){if(!['music','sfx','texture'].includes(String(value.intended_use)))throw new Error('intended_use is music, sfx or texture');result.intended_use=value.intended_use as 'music'|'sfx'|'texture'}
   }
   return result
 }
@@ -103,6 +105,7 @@ export function validateGeneratedAsset(file: string, request: GenerationRequest)
   const stat = fs.lstatSync(file)
   if (!stat.isFile() || stat.size > 32 * 1024 * 1024) throw new Error('Generated asset is missing or exceeds the output limit')
   const b = fs.readFileSync(file)
+  let audioMeasurements:Record<string,unknown>|undefined
   if (request.kind === 'image') {
     if (b.length < 33 || b.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a' || b.toString('ascii', 12, 16) !== 'IHDR' ||
         b.readUInt32BE(16) !== request.width || b.readUInt32BE(20) !== request.height) throw new Error('Generated PNG dimensions/header do not match the request')
@@ -121,11 +124,14 @@ export function validateGeneratedAsset(file: string, request: GenerationRequest)
     }
     if (!data?.length || channels !== 2 || rate !== 44100 || bits !== 16 || data.length % 4 ||
         Math.abs(data.length / 4 / rate - request.duration_seconds!) > 0.05) throw new Error('Generated music format/duration does not match the request')
-    let peak = 0
-    for (let i = 0; i < data.length; i += 2) peak = Math.max(peak, Math.abs(data.readInt16LE(i)))
+    let peak=0,energy=0,nearFullScale=0
+    for(let i=0;i<data.length;i+=2){const v=data.readInt16LE(i);peak=Math.max(peak,Math.abs(v));energy+=v*v;if(Math.abs(v)>=32700)nearFullScale++}
+    const seam=[0,1].map(channel=>Math.abs(data!.readInt16LE(data!.length-4+channel*2)-data!.readInt16LE(channel*2))/32768)
+    audioMeasurements={sample_rate:rate,channels,duration_seconds:data.length/4/rate,peak:peak/32768,rms:Math.sqrt(energy/(data.length/2))/32768,near_full_scale_samples:nearFullScale,loop_endpoint_discontinuity_by_channel:seam,
+      interpretation:'Signal facts only. A large endpoint jump may click if looped; a small jump does not certify musical continuity, no vocals, or suitability. Choose trim/fades/arrangement and review the actual final mix. Do not automatically repeat a short clip into a full score.'}
     if (peak < 2) throw new Error('Generated music is silent; no usable result published')
   }
-  return { bytes: b.length, sha256: digest(b) }
+  return { bytes: b.length, sha256: digest(b),...(audioMeasurements?{audio_measurements:audioMeasurements}:{}) }
 }
 
 /** Own-process watchdog. A cancelled result is not published; wait for resource release. */
@@ -180,10 +186,14 @@ export function createLocalGeneration(deps: GenerationDeps) {
       }), limitation: 'Resource admission/watchdog reduce risk, not an OS-wide hard memory guarantee. Other existing model integrations retain their own limits. Musical quality and absence of vocals are not certified.' }
   }
   async function generate(request: GenerationRequest, binding: GenerationBinding, signal?: AbortSignal) {
-    const sig = signal ?? new AbortController().signal
+    const signals=[signal,runtimeScope.getStore()?.signal].filter((s):s is AbortSignal=>!!s)
+    const sig=signals.length?AbortSignal.any(signals):new AbortController().signal
+    return runtimeScheduler.run('local_generation',request.kind==='music'?['local_model','audio_cpu']:['local_model'],jobSignal=>generateAdmitted(request,binding,jobSignal!),{signal:sig})
+  }
+  async function generateAdmitted(request: GenerationRequest, binding: GenerationBinding, sig: AbortSignal) {
     sig.throwIfAborted(); binding.assertCurrent()
     if ((deps.platform ?? process.platform) !== 'darwin' || (deps.arch ?? process.arch) !== 'arm64') throw new Error('Optional generation currently supports macOS Apple Silicon only')
-    if (busy) throw new Error('Another local generation is running; wait or cancel that owned request')
+    if (busy) throw new Error('Local generation admission invariant violated')
     busy = true
     let temp: string | undefined
     try {

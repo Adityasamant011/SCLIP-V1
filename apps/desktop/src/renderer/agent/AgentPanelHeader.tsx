@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Settings, RotateCcw, Eraser, Bot } from 'lucide-react'
 import { openSclipSettings, sclipGetHermesConfig, sclipGetHermesStatus, type HermesConfigView } from '../ipc/sclip'
+import { AccountButton } from '../settings/AccountSection'
 
 interface Props {
   onRestartTerminal?: (() => void | Promise<void>) | undefined
@@ -52,6 +53,7 @@ export function AgentPanelHeader({ onRestartTerminal, onClearTerminal, isRestart
         <span className="sclip-agent-model-tag">{modelLabel}</span>
       </button>
       <div className="sclip-agent-actions">
+        <AccountButton compact />
         {onClearTerminal && (
           <button
             type="button"

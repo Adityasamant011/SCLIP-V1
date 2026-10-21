@@ -568,3 +568,16 @@
 .sclip-background-feedback { font-size: 12px; padding: 4px 10px; max-height: 180px; overflow: auto; border-bottom: 1px solid #333; }
 .sclip-background-feedback summary { cursor: pointer; }
 .sclip-background-feedback p { margin: 6px 0; }
+
+.sclip-terminal-starting {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  color: var(--muted-foreground);
+  background: var(--background);
+  font-size: var(--font-size-body);
+}
+.sclip-terminal-error .sclip-terminal-retry-btn { margin-left: 12px; }

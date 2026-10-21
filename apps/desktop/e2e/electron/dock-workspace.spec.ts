@@ -27,154 +27,53 @@ interface WorkspaceDocument {
   profiles: WorkspaceProfile[];
 }
 
-test("built-in Editing workspace docks every default Panel at NLE proportions", async () => {
-  // Fresh userData: the built-in baseline assertions require the pristine
-  // Editing layout, not whatever a previous default-userData spec autosaved.
-  const { app, page } = await launchApp();
+test("built-in Editing workspace matches the Agent reference on creation and reset", async ({}, testInfo) => {
+  const { app, page } = await launchApp({env:{SCLIP_JEV_ENABLED:'0',SCLIP_BACKGROUND_JEV_AUTHORIZED:'0'}});
   try {
-    // Proportions are only meaningful at a defined viewport. The default
-    // window tracks the runner's display — and macOS zooms a screen-sized
-    // window into a frame with its own geometry — so pin a size every CI
-    // display can host before measuring.
-    await app.evaluate(async ({ BrowserWindow }) => {
-      const win = BrowserWindow.getAllWindows()[0]!;
-      if (win.isMaximized()) win.unmaximize();
-      win.setBounds({ x: 0, y: 0, width: 1280, height: 800 });
+    await app.evaluate(({BrowserWindow})=>{
+      const win=BrowserWindow.getAllWindows()[0]!;
+      if(win.isMaximized())win.unmaximize();
+      win.setBounds({x:0,y:0,width:1280,height:800});
     });
-    const parent = tmpDir("weftcut-dock-");
-    await newProject(page, {
-      parentFolder: parent,
-      name: "dock-workspace",
-      canvas: CANVAS,
-    });
-    // `.weft-dock-panel` prefix required throughout: `[data-panel-kind]` alone
-    // also matches each Panel's tab, so a bare selector double-counts.
-    await expect(page.locator(".weft-dock-panel[data-panel-kind]")).toHaveCount(8);
-    for (const kind of [
-      "media",
-      "transitions",
-      "preview",
-      "timeline",
-      "quick-actions",
-      "attribute",
-      "effect",
-      "playhead",
-    ]) {
-      await expect(
-        page.locator(`.weft-dock-panel[data-panel-kind="${kind}"]`),
-      ).toHaveCount(1);
-    }
-    await expect(
-      page.locator('.weft-dock-panel[data-panel-kind="caption"]'),
-    ).toHaveCount(0);
-    await expect(
-      page.locator('.weft-dock-panel[data-panel-kind="role-mixer"]'),
-    ).toHaveCount(0);
-
-    const geometryOf = () =>
-      page.evaluate(() => {
-        const rect = (selector: string) => {
-          const element = document.querySelector(selector);
-          if (!(element instanceof HTMLElement)) throw new Error(`missing ${selector}`);
-          const box = element.getBoundingClientRect();
-          return { x: box.x, y: box.y, width: box.width, height: box.height };
+    const parent=tmpDir("sclip-agent-layout-");
+    const checkLayout=async()=>{
+      await expect(dockPanel(page)).toHaveCount(10);
+      await expect(dockPanel(page,"agent")).toBeVisible();
+      const geometry=()=>page.evaluate(()=>{
+        const rect=(selector:string)=>{
+          const r=document.querySelector(selector)!.getBoundingClientRect();
+          return {x:r.x,y:r.y,width:r.width,height:r.height};
         };
-        return {
-          workspace: rect(".dock-workspace"),
-          // `.weft-dock-panel` prefix required: a bare `[data-panel-kind]`
-          // matches the Panel's TAB first in document order, so these ratios
-          // would silently measure tab strips instead of Panels.
-          strip: rect('.weft-dock-panel[data-panel-kind="quick-actions"]'),
-          media: rect('.weft-dock-panel[data-panel-kind="media"]'),
-          preview: rect('.weft-dock-panel[data-panel-kind="preview"]'),
-          playhead: rect('.weft-dock-panel[data-panel-kind="playhead"]'),
-          attribute: rect('.weft-dock-panel[data-panel-kind="attribute"]'),
-          timeline: rect('.weft-dock-panel[data-panel-kind="timeline"]'),
-        };
+        const panel=(kind:string)=>rect(`.weft-dock-panel[data-panel-kind="${kind}"]`);
+        return {workspace:rect('.dock-workspace'),preview:panel('preview'),timeline:panel('timeline'),agent:panel('agent'),strip:panel('quick-actions')};
       });
-
-    // Panels exist in the DOM before their render overlays are positioned
-    // (a few startup frames); until then an overlay still measures as the
-    // whole workspace. Wait for the timeline share to settle at the baseline
-    // proportion, then assert the full geometry in one read.
-    const ratio = (value: number, total: number) => value / total;
-    await expect
-      .poll(async () => {
-        const g = await geometryOf();
-        return ratio(g.timeline.height, g.workspace.height);
-      })
-      .toBeCloseTo(0.28, 1);
-
-    const geometry = await geometryOf();
-    expect(ratio(geometry.timeline.height, geometry.workspace.height)).toBeCloseTo(0.28, 1);
-    expect(ratio(geometry.timeline.width, geometry.workspace.width)).toBeCloseTo(1, 1);
-    expect(ratio(geometry.media.width, geometry.workspace.width)).toBeCloseTo(0.22, 1);
-    expect(ratio(geometry.preview.width, geometry.workspace.width)).toBeCloseTo(0.53, 1);
-    expect(ratio(geometry.attribute.width, geometry.workspace.width)).toBeCloseTo(0.25, 1);
-    /* The right column is split, not tabbed: the Playhead Panel sits ON TOP of
-     * the inspector, both filling the same 25% column. Asserted as relations
-     * between the two boxes rather than as height ratios — a Panel box excludes
-     * its 28px tab strip, so a share-of-workspace number here would be a
-     * threshold tuned around chrome instead of a claim about the split. */
-    expect(geometry.playhead.x).toBeCloseTo(geometry.attribute.x, 0);
-    expect(geometry.playhead.width).toBeCloseTo(geometry.attribute.width, 0);
-    expect(geometry.playhead.y + geometry.playhead.height).toBeLessThanOrEqual(
-      geometry.attribute.y,
-    );
-    // The inspector keeps the larger share of the column.
-    expect(geometry.playhead.height).toBeLessThan(geometry.attribute.height);
-    // The Quick Actions strip is a fixed-width full-height edge bar: it sits
-    // beside the body branch, so it spans the Timeline row as well as the
-    // editor row.
-    expect(geometry.strip.width).toBeLessThan(80);
-    expect(ratio(geometry.strip.height, geometry.workspace.height)).toBeCloseTo(1, 1);
-    expect(geometry.strip.x).toBeLessThan(geometry.media.x);
-
-    // Every group keeps its 28px tab strip with a visible title — except a solo
-    // Preview, whose strip (and drag handle) is hidden until another Panel joins
-    // its group, and the Quick Actions strip, whose tab is the grip instead.
-    // Transitions ships tabbed behind the Media Pool, so its label shows in the
-    // library group's strip even while its content sleeps.
-    await expect(page.locator(".weft-dock-tab--grip")).toBeVisible();
-    await expect(
-      page.locator('.weft-dock-tab-label:text-is("Quick Actions")'),
-    ).toHaveCount(0);
-    for (const label of [
-      "Media Pool",
-      "Transitions",
-      "Timeline",
-      "Attribute",
-      "Effect",
-      "Playhead",
-    ]) {
-      await expect(
-        page.locator(".weft-dock-tab-label", { hasText: label }),
-      ).toBeVisible();
-    }
-    await expect(
-      page.locator(".weft-dock-tab-label", { hasText: "Preview" }),
-    ).not.toBeVisible();
-
-    // Tab a11y contract (WAI-ARIA Tabs): Dockview's `.dv-tab` wrapper is the
-    // `role="tab"`, and its accessible name is the label we render inside it —
-    // so a tab is reachable by role+name.
-    //
-    // NOTE for locator authors: a standard tab carries no `title` at all, which
-    // is why `getByTitle("Move <Panel>")` matches nothing. The Quick Actions
-    // grip is the only tab with a `title`, and even there it sits on the inner
-    // div, so it does NOT become the `role="tab"`'s accessible name — the grip
-    // tab is unnamed. Locate tabs with `dockTab()`, not by title.
-    for (const label of ["Media Pool", "Transitions", "Timeline", "Attribute", "Effect", "Playhead"]) {
-      await expect(page.getByRole("tab", { name: label })).toHaveCount(1);
-    }
-
-    const minimumSize = await app.evaluate(({ BrowserWindow }) =>
-      BrowserWindow.getAllWindows()[0]?.getMinimumSize(),
-    );
-    expect(minimumSize).toEqual([960, 640]);
-  } finally {
-    await app.close();
-  }
+      await expect.poll(async()=>{const g=await geometry();return g.timeline.height/g.workspace.height}).toBeCloseTo(.28,1);
+      const g=await geometry();
+      // Panel body excludes Dockview borders from the fixed 44px group.
+      expect(g.strip.width).toBeGreaterThanOrEqual(40);
+      expect(g.strip.width).toBeLessThanOrEqual(44);
+      expect(g.agent.height/g.workspace.height).toBeGreaterThan(.9);
+      expect(g.agent.width/(g.workspace.width-44)).toBeCloseTo(.30,1);
+      expect(g.preview.x).toBeCloseTo(g.timeline.x,0);
+      expect(g.preview.width).toBeCloseTo(g.timeline.width,0);
+      expect(g.timeline.x+g.timeline.width).toBeLessThanOrEqual(g.agent.x+2);
+      expect(g.preview.y+g.preview.height).toBeLessThan(g.timeline.y);
+      for(const kind of ['agent','attribute','effect','playhead','media','transitions','caption'])await expect(dockTab(page,kind)).toHaveCount(1);
+    };
+    await newProject(page,{parentFolder:parent,name:'first',canvas:CANVAS});
+    await expect(page.locator('.splash-screen')).toHaveCount(0,{timeout:15000});
+    await checkLayout();
+    await page.screenshot({path:testInfo.outputPath('default-agent-layout.png')});
+    await dockTab(page,'media').click();
+    await page.locator('.menu-trigger').nth(2).click();
+    await page.locator('.app-submenu-trigger').filter({hasText:/Workspaces|工作区/}).click();
+    await page.locator('.app-menu-item').filter({hasText:/Reset Workspace|重置工作区/}).click();
+    await checkLayout();
+    await newProject(page,{parentFolder:parent,name:'second',canvas:CANVAS});
+    await checkLayout();
+    await page.screenshot({path:testInfo.outputPath('reset-and-project-switch.png')});
+    expect(await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0]?.getMinimumSize())).toEqual([960,640]);
+  } finally {await app.close();}
 });
 
 /**

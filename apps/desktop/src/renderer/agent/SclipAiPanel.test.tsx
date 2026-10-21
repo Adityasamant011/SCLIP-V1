@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mockIpc = vi.hoisted(() => ({
@@ -8,6 +8,7 @@ const mockIpc = vi.hoisted(() => ({
   sclipActivateProjectSession: vi.fn(),
   sclipCreateProjectSession: vi.fn(),
   sclipRestartTerminal: vi.fn(),
+  sclipRestartHermes: vi.fn(),
   sclipGetHermesConfig: vi.fn(),
   openSclipSettings: vi.fn(),
 }))
@@ -40,21 +41,25 @@ vi.mock('./AgentPanelHeader', () => ({
 
 import { SclipAiPanel } from './SclipAiPanel'
 
+let runtimeCallback: ((payload: unknown) => void) | null = null
 let configChangedCallback: (() => void) | null = null
 
 beforeEach(() => {
   vi.clearAllMocks()
   configChangedCallback = null
+  runtimeCallback = null
   mockStore.projectId = 'test-project-123'
   Object.defineProperty(window, 'api', {
     configurable: true,
     value: {
-      on: (channel: string, callback: () => void) => {
+      on: (channel: string, callback: (payload?: unknown) => void) => {
         if (channel === 'sclip:hermes_config_changed') {
           configChangedCallback = callback
         }
+        if (channel === 'sclip:hermes_runtime') runtimeCallback = callback
         return () => {
-          configChangedCallback = null
+          if (channel === 'sclip:hermes_config_changed') configChangedCallback = null
+          if (channel === 'sclip:hermes_runtime') runtimeCallback = null
         }
       },
     },
@@ -63,6 +68,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  vi.useRealTimers()
 })
 
 describe('SclipAiPanel resilience & lifecycle', () => {
@@ -145,4 +151,56 @@ describe('SclipAiPanel resilience & lifecycle', () => {
     }, { timeout: 3000 })
     expect(screen.getByText('terminal:test-project-123:sess-created-2')).toBeTruthy()
   })
+})
+
+
+it('waits beyond the old 1.2s cutoff and opens only session metadata', async () => {
+  vi.useFakeTimers()
+  let calls=0
+  mockIpc.sclipGetHermesStatus.mockImplementation(async()=>({ online:++calls>10,runtimeState:'starting' }))
+  mockIpc.sclipListProjectSessions.mockResolvedValue({activeSessionId:'old-session',sessions:[{id:'old-session'}]})
+  render(<SclipAiPanel />)
+  await act(async()=>{await vi.advanceTimersByTimeAsync(3500)})
+  expect(screen.getByText('terminal:test-project-123:old-session')).toBeTruthy()
+  expect(mockIpc.sclipListProjectSessions).toHaveBeenCalledWith('test-project-123',false)
+})
+
+it('reports a stalled session lookup and ignores its late result', async () => {
+  vi.useFakeTimers()
+  mockIpc.sclipGetHermesStatus.mockResolvedValue({online:true,runtimeState:'ready'})
+  let resolve!: (value:unknown)=>void
+  mockIpc.sclipListProjectSessions.mockImplementation(()=>new Promise(r=>{resolve=r}))
+  render(<SclipAiPanel />)
+  await act(async()=>{await vi.advanceTimersByTimeAsync(30_000)})
+  expect(screen.getByText(/took too long/)).toBeTruthy()
+  await act(async()=>{resolve({activeSessionId:'late',sessions:[]})})
+  expect(screen.queryByTestId('hermes-terminal')).toBeNull()
+})
+
+it('cancels pending startup when the runtime fails, and recovers on ready', async () => {
+  mockIpc.sclipGetHermesStatus.mockResolvedValue({online:true,runtimeState:'ready'})
+  let resolve!: (value:unknown)=>void
+  mockIpc.sclipListProjectSessions.mockImplementationOnce(()=>new Promise(r=>{resolve=r}))
+  render(<SclipAiPanel />)
+  await waitFor(()=>expect(mockIpc.sclipListProjectSessions).toHaveBeenCalled())
+  act(()=>runtimeCallback?.({state:'failed',detail:'Process stopped'}))
+  await act(async()=>{resolve({activeSessionId:'stale',sessions:[]})})
+  expect(screen.getByText('Process stopped')).toBeTruthy()
+  expect(screen.queryByTestId('hermes-terminal')).toBeNull()
+  mockIpc.sclipListProjectSessions.mockResolvedValue({activeSessionId:'restored',sessions:[]})
+  act(()=>runtimeCallback?.({state:'ready'}))
+  await waitFor(()=>expect(screen.getByText('terminal:test-project-123:restored')).toBeTruthy())
+})
+
+it('restarts an offline gateway when Retry Connection is clicked', async () => {
+  mockIpc.sclipGetHermesStatus.mockResolvedValue({online:false,runtimeState:'failed',runtimeDetail:'Offline'})
+  mockIpc.sclipRestartHermes.mockImplementation(async()=>{
+    mockIpc.sclipGetHermesStatus.mockResolvedValue({online:true,runtimeState:'ready'})
+  })
+  mockIpc.sclipListProjectSessions.mockResolvedValue({activeSessionId:'restored',sessions:[]})
+  render(<SclipAiPanel />)
+  await waitFor(()=>expect(screen.getByText('Offline')).toBeTruthy())
+  fireEvent.click(screen.getByRole('button',{name:'Retry Connection'}))
+  await waitFor(()=>expect(screen.getByText('terminal:test-project-123:restored')).toBeTruthy())
+  expect(mockIpc.sclipRestartHermes).toHaveBeenCalledOnce()
 })

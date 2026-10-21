@@ -176,3 +176,9 @@ it('completion cannot certify an unavailable or geometry-only rendered observati
  expect(g.hasCurrentRenderedEvidence('state')).toBe(true)
  expect(g.hasCurrentRenderedEvidence('changed')).toBe(false)
 })
+
+it('technical acquisition failures permit only three recovery attempts, without unlimited rescans',()=>{
+ const guard=new RevisionLoopGuard(true)
+ for(let i=0;i<7;i++){expect(guard.beforeInspection('inspect_timeline_frame')).toBeNull();guard.inspectionFailed('CURRENT_FRAME_UNAVAILABLE: decoder timeout')}
+ expect(guard.beforeInspection('inspect_timeline_frame')).toContain('budget reached')
+})

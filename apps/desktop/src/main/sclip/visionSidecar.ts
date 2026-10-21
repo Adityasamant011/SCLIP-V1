@@ -1,3 +1,5 @@
+import os from 'node:os'
+import { runtimeScheduler, runtimeScope } from './runtimeScheduler.js'
 /**
  * VisionSidecarManager — TypeScript manager for the Python mlx-vlm sidecar (macOS).
  *
@@ -72,6 +74,7 @@ export interface AnalyzeRequest {
   resolution?:  'auto' | 'low' | 'high' | 'original'
   /** Background sensing may only use already-cached model files. */
   localOnly?: boolean
+  signal?: AbortSignal
   maxTokens?:   number
 }
 
@@ -117,8 +120,8 @@ class BoundedQueryCache {
 
   makeKey(req: AnalyzeRequest): string {
     const paths = (req.imagePaths ?? (req.imagePath ? [req.imagePath] : [])).join(',')
-    const q = req.question.trim().toLowerCase()
-    const ctx = (req.context ?? '').trim().toLowerCase()
+    const q = req.question
+    const ctx = req.context ?? ''
     const res = req.resolution ?? 'auto'
     const tok = req.maxTokens ?? 0
     return crypto.createHash('sha256').update(`${paths}::${q}::${ctx}::${res}::${tok}`).digest('hex')
@@ -128,7 +131,7 @@ class BoundedQueryCache {
     try {
       const stats = paths.map(p => {
         const st = fs.statSync(p)
-        return `${p}:${st.size}:${st.mtimeMs}`
+        return `${p}:${st.size}:${st.mtimeMs}:${st.ctimeMs}:${st.size<=12*1024*1024?crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex'):'uncached'}`
       }).join('|')
       return crypto.createHash('sha256').update(stats).digest('hex')
     } catch {
@@ -227,6 +230,8 @@ export class VisionSidecarManager {
   private restartCount  = 0
   private readonly maxRestarts = 1
   private readonly model: string
+  private readonly cacheSessionId=crypto.randomUUID()
+  private selectedSnapshot?:{identity:string;loadPath:string}
   private readonly queryCache = new BoundedQueryCache()
   private activeRequests = 0
   private releasingModel = false
@@ -253,13 +258,44 @@ export class VisionSidecarManager {
     try {
       const status = await this.status()
       if (status.modelLoaded && !['ready','loaded','idle'].includes(status.state)) throw new Error('Local vision is busy; retry generation after the inspection finishes')
+      if(status.state==='unreachable')throw new Error('Local vision worker is unreachable; generation remains deferred')
       if (status.modelLoaded) await this.unloadModel()
     } finally { this.releasingModel = false }
   }
 
   /** Analyze an image frame and answer a visual question. */
+  private async ownedPerception<T>(work:()=>Promise<T>,signal=runtimeScope.getStore()?.signal):Promise<T> {
+    signal?.throwIfAborted()
+    let stopping:Promise<void>|undefined
+    const abort=()=>{stopping??=this.dispose()}
+    signal?.addEventListener('abort',abort,{once:true})
+    try {const result=await work();signal?.throwIfAborted();return result}
+    finally {signal?.removeEventListener('abort',abort);await stopping}
+  }
+  private modelSelection() {
+    if(this.selectedSnapshot)return this.selectedSnapshot
+    const hub=process.env.HF_HUB_CACHE??path.join(process.env.HF_HOME??path.join(os.homedir(),'.cache','huggingface'),'hub')
+    const repo=path.join(hub,'models--'+this.model.replaceAll('/','--'))
+    try {
+      const revision=fs.readFileSync(path.join(repo,'refs','main'),'utf8').trim()
+      const snapshot=path.join(repo,'snapshots',revision)
+      if(/^[a-f0-9]{40,64}$/.test(revision)&&fs.statSync(snapshot).isDirectory()){
+        this.selectedSnapshot={identity:revision,loadPath:snapshot};return this.selectedSnapshot
+      }
+    }catch{}
+    // No immutable installed revision was established. Keep this cache scoped
+    // to the current manager, never credit another launch's unknown weights.
+    return {identity:'revision_unreported:'+this.cacheSessionId,loadPath:this.model}
+  }
+  get modelIdentity(): string {
+    const worker=this.runtime.workerScript??resolveWorkerScript()
+    const engine=fs.existsSync(worker)?crypto.createHash('sha256').update(fs.readFileSync(worker)).digest('hex'):'worker_missing'
+    return [this.model,this.modelSelection().identity,engine].join(':')
+  }
+
   analyze(req: AnalyzeRequest): Promise<AnalyzeResult> {
-    return this.withActiveRequest(() => this.analyzeRequest(req)).catch(e => ({ok:false,description:'',confidence:'low',latencyMs:0,model:this.model,visibleContent:[],error:e instanceof Error ? e.message : String(e)}))
+    const signal=req.signal??runtimeScope.getStore()?.signal
+    return runtimeScheduler.run('frame_vision',['local_model'],jobSignal=>this.withActiveRequest(()=>this.ownedPerception(()=>this.analyzeRequest({...req,signal:jobSignal}),jobSignal)),{signal}).catch(e => ({ok:false,description:'',confidence:'low',latencyMs:0,model:this.model,visibleContent:[],error:e instanceof Error ? e.message : String(e)}))
   }
 
   private async analyzeRequest(req: AnalyzeRequest): Promise<AnalyzeResult> {
@@ -332,6 +368,8 @@ export class VisionSidecarManager {
     } catch (e) {
       const err = e instanceof Error ? e.message : String(e)
       console.error('[vision-sidecar] analyze failed:', err)
+      if(e instanceof Error&&['TimeoutError','AbortError'].includes(e.name)){await this.dispose();return {ok:false,description:'',confidence:null,latencyMs:0,model:this.model,visibleContent:[],error:'Local vision timed out; its owned worker was stopped. Use a focused question or disclose unavailable evidence.'}}
+      req.signal?.throwIfAborted()
 
       if (!this.isAlive() && this.restartCount < this.maxRestarts) {
         console.warn('[vision-sidecar] process died, attempting restart...')
@@ -339,7 +377,7 @@ export class VisionSidecarManager {
         this.port = null
         this.startPromise = null
         this.restartCount++
-        return this.analyze(req)
+        return this.analyzeRequest(req)
       }
 
       return {
@@ -356,7 +394,7 @@ export class VisionSidecarManager {
 
   /** Analyzes an audio file for musical beats, speech chops, and awkward silence. */
   analyzeAudio(req: Parameters<VisionSidecarManager['analyzeAudioRequest']>[0]): ReturnType<VisionSidecarManager['analyzeAudioRequest']> {
-    return this.withActiveRequest(() => this.analyzeAudioRequest(req)).catch(e => ({ok:false,error:e instanceof Error ? e.message : String(e)}))
+    return runtimeScheduler.run('audio_measurement',['local_model'],()=>this.withActiveRequest(() => this.ownedPerception(()=>this.analyzeAudioRequest(req)))).catch(e => ({ok:false,error:e instanceof Error ? e.message : String(e)}))
   }
 
   private async analyzeAudioRequest(req: {
@@ -405,13 +443,14 @@ export class VisionSidecarManager {
     } catch (e) {
       const err = e instanceof Error ? e.message : String(e)
       console.error('[vision-sidecar] audio analyze failed:', err)
+      if(e instanceof Error&&['TimeoutError','AbortError'].includes(e.name))await this.dispose()
       return { ok: false, error: err }
     }
   }
 
   /** Evaluates a multi-frame sequence for visual jump-cuts, framing defects, and action continuity. */
   inspectSequence(req: Parameters<VisionSidecarManager['inspectSequenceRequest']>[0]): ReturnType<VisionSidecarManager['inspectSequenceRequest']> {
-    return this.withActiveRequest(() => this.inspectSequenceRequest(req)).catch(e => ({ok:false,error:e instanceof Error ? e.message : String(e)}))
+    return runtimeScheduler.run('sequence_vision',['local_model'],()=>this.withActiveRequest(() => this.ownedPerception(()=>this.inspectSequenceRequest(req)))).catch(e => ({ok:false,error:e instanceof Error ? e.message : String(e)}))
   }
 
   private async inspectSequenceRequest(req: {
@@ -450,12 +489,14 @@ export class VisionSidecarManager {
     } catch (e) {
       const err = e instanceof Error ? e.message : String(e)
       console.error('[vision-sidecar] sequence inspect failed:', err)
+      if(e instanceof Error&&['TimeoutError','AbortError'].includes(e.name))await this.dispose()
       return { ok: false, error: err }
     }
   }
 
   /** Returns current sidecar status for diagnostics. */
   async status(): Promise<SidecarStatus> {
+    if(this.activeRequests>0)return {running:this.isAlive(),state:'busy',modelLoaded:false,model:this.model,idleS:0,port:this.port}
     if (!this.port || !this.isAlive()) {
       return { running: false, state: 'stopped', modelLoaded: false, model: this.model, idleS: 0, port: null }
     }
@@ -494,7 +535,7 @@ export class VisionSidecarManager {
     child.kill('SIGTERM')
     await new Promise<void>((resolve) => {
       if (child.exitCode !== null || child.signalCode !== null) return resolve()
-      const timer = setTimeout(() => { child.kill('SIGKILL'); resolve() }, 3000)
+      const timer = setTimeout(() => { child.kill('SIGKILL') }, 3000)
       child.once('exit', () => { clearTimeout(timer); resolve() })
     })
   }
@@ -526,7 +567,7 @@ export class VisionSidecarManager {
     const port = await findFreePort()
     console.log(`[vision-sidecar] spawning on port ${port}, model=${this.model}`)
 
-    const launch = visionWorkerLaunchSpec(pythonBin, workerScript, this.model, port)
+    const launch = visionWorkerLaunchSpec(pythonBin, workerScript, this.modelSelection().loadPath, port)
     const child = (this.runtime.spawn ?? spawn)(launch.command, launch.args, {
       env: launch.env,
       stdio: ['ignore', 'pipe', 'pipe'],

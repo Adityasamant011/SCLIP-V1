@@ -1,19 +1,21 @@
+import { runtimeTrace } from './runtimeTrace.js'
 import type { ActorHandle } from '../state/actor.js'
-import { completionReview, completionDisposition, setEditingBrief, requiresDeliveryReview, type CompletionReview } from './completionReview.js'
+import { completionReview, completionDisposition, outputState, setEditingBrief, requiresDeliveryReview, type CompletionReview } from './completionReview.js'
 import { validateOutputState, requiredRenderedDimensions, sourceFingerprint, deliveryProofValid, type DeliveryProof } from './finalOutput.js'
 import { reviewState } from './evidenceCoordinates.js'
 import { currentCritique } from './reviewer/currentCritique.js'
 import { RevisionLoopGuard } from './revisionLoopGuard.js'
 import { reviewProgress } from './reviewProgress.js'
 import type { TimelineReviewSummary } from './reviewer/reviewerTypes.js'
+import { isHostFeedback, admitCreatorLearningTool } from './creatorLearning.js'
 export interface HermesTurnEvent {
-  kind: 'start' | 'end'; turn_id: string; user_message?: string
+  kind: 'start' | 'check' | 'end'; turn_id: string; user_message?: string
   completed?: boolean; failed?: boolean; interrupted?: boolean; turn_exit_reason?: string; background_jobs_pending?: boolean | null
 }
-export interface TerminalBinding { projectId: string; sessionId: string; actor: ActorHandle; opening: string; connections: Set<string>; activeSerial?: number; activeTurn?: string; closed?: boolean }
+export interface TerminalBinding { projectId: string; sessionId: string; actor: ActorHandle; opening: string; creatorKey?:string; connections: Set<string>; activeSerial?: number; activeTurn?: string; closed?: boolean; learningOnly?: boolean; learningCalls?: number }
 export interface RequestAuthority { (): void; signal: AbortSignal; release(): void }
 export interface CheckpointDeps {
-  current(): {actor: ActorHandle; opening: string; pending: boolean} | undefined
+  current(): {actor: ActorHandle; opening: string; pending: boolean; creatorKey?:string} | undefined
   review(): TimelineReviewSummary | undefined
   verify(project: ReturnType<ActorHandle['snapshot']>, requirements: CompletionReview['requirements'], signal?: AbortSignal): Promise<DeliveryProof>
   endWork(binding: TerminalBinding): void
@@ -40,10 +42,11 @@ export class CompletionCheckpoint {
       this.unsubscribe?.();this.observed=c.actor;this.opening=c.opening;this.epoch++;this.lastState=reviewState(c.actor.snapshot())
       const entry=completionReview(c.actor.snapshot(),this.sessions);entry.epoch=this.epoch
       delete entry.reviewedState;delete entry.delivery;delete entry.lifecycle
+      let previousOutput=outputState(c.actor.snapshot())
       this.unsubscribe=c.actor.subscribe(()=>{
         const live=this.deps.current()
         if(live?.actor!==c.actor||live?.opening!==c.opening){this.observe();return}
-        const state=reviewState(c.actor.snapshot());if(state!==this.lastState){this.lastState=state;this.epoch++;completionReview(c.actor.snapshot(),this.sessions).guard.invalidateAcquiredEvidence()}
+        const state=reviewState(c.actor.snapshot());if(state!==this.lastState){this.lastState=state;this.epoch++;const nextOutput=outputState(c.actor.snapshot());if(nextOutput!==previousOutput)completionReview(c.actor.snapshot(),this.sessions).guard.invalidateAcquiredEvidence();previousOutput=nextOutput}
         completionReview(c.actor.snapshot(),this.sessions).epoch=this.epoch
       })
     }
@@ -51,11 +54,11 @@ export class CompletionCheckpoint {
   bind(projectId:string,sessionId:string):TerminalBinding {
     this.observe();const c=this.deps.current()
     if(!c||c.actor.snapshot().project_id!==projectId)throw new Error('Lifecycle binding requires the current project opening')
-    return {projectId,sessionId,actor:c.actor,opening:c.opening,connections:new Set()}
+    return {projectId,sessionId,actor:c.actor,opening:c.opening,creatorKey:c.creatorKey,connections:new Set()}
   }
   private current(binding:TerminalBinding) {
     this.observe();const c=this.deps.current()
-    if(binding.closed||!c||c.actor!==binding.actor||c.opening!==binding.opening||c.actor.snapshot().project_id!==binding.projectId)throw new Error('Stale native terminal/project opening; no completion recorded')
+    if(binding.closed||!c||c.actor!==binding.actor||c.opening!==binding.opening||c.creatorKey!==binding.creatorKey||c.actor.snapshot().project_id!==binding.projectId)throw new Error('Stale native terminal/project opening; no completion recorded')
     return c
   }
   start(binding:TerminalBinding,event:HermesTurnEvent) {
@@ -63,13 +66,20 @@ export class CompletionCheckpoint {
     if(binding.activeTurn===event.turn_id)return
     this.abortRequests(binding)
     const entry=completionReview(c.actor.snapshot(),this.sessions)
-    if(event.user_message && !event.user_message.startsWith('[Sclip completion checkpoint]')){
+    if(event.user_message && !isHostFeedback(event.user_message)){
       setEditingBrief(c.actor.snapshot(),this.sessions,event.user_message)
       entry.followupCount=0
     }
     binding.activeSerial=entry.requestSerial??0
     binding.activeTurn=event.turn_id
+    binding.learningOnly=event.user_message?.startsWith('[Sclip creator learning]')??false
+    binding.learningCalls=0
     entry.lifecycle={status:'running',turn_id:event.turn_id,termination:'active_native_turn'}
+    runtimeTrace.record('turn.start',{project_id:binding.projectId,opening:binding.opening,session_id:binding.sessionId,turn_id:event.turn_id})
+  }
+  admitTool(binding: TerminalBinding, name: string) {
+    this.current(binding)
+    admitCreatorLearningTool(binding,name)
   }
   captureRequestAuthority(binding: TerminalBinding): RequestAuthority {
     const c = this.current(binding), entry = completionReview(c.actor.snapshot(), this.sessions)
@@ -87,7 +97,14 @@ export class CompletionCheckpoint {
     assert.release=()=>{requests.delete(controller);if(!requests.size&&this.requests.get(binding)===requests)this.requests.delete(binding)}
     return assert
   }
+  check(binding:TerminalBinding,event:HermesTurnEvent):Promise<any> {
+    return this.finishOnce(binding,event,true,false)
+  }
   finish(binding:TerminalBinding,event:HermesTurnEvent,allowContinuation:boolean,cancelled=false):Promise<any> {
+    const current=this.current(binding),entry=completionReview(current.actor.snapshot(),this.sessions)
+    if(entry.lifecycle?.turn_id===event.turn_id && ['completed','response_only','incomplete'].includes(entry.lifecycle.status) &&
+      (entry.lifecycle.status!=='completed'||entry.delivery?.state===reviewState(current.actor.snapshot())))
+      return Promise.resolve(completionDisposition(current.actor.snapshot(),this.sessions))
     const key=`${binding.opening}/${binding.sessionId}/${event.turn_id}`
     const prior=this.finalizations.get(key);if(prior)return prior.then(()=>completionDisposition(this.current(binding).actor.snapshot(),this.sessions))
     if(this.finalizations.size>=64)this.finalizations.delete(this.finalizations.keys().next().value!)
@@ -130,11 +147,15 @@ export class CompletionCheckpoint {
     const reviewed=entry.reviewedState===state&&entry.guard.status.phase==='done'&&entry.reviewedEpoch===epoch&&entry.renderedEpoch===epoch&&entry.renderedSources===sources&&entry.guard.hasCurrentRenderedEvidence(state,dims)
     if(!reviewed)problems.push('CURRENT_HERMES_RENDERED_REVIEW_REQUIRED')
     if(Object.values(entry.guard.status.outcomes).includes('unresolved'))problems.push('HERMES_REVIEW_HAS_UNRESOLVED_ISSUES')
-    if(!facts.errors.length&&!c.pending&&event.background_jobs_pending===false){
+    if(!problems.length&&!c.pending&&event.background_jobs_pending===false){
       // Host render proof is separate from the agent's evidence/decision.
       const authority=this.captureRequestAuthority(binding)
       let proof: DeliveryProof
-      try {proof=await this.deps.verify(c.actor.snapshot(),entry.requirements,authority.signal)}finally{authority.release()}
+      try {
+        const existing=entry.delivery
+        if(existing?.state===state&&existing.epoch===epoch&&existing.sources===sources&&deliveryProofValid(c.actor.snapshot(),entry.requirements,existing.proof))proof=existing.proof
+        else proof=await this.deps.verify(c.actor.snapshot(),entry.requirements,authority.signal)
+      }finally{authority.release()}
       c=this.current(binding)
       if(serial!==(entry.requestSerial??0))return completionDisposition(c.actor.snapshot(),this.sessions)
       if(binding.activeTurn!==event.turn_id||state!==reviewState(c.actor.snapshot())||epoch!==entry.epoch||sources!==sourceFingerprint(c.actor.snapshot())){

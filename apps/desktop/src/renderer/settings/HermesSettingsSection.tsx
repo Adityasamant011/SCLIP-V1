@@ -21,6 +21,8 @@ import {
   type HermesStatus,
 } from '../ipc/sclip'
 import { AgentSection } from './AgentSection'
+import { AccountButton } from './AccountSection'
+import { SCLIP_MANAGED_MODEL } from '../../shared/cloud-account'
 
 interface ProviderDefinition {
   id: string
@@ -36,11 +38,16 @@ interface ProviderDefinition {
 
 const PROVIDERS: ProviderDefinition[] = [
   {
+    id: 'sclip-managed', name: 'Sclip AI', description: 'Managed GLM 5.3 Flash using your Sclip AI allowance',
+    badge: 'Managed', models: [{ id: SCLIP_MANAGED_MODEL, name: 'GLM 5.3 Flash' }], requiresApiKey: false,
+  },
+  {
     id: 'openrouter',
     name: 'OpenRouter',
     description: 'Unified multi-model gateway (Anthropic, OpenAI, DeepSeek, Meta, etc.)',
     badge: 'Multi-Model',
     models: [
+      { id: SCLIP_MANAGED_MODEL, name: 'GLM 5.3 Flash' },
       { id: 'nex-agi/nex-n2.5-pro:free', name: 'Nex N2.5 Pro (Free)' },
       { id: 'dots-studio/dots-3-note-preview:free', name: 'Dots 3 Note Preview (Free)' },
       { id: 'anthropic/claude-3.7-sonnet', name: 'Claude 3.7 Sonnet' },
@@ -357,6 +364,7 @@ export function HermesSettingsSection() {
 
   return (
     <div className="sclip-settings-root">
+      <AccountButton />
       <div className="sclip-settings-mode-switch">
         <button
           type="button"

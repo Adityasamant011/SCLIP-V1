@@ -886,3 +886,13 @@ describe('SCLIP Phase 2C — Deterministic Rough-Cut Execution', () => {
     expect(redoRes.ok).toBe(true)
   })
 })
+
+it('compact range input retains atomic execution, linked audio, dry run and boundary validation',async()=>{
+ await initEval();const actor=freshActor();setupMedia(actor,MEDIA_1,20000000,true)
+ const clips=[{media_id:MEDIA_1,source_start_us:0,source_end_us:3000000},{media_id:MEDIA_1,source_start_us:10000000,source_end_us:13000000}]
+ const before=JSON.stringify(actor.snapshot()),dry=actor.mcpCall('apply_rough_cut_plan',JSON.stringify({clips,dry_run:true}))
+ expect(dry.ok,JSON.stringify(dry)).toBe(true);expect(JSON.stringify(actor.snapshot())).toBe(before)
+ const bad=actor.mcpCall('apply_rough_cut_plan',JSON.stringify({clips:[{...clips[0],source_end_us:30000000}]}));expect(bad.ok).toBe(false);expect(JSON.stringify(actor.snapshot())).toBe(before)
+ const applied=actor.mcpCall('apply_rough_cut_plan',JSON.stringify({clips}));expect(applied.ok,JSON.stringify(applied)).toBe(true)
+ if(applied.ok){const r=JSON.parse(applied.result.content[0].text);expect(r.clips_created).toBe(2);expect(r.mapping.every((m:any)=>m.audio_layer_id&&m.link_id)).toBe(true);expect(root(actor.snapshot()).duration_us).toBe(6000000)}
+})

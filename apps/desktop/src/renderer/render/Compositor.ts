@@ -950,6 +950,7 @@ export class Compositor {
   naturalSizeOf(layerId: string): { w: number; h: number } | null {
     return this.root.naturalSizeOf(layerId);
   }
+  motifFrameReady(layerId: string): boolean { return this.root.motifFrameReady(layerId); }
 
   /// What the staged Text sprite did with its font size (`GizmoProbe.textFitOf`).
   /// Null for every other kind and for a Text layer not currently staged.
@@ -1200,6 +1201,7 @@ export class Compositor {
             (frame * fpsDen) / fpsNum,
             durationSec,
             canonicalProps,
+            {priority:'background'},
           ),
       });
     });

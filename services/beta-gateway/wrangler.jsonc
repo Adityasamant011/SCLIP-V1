@@ -1,0 +1,13 @@
+{
+  "$schema": "https://developers.cloudflare.com/workers/wrangler/config-schema.json",
+  "name": "sclip-beta-gateway",
+  "main": "worker.mjs",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": true,
+  "observability": { "enabled": false },
+  "vars": {
+    "MANAGED_AI_ENABLED": "false",
+    "MANAGED_DAILY_CAP_MICRO_USD": "0",
+    "SHARED_STOCK_ENABLED": "false"
+  }
+}

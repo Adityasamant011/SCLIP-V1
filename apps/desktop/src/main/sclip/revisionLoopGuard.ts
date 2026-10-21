@@ -1,3 +1,5 @@
+import type { Project } from '../state/model.js'
+import { placedLayers } from './audioAudibility.js'
 import { createHash } from 'node:crypto'
 import { evidenceDimensions, toolDimensions, type EvidenceDimension } from './evidenceModalities.js'
 export class ReviewProtocolError extends Error {
@@ -27,7 +29,8 @@ export class RevisionLoopGuard {
   private lastRollback: { checkpoint_id: string; abandoned_state_version: string; restored_state_version: string; invalidated_evidence_ids: string[] } | undefined
   private finalInspections = 0
   private completionInspections = 0
-  private static readonly COMPLETION_INSPECTION_LIMIT = 4
+  private completionInspectionLimit = 4
+  private coverageConfigured=false
   private readonly verifiedDimensions = new Set<EvidenceDimension>()
   private readonly issueRanges = new Map<string, [number, number]>()
   private readonly recordedIssues = new Map<string, RecordedIssue>()
@@ -53,7 +56,7 @@ export class RevisionLoopGuard {
       phase_budget_ms: this.phase === 'initial' ? RevisionLoopGuard.INITIAL_MS : null,
       attempts: Object.fromEntries(this.attempts), outcomes: Object.fromEntries(this.outcomes),
       verification_pending: this.verificationPending, repair_cycles_limit: 3,
-      completion_inspections: this.completionInspections, completion_inspection_limit: RevisionLoopGuard.COMPLETION_INSPECTION_LIMIT,
+      completion_inspections: this.completionInspections, completion_inspection_limit: this.completionInspectionLimit,
       next_action: this.phase === 'decision' ? 'Decide now: record_issue with receipt IDs, then select it and repair, or conclude_no_repair with a current evidence_id and reason. Further inspection requires one specific unresolved question.' : this.phase === 'initial' ? 'Inspect current timeline briefly, then record_issue for up to three prioritized issues.'
         : this.phase === 'repair' ? this.verificationPending ? 'Reinspect the changed timeline range before another edit or resolving the issue.'
           : this.rollbackRegrounding ? 'Checkpoint restored; the attempted repair was abandoned, not resolved. Gather fresh relevant evidence before another repair, withdraw with current evidence, or finish unresolved and stop.'
@@ -61,6 +64,19 @@ export class RevisionLoopGuard {
             : 'Select a registered issue, checkpoint before mutation, or complete after closing all issues.'
           : 'Validate final current-timeline review and report remaining uncertainty.',
     }
+  }
+
+  /** Size the acquisition allowance from authored coverage, never from a
+   * subjective style verdict. Mutations cannot repeatedly reset this budget. */
+  configureForOutput(project:Project){
+    if(this.coverageConfigured||this.phase==='idle')return
+    this.coverageConfigured=true
+    const placed=placedLayers(project),foreground=placed.filter(p=>['VideoClip','Motif','ImageOverlay'].includes(p.layer.params.kind))
+    const visuals=foreground.length?foreground:placed.filter(p=>p.layer.params.kind==='Text')
+    const boundaries=new Set(visuals.flatMap(p=>[p.start_us,p.end_us]))
+    const coverageCalls=Math.ceil(Math.max(0,boundaries.size-1)*2/12)+2
+    this.inspectionLimit=Math.min(32,Math.max(this.inspectionLimit,coverageCalls))
+    this.completionInspectionLimit=Math.min(32,Math.max(4,coverageCalls))
   }
 
   /** Legal protocol choices only. No issue, edit or editorial verdict is inferred. */
@@ -82,7 +98,7 @@ export class RevisionLoopGuard {
       })
     }
     if(['initial','decision','repair'].includes(this.phase)&&!this.activeIssue&&!open.length&&this.hasCurrentRenderedEvidence(state,required))
-      offer('revision_control',{action:'conclude_no_repair',evidence_id:receipts.find(r=>['vision_inspect','inspect_timeline_frame','inspect_timeline_range_visuals','inspect_timeline_temporal_window','inspect_rendered_audio','render_timeline_range'].includes(r.tool))!.id,
+      offer('revision_control',{action:'conclude_no_repair',evidence_id:receipts.find(r=>['vision_inspect','inspect_timeline_frame','inspect_timeline_range_visuals','inspect_timeline_temporal_window','inspect_audio_visual_alignment', 'inspect_rendered_audio','render_timeline_range'].includes(r.tool))!.id,
         reason:'Supply your own judgment grounded in the current inspected result and original brief; this example is not a verdict.'})
     if(this.phase==='repair'){
       if(!this.activeIssue){
@@ -137,7 +153,7 @@ export class RevisionLoopGuard {
   private canInspectCompletion(state: string, required: EvidenceDimension[]) {
     return this.phase === 'repair' && !this.activeIssue && !this.verificationPending &&
       this.reviewedState === state && ![...(this.reviewedIssueIds ?? [])].some(id => !this.outcomes.has(id)) &&
-      this.completionInspections < RevisionLoopGuard.COMPLETION_INSPECTION_LIMIT &&
+      this.completionInspections < this.completionInspectionLimit &&
       required.some(d => !this.hasCurrentRenderedEvidence(state,[d]))
   }
 
@@ -150,7 +166,7 @@ export class RevisionLoopGuard {
         if (completion && this.canInspectCompletion(completion.state,completion.required)) {
           const timeline = !('media_id' in args || 'source_t_us' in args || 'image_path' in args) &&
             (name === 'inspect_timeline_frame' || typeof (args.timeline_t_us ?? args.t_us ?? args.start_us) === 'number')
-          const potential: EvidenceDimension[] = name === 'inspect_rendered_audio' ? ['audio','speech']
+          const potential: EvidenceDimension[] = name === 'inspect_audio_visual_alignment' ? ['visual','geometry','audio','speech','alignment'] : name === 'inspect_rendered_audio' ? ['audio','speech']
             : ['vision_inspect','inspect_timeline_frame','inspect_timeline_range_visuals','inspect_timeline_temporal_window'].includes(name) ? ['visual','geometry']
             : name === 'render_timeline_range' ? ['visual','audio'] : []
           if (timeline && completion.required.some(d => potential.includes(d) && !this.hasCurrentRenderedEvidence(completion.state,[d]))) {
@@ -165,7 +181,7 @@ export class RevisionLoopGuard {
         // Metadata can consume the exploratory budget without satisfying the
         // mandatory changed-output modalities. Reserve one bounded attempt per
         // missing modality; permission to inspect is never evidence of success.
-        const potential: EvidenceDimension[] = name === 'inspect_rendered_audio' ? ['audio', 'speech']
+        const potential: EvidenceDimension[] = name === 'inspect_audio_visual_alignment' ? ['visual','geometry','audio','speech','alignment'] : name === 'inspect_rendered_audio' ? ['audio', 'speech']
           : ['vision_inspect', 'inspect_timeline_frame', 'inspect_timeline_range_visuals', 'inspect_timeline_temporal_window'].includes(name) ? ['visual', 'geometry']
           : name === 'render_timeline_range' ? ['visual', 'audio'] : []
         const issue = this.recordedIssues.get(this.activeIssue)
@@ -189,6 +205,17 @@ export class RevisionLoopGuard {
     this.inspectionCalls++
     if (this.inspectionCalls >= this.inspectionLimit) this.phase = 'decision'
     return null
+  }
+
+  private technicalRefunds=0
+  /** Failed acquisition is not evidence. Permit a bounded recovery route, never
+   * an unlimited rescan loop or automatic reopening of completed review. */
+  inspectionFailed(error:unknown) {
+    if(this.technicalRefunds>=3||!/(?:timeout|timed out|CURRENT_FRAME_UNAVAILABLE|CAPTURE_|RESOURCE_|INSPECTION_BINDING_CHANGED)/i.test(String(error)))return
+    this.technicalRefunds++
+    if(this.phase==='initial'||this.phase==='decision')this.inspectionLimit++
+    else if(this.phase==='repair'){this.repairInspections=Math.max(0,this.repairInspections-1);this.completionInspectionLimit++;this.reservedVerificationAttempts.clear()}
+    else if(this.phase==='final')this.finalInspections=Math.max(0,this.finalInspections-1)
   }
 
   extendInspection(reason: unknown) {
@@ -240,6 +267,13 @@ export class RevisionLoopGuard {
     if (this.verificationPending) return 'Reinspect the changed timeline range before another mutation'
     if (this.rollbackRegrounding) return 'Checkpoint restored. Acquire fresh relevant evidence before choosing another repair.'
     return null
+  }
+
+  /** Host verified that an unused media-pool import changed no authored output. */
+  rebaseUnchangedOutput(previous:string,current:string) {
+    if(this.reviewedState===previous)this.reviewedState=current
+    for(const receipt of this.evidence.values())if(receipt.state===previous)receipt.state=current
+    for(const issue of this.recordedIssues.values())if(issue.state===previous)issue.state=current
   }
 
   mutationCommitted(currentState?: string) {
@@ -299,7 +333,7 @@ export class RevisionLoopGuard {
     const start = typeof t === 'number' ? t : typeof args.start_us === 'number' ? args.start_us : 0
     const end = typeof t === 'number' ? t : typeof args.end_us === 'number' ? args.end_us : Infinity
     // Source evidence or a background critique alone cannot verify the changed timeline.
-    if (!['get_editorial_evidence_packet', 'get_timeline_context', 'inspect_timeline_range_visuals', 'vision_inspect', 'inspect_timeline_frame', 'render_timeline_range', 'inspect_rendered_audio', 'inspect_timeline_temporal_window'].includes(name)) return false
+    if (!['get_editorial_evidence_packet', 'get_timeline_context', 'inspect_timeline_range_visuals', 'vision_inspect', 'inspect_timeline_frame', 'render_timeline_range', 'inspect_audio_visual_alignment', 'inspect_rendered_audio', 'inspect_timeline_temporal_window'].includes(name)) return false
     if (!['get_timeline_context', 'get_editorial_evidence_packet'].includes(name) && typeof t !== 'number' && typeof args.start_us !== 'number') return false
     return !range || (end >= range[0] && start <= range[1])
   }
@@ -335,7 +369,7 @@ export class RevisionLoopGuard {
 
   hasCurrentRenderedEvidence(state: string, required: EvidenceDimension[] = []): boolean {
     const current=[...this.evidence.values()].filter(r => r.state === state && r.coordinate_space === 'timeline' &&
-      ['vision_inspect', 'inspect_timeline_frame', 'inspect_timeline_range_visuals', 'inspect_timeline_temporal_window', 'inspect_rendered_audio', 'render_timeline_range'].includes(r.tool) &&
+      ['vision_inspect', 'inspect_timeline_frame', 'inspect_timeline_range_visuals', 'inspect_timeline_temporal_window', 'inspect_audio_visual_alignment', 'inspect_rendered_audio', 'render_timeline_range'].includes(r.tool) &&
       r.modalities.some(d => ['visual', 'audio', 'speech'].includes(d) && r.coverage[d]?.length))
     return current.length>0 && required.every(d=>current.some(r=>r.modalities.includes(d)&&r.coverage[d]?.length))
   }

@@ -1781,6 +1781,7 @@ const enUS = {
     cat_speech: "Transcription",
     cat_vlm: "Video understanding",
     cat_stock: "Stock media",
+    cat_account: "Account and billing",
     cat_agent: "Agent",
     project_scope_blurb:
       "Settings on this page apply to the current project only and are saved with the project file.",

@@ -1,3 +1,6 @@
+import {SpeechBatch} from './speechBatch.js'
+const speechBatch=new SpeechBatch()
+import { runtimeScheduler, runtimeScope } from './runtimeScheduler.js'
 import { spawn } from 'node:child_process'
 import * as crypto from 'node:crypto'
 import * as fs from 'node:fs'
@@ -19,7 +22,12 @@ const EDGE: Record<string,string> = {alloy:'en-US-JennyNeural',echo:'en-US-GuyNe
 const SAY: Record<string,string> = {alloy:'Samantha',echo:'Daniel',fable:'Alex',onyx:'Fred',nova:'Victoria',shimmer:'Karen',default:'Samantha'}
 const first = (paths: string[]) => paths.find(p => fs.existsSync(p)) ?? null
 /** No shell; bounded diagnostics and runtime. Timeout/failure never publishes a cache hit. */
-export function runTtsCommand(command: string, args: string[], timeoutMs = 120_000, signal?: AbortSignal): Promise<string> {
+export function runTtsCommand(command:string,args:string[],timeoutMs=120_000,signal?:AbortSignal):Promise<string> {
+  const sig=signal??runtimeScope.getStore()?.signal
+  if(args[0]?.endsWith('kokoro_tts_worker.py')&&args.includes('--text')&&args.includes('--model')&&args.includes('--voices'))return speechBatch.enqueue(command,args,timeoutMs,sig,runTtsCommandOwned)
+  return runtimeScheduler.run('speech_synthesis',['audio_cpu'],jobSignal=>runTtsCommandOwned(command,args,timeoutMs,jobSignal),{signal:sig})
+}
+function runTtsCommandOwned(command: string, args: string[], timeoutMs = 120_000, signal?: AbortSignal): Promise<string> {
   signal?.throwIfAborted()
   return new Promise((resolve,reject) => {
     const isPy = command.includes('python')
@@ -28,17 +36,17 @@ export function runTtsCommand(command: string, args: string[], timeoutMs = 120_0
       env: pythonEnvWithoutBytecode(process.env),
       stdio: ['ignore', 'pipe', 'pipe'],
     })
-    let stdout='',stderr='',done=false
+    let stdout='',stderr='',done=false,pendingError:Error|undefined
     const finish = (error?: Error) => {if(done)return;done=true;clearTimeout(timer);signal?.removeEventListener('abort', abort);error?reject(error):resolve(stdout)}
     const abort = () => {child.kill('SIGKILL')}
     child.stdout.on('data',chunk => {stdout=(stdout+String(chunk)).slice(-16_384)})
     child.stderr.on('data',chunk => {stderr=(stderr+String(chunk)).slice(-2048)})
-    const timer=setTimeout(() => {child.kill('SIGKILL');finish(new Error(`Local TTS process timed out after ${timeoutMs}ms`))},timeoutMs)
+    const timer=setTimeout(() => {pendingError=new Error(`Local TTS process timed out after ${timeoutMs}ms`);child.kill('SIGKILL')},timeoutMs)
     signal?.addEventListener('abort', abort, {once:true})
     if (signal?.aborted) abort()
-    child.on('error',error => finish(error))
+    child.on('error',error => {pendingError=error})
     // Wait for process close before the caller cleans its private output files.
-    child.on('close',code => finish(signal?.aborted ? new DOMException('Speech synthesis cancelled', 'AbortError') : code===0?undefined:new Error(`Local TTS process failed (${code}): ${stderr}`)))
+    child.on('close',code => finish(pendingError??(signal?.aborted ? new DOMException('Speech synthesis cancelled', 'AbortError') : code===0?undefined:new Error(`Local TTS process failed (${code}): ${stderr}`))))
   })
 }
 function runtime(): TtsRuntime {

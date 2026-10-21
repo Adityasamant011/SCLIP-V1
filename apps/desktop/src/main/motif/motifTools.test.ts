@@ -47,6 +47,16 @@ describe('runMotifTool', () => {
     expect(draft.html).toContain('seekFrame')
     expect(emitted).toBe(1)
   })
+  it('repairs the observed nested manifest/recipe wire encodings while preserving text and validators',()=>{
+    const id=runMotifTool('write_hyperframes_draft',{recipe:'process',width:640,height:360,duration_s:5,props:{title:'001',second_at:'1.5',third_at:'3'}},deps) as string
+    expect(store.getDraft(id)!.manifest.props_schema.second_at.default).toBe(1.5)
+    expect(store.getDraft(id)!.manifest.props_schema.title.default).toBe('001')
+    const custom=runMotifTool('write_hyperframes_draft',{manifest:{name:'Wire fixture',size:{item:['320','180']},default_duration_s:'2',props_schema:{title:{type:'string',default:'001',max_length:'80',multiline:'true'},step:{type:'number',default:'1.5',min:'0',max:'2'},motion:{type:'enum',default:'standard',options:{item:{item:['standard','reduced']}}}}},html:'<div data-composition-id="wire"></div><script>window.__timelines.wire=gsap.timeline({paused:true}).to({}, {duration:2});</script>'},deps) as string
+    const m=store.getDraft(custom)!.manifest
+    expect(m.size).toEqual([320,180]);expect(m.props_schema.title).toMatchObject({default:'001',max_length:80,multiline:true})
+    expect(m.props_schema.step.default).toBe(1.5);expect((m.props_schema.motion as any).options).toEqual(['standard','reduced'])
+    expect(()=>runMotifTool('write_hyperframes_draft',{recipe:'process',props:{second_at:'1px'}},deps)).toThrow('number')
+  })
   it('rejects ambiguous source modes, invented props and reversed beats without creating a draft', () => {
     for (const args of [{ recipe: 'process', html: 'x' }, { recipe: 'process', props: { invented: 1 } }, { recipe: 'process', props: { second_at: 3, third_at: 2 } }]) {
       expect(() => runMotifTool('write_hyperframes_draft', args, deps)).toThrow()

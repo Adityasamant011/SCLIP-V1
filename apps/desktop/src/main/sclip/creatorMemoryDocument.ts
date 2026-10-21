@@ -2,13 +2,14 @@ import { createHash } from 'node:crypto'
 import type { CreatorBinding, CreatorEvidence, CreatorIdentity, CreatorPreference, CreatorMemoryControl, CreatorMemoryStats, CreatorEvidenceCapsule, StyleScope } from '../../shared/creator-style'
 import { controlKey, emptyFilter, filterAdd, validFilter } from './creatorMemoryKeys'
 
-export interface CreatorProposal { creatorId: string; projectId: string; layerId: string; opId: string; valueHash: string }
+export interface CreatorProposal { creatorId: string; projectId: string; layerId: string; opId: string; valueHash: string; promptEvidenceId?: string; before?: string; after?: string; properties?: string[]; propertyHashes?: Record<string,string> }
 export interface CreatorMemoryDocument {
   version: 2; generation: number; revision: number
   creators: CreatorIdentity[]; bindings: Record<string, CreatorBinding>
   evidence: CreatorEvidence[]; preferences: CreatorPreference[]; proposals: CreatorProposal[]
   controls: CreatorMemoryControl[]; capsules: CreatorEvidenceCapsule[]
   stats: Record<string, CreatorMemoryStats>
+  promptReceipts?: string[]
   maintenance?: Array<{id:string;creatorId:string;digest:string;revision:number;operations:number;at:string}>
   migration?: { sourceSha256: string; evidence: number; preferences: number; creators: number }
 }
@@ -32,7 +33,8 @@ export function validateMemory(value: unknown): void {
   const evidenceIds = new Set<string>(), preferenceIds = new Set<string>()
   for (const e of d.evidence) {
     requireThat(e && string(e.id) && !evidenceIds.has(e.id) && creators.has(e.creatorId) && string(e.projectId) && string(e.at) && e.data && typeof e.data === 'object' && !Array.isArray(e.data), 'evidence identity/data')
-    requireThat(['explicit_instruction', 'correction', 'manual_edit', 'undo', 'reference'].includes(e.kind) && ['creator_statement', 'ProjectActor', 'source_metadata_and_local_observations'].includes(e.authority), 'evidence provenance')
+    requireThat(['explicit_instruction', 'correction', 'manual_edit', 'undo', 'reference', 'user_prompt', 'legacy_note'].includes(e.kind) && ['creator_statement', 'ProjectActor', 'source_metadata_and_local_observations','legacy_memory'].includes(e.authority), 'evidence provenance')
+    if(e.review) requireThat(['learned','insufficient','project_specific','not_style','technical_repair'].includes(e.review.outcome) && string(e.review.reason) && e.review.reason.length <= 600 && string(e.review.at), 'evidence review')
     requireThat(!e.scope || scopeValid(e.scope), 'evidence scope')
     evidenceIds.add(e.id)
   }
@@ -43,7 +45,7 @@ export function validateMemory(value: unknown): void {
       requireThat(c && string(c.id) && creators.has(c.creatorId) && scopeValid(c.scope) && Number.isSafeInteger(c.version) && c.version > 0 && ['support', 'counterexample'].includes(c.role) && validFilter(c.seenFilter) && Array.isArray(c.samples) && Array.isArray(c.projects), 'capsule')
       for (const e of c.samples) {
         requireThat(e.creatorId === c.creatorId && string(e.id) && string(e.projectId) && string(e.at) && e.data && typeof e.data==='object' && !Array.isArray(e.data), 'capsule evidence ownership/data')
-        requireThat(['explicit_instruction','correction','manual_edit','undo','reference'].includes(e.kind) && ['creator_statement','ProjectActor','source_metadata_and_local_observations'].includes(e.authority),'capsule provenance')
+        requireThat(['explicit_instruction','correction','manual_edit','undo','reference','user_prompt','legacy_note'].includes(e.kind) && ['creator_statement','ProjectActor','source_metadata_and_local_observations','legacy_memory'].includes(e.authority),'capsule provenance')
         evidenceIds.add(e.id)
       }
     }
@@ -73,6 +75,7 @@ export function validateMemory(value: unknown): void {
   for(const [creator,stats] of Object.entries(d.stats??{}))requireThat(creators.has(creator)&&Object.values(stats).every(n=>Number.isSafeInteger(n)&&n>=0),'retention statistics')
   for(const r of d.maintenance??[])requireThat(creators.has(r.creatorId)&&string(r.id)&&string(r.digest)&&Number.isSafeInteger(r.revision)&&r.operations>0&&r.operations<=8,'maintenance receipt')
   for (const p of d.proposals) requireThat(p && creators.has(p.creatorId) && string(p.projectId) && string(p.layerId) && string(p.opId) && string(p.valueHash), 'proposal')
+  if(d.promptReceipts)requireThat(Array.isArray(d.promptReceipts)&&d.promptReceipts.length<=128&&d.promptReceipts.every(string),'prompt receipts')
 }
 
 /** Pure, reversible inventory/migration; source bytes are not changed here. */

@@ -6,6 +6,7 @@ import { blankProject } from '../model'
 import { reviewState } from '../../sclip/evidenceCoordinates'
 import { RevisionLoopGuard } from '../../sclip/revisionLoopGuard'
 import { avRelationships } from '../../sclip/mediaRelationships'
+import {mediaItemTemplate} from '../mutations/media'
 import * as params from '../mutations/params'
 
 function fixture(clock = () => '<TS>') {
@@ -133,4 +134,42 @@ it('diagnoses stringified/alias repair arguments without accepting or committing
   if(!result.ok)expect(JSON.stringify(result.error)).toContain('expected_state_version, reason, operations')
   expect(actor.snapshot()).toBe(before);expect(actor.historyStatus().len).toBe(history)
  }
+})
+
+it('replaces a source atomically without deleting the slot or changing sibling audio',()=>{
+ const {actor,v,a,run}=fixture();const media=seededGen(999)();const item=mediaItemTemplate(media,'Video',100e6,true);item.metadata.video={width:1920,height:1080} as any;expect(actor.dispatch('add_media_item',{media:item}).ok).toBe(true)
+ const old=actor.snapshot(),oldAudio=old.compositions[old.root_id].tracks.flatMap(t=>t.layers).find(l=>l.id===a)!
+ const result=run([{kind:'replace_source',layer_id:v,patch:{media_id:media,src_in_us:0,src_out_us:10e6}}]);expect(result.ok).toBe(true)
+ const next=actor.snapshot(),video=next.compositions[next.root_id].tracks.flatMap(t=>t.layers).find(l=>l.id===v)!
+ expect((video.params as any).media).toBe(media);expect([video.t_start_us,video.t_end_us]).toEqual([0,10e6]);expect(next.compositions[next.root_id].tracks.flatMap(t=>t.layers).find(l=>l.id===a)).toEqual(oldAudio)
+ const beforeBad=actor.snapshot();expect(run([{kind:'replace_source',layer_id:v,patch:{media_id:media,src_in_us:0,src_out_us:1e6}}]).ok).toBe(false);expect(actor.snapshot()).toEqual(beforeBad)
+})
+
+it('an unused import rebases review state without consuming a repair cycle',()=>{const g=new RevisionLoopGuard(true);const r=g.recordEvidence('vision_inspect','timeline',[0,10],'before',['visual']);g.recordIssue({description:'Replace a blurry shot',severity:'moderate',repairable:true,evidence_receipt_ids:[r.id],evidence_dimensions:['visual'],affected_range_us:[0,10]},'before',10,new Map());g.selectIssue('issue-1','before');g.checkpointCreated();g.rebaseUnchangedOutput('before','after-import');expect(g.beforeMutation('after-import')).toBeNull();expect(g.status.attempts).toEqual({})})
+
+it('creates referenced text and its lane atomically, then reconciles the exact request without replay',()=>{
+ const {actor}=fixture(),before=actor.snapshot(),history=actor.historyStatus().len
+ const request={request_id:'batch-example',expected_state_version:createHash('sha256').update(reviewState(before)).digest('hex'),reason:'An explicit native label',operations:[
+  {kind:'create_track',ref:'labels',arguments:{}},
+  {kind:'add_text_layer',ref:'title',arguments:{track_id:'@labels',content:'A useful label',t_start_us:0,duration_us:2000000}},
+  {kind:'update_layer_params',layer_id:'@title',patch:{kind:'Text',x:100,y:100}},
+ ]}
+ const first=actor.mcpCall('apply_repair_transaction',JSON.stringify(request));expect(first.ok,JSON.stringify(first)).toBe(true)
+ const receipt=body(first);expect(receipt.references.title).toBeTruthy();expect(actor.historyStatus().len).toBe(history+1)
+ const current=actor.snapshot();expect(actor.mcpCall('apply_repair_transaction',JSON.stringify(request))).toEqual(first);expect(actor.snapshot()).toBe(current);expect(actor.historyStatus().len).toBe(history+1)
+ const found=body(actor.mcpCall('get_transaction_receipt',JSON.stringify({request_id:'batch-example'})));expect(found.known).toBe(true)
+ actor.restoreCheckpoint(receipt.checkpoint_id);expect(actor.snapshot()).toEqual(before)
+})
+it('rejects an invalid later create batch without publishing its preceding lane or label',()=>{
+ const {actor}=fixture(),before=actor.snapshot(),history=actor.historyStatus().len
+ const result=actor.mcpCall('apply_repair_transaction',JSON.stringify({expected_state_version:createHash('sha256').update(reviewState(before)).digest('hex'),reason:'Invalid batch',operations:[{kind:'create_track',ref:'labels',arguments:{}},{kind:'add_text_layer',ref:'title',arguments:{track_id:'@labels',content:'Label',t_start_us:0,duration_us:2000000}},{kind:'update_layer_params',layer_id:'@missing',patch:{kind:'Text',x:100,y:100}}]}))
+ expect(result.ok).toBe(false);expect(actor.snapshot()).toBe(before);expect(actor.historyStatus().len).toBe(history)
+})
+
+it('anchors an atomic insert to a real preceding layer end without rounded times',()=>{
+ const {actor,v,run}=fixture(),comp=actor.snapshot().compositions[actor.snapshot().root_id]
+ const result=body(run([{kind:'create_track',arguments:{label:'Anchored'},ref:'lane'},{kind:'add_text_layer',arguments:{track_id:'@lane',content:'Next',duration_us:1000000},after_layer_id:v,ref:'caption'}]))
+ const id=result.references?.caption??result.operations[1].created_id
+ const layer=actor.snapshot().compositions[comp.id].tracks.flatMap(t=>t.layers).find(l=>l.id===id)!
+ expect(layer.t_start_us).toBe(10000000);expect(layer.t_end_us).toBe(11000000)
 })

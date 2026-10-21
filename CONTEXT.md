@@ -834,6 +834,16 @@ effect, independently of whether its call completed or failed. The bounded
 activity stream retains running calls and does not restore from disk.
 _Avoid_: diagnostic log entry, history entry, permanent transcript
 
+### Native media runtime (ADR 0086)
+
+The native Hermes turn remains the only foreground creative interpreter. The PTY displays it; terminal output never authorizes work or injects automatic continuation prompts. The authenticated native completion hook may continue the same accepted turn for specific missing review, within a fixed bound. A project opening/creator/session/turn lease guards every owned call and asset preparation. ProjectActor is still the only timeline writer.
+
+`runtimeScheduler` admits existing local-model, CPU-audio, FFmpeg and network work with shared leases; cancellation retains a lease until physical work settles. `prepare_assets` returns owned handles without placing media. Only an explicit read-only MCP allowlist can overlap; writes form ordered barriers. `runtimeTrace` stores bounded metadata, never prompt/media/credential contents.
+
+Current evidence reuse requires identical scoped source/render/model dependencies. Motif-dependent render reuse fails closed when the external source dependency is opaque. Canonical current-state review receipts remain stricter than observations. Background reviewer/idle feedback are advisory and cannot certify completion. Optional Jev narrative advice consumes cached actual rendered-mix speech, never a substituted source transcript. Capability status distinguishes configuration from verified readiness.
+
+Atomic repair transactions now include typed creation/deletion/placement and parameter tracks with preceding local `@ref` identities, one validated commit/undo unit and bounded same-opening request receipts. HyperFrames remains the existing single-clock Motif renderer; optional scene intent and embedded approved still/font bindings do not expand its manifest prop types or introduce a parallel timeline.
+
 ### Creator memory (Phase 4C.3)
 
 `main/sclip/creatorStyle.ts` is the app-owned canonical creator-memory writer;
@@ -847,3 +857,7 @@ applicable instructions remain retrievable. No background memory inference or
 mirroring into generic Hermes memory. See
 `docs/phase4c/phase4c-memory-consolidation-final.md` for measured limits, migration,
 recovery, offline validation and the outstanding live learning acceptance.
+
+Current constraint, resumable review, exact insertion anchor and preview ownership contracts: [ADR 0087](docs/adr/0087-constraint-aware-editing-and-owned-preview-work.md). Live media/latency acceptance remains creator-run.
+
+Packaged application initialization and real core-workflow release checks: [ADR 0088](docs/adr/0088-packaged-core-initialization-is-a-release-gate.md).

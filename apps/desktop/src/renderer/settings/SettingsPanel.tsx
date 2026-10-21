@@ -30,6 +30,7 @@ import { Button } from "@/components/ui/button";
 import { KeybindingPanel } from "./KeybindingPanel";
 import { HermesSettingsSection } from "./HermesSettingsSection";
 import { StockMediaSection } from './StockMediaSection';
+import { AccountSection } from './AccountSection';
 import { CreatorStyleSection } from "./CreatorStyleSection";
 import { PreviewSection } from "./PreviewSection";
 import { ModelSection } from "./ModelSection";
@@ -76,6 +77,7 @@ function clampPreviewSnapStrength(value: number): number {
 /// dialog's "no engine configured" button both name a category, and a narrower
 /// type at that boundary would let one of them name a tab that does not exist.
 export type SettingsCategory =
+  | "account"
   | "general"
   | "project"
   | "keyboard"
@@ -87,6 +89,7 @@ export type SettingsCategory =
 /// Sidebar order. Every pane stays mounted (toggled via `hidden`) so
 /// in-progress input and per-section fetches survive a tab switch.
 const CATEGORIES: ReadonlyArray<{ id: SettingsCategory; labelKey: string }> = [
+  { id: "account", labelKey: "settings.cat_account" },
   { id: "general", labelKey: "settings.cat_general" },
   { id: "project", labelKey: "settings.cat_project" },
   { id: "keyboard", labelKey: "settings.cat_keyboard" },
@@ -234,6 +237,7 @@ export function SettingsPanel({
         </div>
 
         <div className="settings-content">
+          <div role="tabpanel" id="settings-panel-account" aria-labelledby="settings-tab-account" hidden={category !== 'account'} className="settings-pane"><AccountSection /></div>
           {error && (
             <p className="settings-error" role="alert">
               {error}

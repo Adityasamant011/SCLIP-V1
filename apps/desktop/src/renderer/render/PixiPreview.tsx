@@ -925,6 +925,8 @@ export const PixiPreview = forwardRef<PixiPreviewHandle, Props>(function PixiPre
           const wasPlaying = engine.isPlaying();
           if (passive && (wasPlaying || !isAtPlayhead || !(window as any).__sclipFeedbackCanObserve?.())) throw new Error("Background capture deferred to foreground work");
           if (wasPlaying) engine.pause();
+          let ownedPosition=engine.positionUs();
+          (window as any).__sclipCapturePriority=passive?'background':'inspection';
           try {
             const { width: W, height: H } = logicalSize();
             if (!compositor.presentationSnapshot().visible) {
@@ -938,18 +940,22 @@ export const PixiPreview = forwardRef<PixiPreviewHandle, Props>(function PixiPre
             const renderedFrameUs = composition ? snapFrameFloor(targetUs, composition.fps_num, composition.fps_den) : targetUs;
             const activeVideos = composition?.tracks.filter(track=>track.enabled!==false).flatMap((track) => track.layers)
               .filter((layer) => layer.enabled && layer.params.kind === 'VideoClip' && layer.t_start_us <= targetUs && targetUs < layer.t_end_us) ?? [];
+            const activeMotifs = composition?.tracks.filter(track=>track.enabled!==false).flatMap(track=>track.layers)
+              .filter(layer=>layer.enabled && layer.params.kind==='Motif' && layer.t_start_us<=targetUs && targetUs<layer.t_end_us) ?? [];
 
             {
               // Route through the existing seek path so the playback tick and
               // decoder agree on one target during asynchronous frame arrival.
               // Restore the user's prior playhead in finally below.
-              if (!isAtPlayhead) engine.seek(targetUs);
+              if (!isAtPlayhead) engine.seek(renderedFrameUs);
+              ownedPosition=engine.positionUs();
               if (!passive) compositor.compositeFrame(targetUs);
               // A seek can paint before the decoder binds its target frame.
               // Wait on the compositor's actual bound-frame identity.
               const deadline = performance.now() + 8_000;
-              while (activeVideos.length > 0) {
-                const ready = activeVideos.every((layer) => {
+              while (activeVideos.length > 0 || activeMotifs.length > 0) {
+                if(engine.positionUs()!==ownedPosition||engine.isPlaying())throw new Error('CAPTURE_SUPERSEDED: creator changed the playhead or resumed playback');
+                const ready = activeMotifs.every(layer=>compositor.motifFrameReady(layer.id)) && activeVideos.every((layer) => {
                   if (layer.params.kind !== 'VideoClip') return true;
                   const probe = compositor.activeClipProbe(layer.id);
                   const clipTargetUs = layer.params.src_in_us + (renderedFrameUs - layer.t_start_us) * layer.params.speed;
@@ -963,7 +969,7 @@ export const PixiPreview = forwardRef<PixiPreviewHandle, Props>(function PixiPre
                 if (ready) break;
                 if (performance.now() >= deadline) {
                   // Never present a stale/failed decode as pixels at the requested time.
-                  throw new Error('Inspection frame unavailable: decoder did not bind the requested timeline frame');
+                  throw new Error('Inspection frame unavailable: video or graphic did not bind the requested timeline frame');
                 }
                 await new Promise<void>((resolve) => setTimeout(resolve, 30));
                 if (!passive) compositor.compositeFrame(targetUs);
@@ -1012,12 +1018,14 @@ export const PixiPreview = forwardRef<PixiPreviewHandle, Props>(function PixiPre
               factualEvidence, textCrops,
             };
           } finally {
-            if (!isAtPlayhead) {
+            (window as any).__sclipCapturePriority=undefined;
+            const stillOwned=engine.positionUs()===ownedPosition&&!engine.isPlaying();
+            if (!isAtPlayhead&&stillOwned) {
               engine.seek(restoreUs);
               compositor.compositeFrame(restoreUs);
               app.renderer.render(app.stage);
             }
-            if (wasPlaying) engine.play();
+            if (wasPlaying&&stillOwned) engine.play();
           }
         },
       };

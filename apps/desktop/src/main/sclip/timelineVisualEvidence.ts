@@ -1,3 +1,5 @@
+import { evidenceStore } from './evidenceStore.js'
+import { runtimeScope } from './runtimeScheduler.js'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -23,14 +25,14 @@ export function representativeTimes(start: number, end: number, count: number): 
   if (!Number.isInteger(count) || count < 2 || count > 5) throw new Error('representative_samples must be an integer from 2 to 5')
   return [...new Set(Array.from({ length: count }, (_, i) => Math.round(start + (end - 1 - start) * i / (count - 1))))]
 }
-export async function inspectTimelineRangeVisuals(project: Project, args: Record<string, unknown>, getActiveWindow?: () => any | null, sampleTimes?: number[], signal?: AbortSignal) {
+async function captureTimelineRangeVisuals(project: Project, args: Record<string, unknown>, getActiveWindow?: () => any | null, sampleTimes?: number[], signal?: AbortSignal) {
   const compositionId = String(args.composition_id ?? project.root_id)
   const comp = project.compositions[compositionId]
   if (!comp) throw new Error('Composition not found')
   validateTimelineRange(args.start_us, args.end_us, comp.duration_us, compositionId)
   const start = Number(args.start_us), end = Number(args.end_us)
   const times = sampleTimes ?? representativeTimes(start, end, Number(args.representative_samples ?? 5))
-  if(times.length<2 || times.length>5 || times.some((t,i)=>!Number.isSafeInteger(t)||t<start||t>=end||i>0&&t<=times[i-1]))throw new Error('Invalid bounded chronological samples')
+  if(times.length<1 || times.length>12 || times.some((t,i)=>!Number.isSafeInteger(t)||t<start||t>=end||i>0&&t<=times[i-1]))throw new Error('Invalid bounded chronological samples')
   signal?.throwIfAborted()
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'sclip-range-visuals-'))
   try {
@@ -60,9 +62,9 @@ export async function inspectTimelineRangeVisuals(project: Project, args: Record
       signal?.throwIfAborted()
       const key=createHash('sha256').update(fs.readFileSync(imagePaths[i])).update(String(frames[i].timeline_t_us)).update(String(args.question ?? '')).update(modelIdentity).digest('hex')
       const result = perceptionCache.get(key) ?? await getVisionRuntime().analyze({ imagePaths: [imagePaths[i]],
-        question: `Describe only this frame's visible content, approximate subject/face position and boundary intersections. Report uncertainty; do not assess the whole range. ${typeof args.question === 'string' ? args.question : ''}`,
-        context: `${VISUAL_EVIDENCE_SEMANTICS} This is sample ${i} at timeline ${frames[i].timeline_t_us}us.`, resolution:'high', maxTokens:160 })
-      if(result.ok) { perceptionCache.set(key,result); if(perceptionCache.size>16)perceptionCache.delete(perceptionCache.keys().next().value!) }
+        question: typeof args.question==='string' && args.question.trim() ? `Observe this single frame only. ${args.question} Use at most 40 words. Do not repeat sentences or describe irrelevant clothing/background.` : `Describe only this frame's visible content, approximate subject/face position and boundary intersections. Report uncertainty; do not assess the whole range.`,
+        context: `${VISUAL_EVIDENCE_SEMANTICS} This is sample ${i} at timeline ${frames[i].timeline_t_us}us.`, resolution:'high', maxTokens:typeof args.question==='string' && args.question.trim()?96:160 })
+      if(result.ok) { perceptionCache.set(key,result); if(perceptionCache.size>128)perceptionCache.delete(perceptionCache.keys().next().value!) }
       observations.push({sample_index:i,timeline_t_us:frames[i].timeline_t_us,evidence_class:'MODEL_OBSERVATION',description:result.description,...subjectObservations(result),model:result.model,inference_ok:result.ok})
     }
     signal?.throwIfAborted()
@@ -74,4 +76,21 @@ export async function inspectTimelineRangeVisuals(project: Project, args: Record
     if (process.env.SCLIP_EVIDENCE_AUDIT_DIR) fs.writeFileSync(path.join(process.env.SCLIP_EVIDENCE_AUDIT_DIR, `range-observations-${randomUUID()}.json`), JSON.stringify(evidence))
     return evidence
   } finally { fs.rmSync(temp, { recursive: true, force: true }) }
+}
+
+/** A new acquisition may reuse observed pixels only after exact range/render/
+ * source/model dependencies validate. Old review receipt IDs are not rebased. */
+export async function inspectTimelineRangeVisuals(project:Project,args:Record<string,unknown>,getActiveWindow?:()=>any|null,sampleTimes?:number[],signal?:AbortSignal) {
+  const sig=signal??runtimeScope.getStore()?.signal;sig?.throwIfAborted()
+  const comp=String(args.composition_id??project.root_id),start=Number(args.start_us),end=Number(args.end_us)
+  if(!project.compositions[comp])throw new Error('Composition not found')
+  validateTimelineRange(start,end,project.compositions[comp].duration_us,comp)
+  const model=await getVisionRuntime().status().catch(()=>null)
+  const variant={args,sampleTimes,model:model?.model??'unknown',version:1}
+  const cached=evidenceStore.get<Awaited<ReturnType<typeof captureTimelineRangeVisuals>>>(project,start,end,'visual',variant,comp)
+  if(cached){rangeIndex.set(project.project_id,{state:reviewState(project),frames:cached.frame_observations});return cached}
+  const result=await captureTimelineRangeVisuals(project,args,getActiveWindow,sampleTimes,sig)
+  sig?.throwIfAborted()
+  if(result.frame_observations.every(o=>o.inference_ok))evidenceStore.put(project,start,end,'visual',variant,result,comp)
+  return result
 }

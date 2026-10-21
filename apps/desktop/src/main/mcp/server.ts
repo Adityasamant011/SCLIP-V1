@@ -1,3 +1,17 @@
+import { PREPARE_REVIEW_TOOL } from '../sclip/reviewJobs.js'
+import { runtimeScheduler } from '../sclip/runtimeScheduler.js'
+import { runtimeTrace } from '../sclip/runtimeTrace.js'
+import { GRAPHIC_AUTHORING_TOOL, MOTION_PRIMITIVES, sceneIntentFromHtml } from '../motif/graphicAuthoring.js'
+import { AssetJobs, PREPARE_ASSETS_TOOL, ASSET_JOB_TOOL } from '../sclip/assetJobs.js'
+import { SCLIP_PARALLEL_READS } from '../sclip/runtimeContract.js'
+import { runtimeRequest } from '../sclip/runtimeRequest.js'
+import { runtimeCapabilities, RUNTIME_STATUS_TOOL } from '../sclip/runtimeCapabilities.js'
+import type { RuntimeIdentity } from '../sclip/runtimeTrace.js'
+import {AUDIO_VISUAL_ALIGNMENT_TOOL,narrationAlignmentPlan, recordAlignmentCoverage,pairNarrationEvidence} from '../sclip/audioVisualAlignment.js'
+import { normalizeToolArguments } from './argumentNormalization.js'
+import { normalizeGraphicProps, normalizeGraphicToolArguments } from '../motif/argumentTransport.js'
+import { observeGraphicPreview } from '../motif/previewObservation.js'
+import { isSourceDiscovery, SourceInspectionBudget, isSourceSurvey } from '../sclip/sourceInspectionBudget.js'
 import type { Project } from '../state/model.js'
 import { validateOutputState, requiredRenderedDimensions, sourceFingerprint, deliveryProofValid, verifyDelivery, type DeliveryProof } from '../sclip/finalOutput.js'
 import { currentOutput } from '../sclip/editingBrief.js'
@@ -10,7 +24,7 @@ import { feedbackContext } from '../sclip/reviewer/feedbackContext.js'
 import { inspectRenderedAudio, decodeRenderedPcm } from '../sclip/renderedAudioEvidence'
 import { inspectTimelineTemporalWindow } from '../sclip/timelineTemporalEvidence'
 import { beginModelUse } from "../model-usage";
-import { randomUUID } from 'node:crypto'
+import { randomUUID, createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
@@ -54,7 +68,7 @@ import { EvidenceCoordinateError, timelineTime, validateEvidenceTime, validateTi
 import { RevisionLoopGuard, ReviewProtocolError } from '../sclip/revisionLoopGuard.js'
 import { inspectTimelineRangeVisuals, subjectObservations, VISUAL_EVIDENCE_SEMANTICS } from '../sclip/timelineVisualEvidence.js'
 import { getVisionRuntime } from '../sclip/visionRuntime.js'
-import { compactMediaContext } from '../sclip/compactTranscript.js'
+import { compactMediaContext, compactTranscriptRange } from '../sclip/compactTranscript.js'
 import { calculateVideoFit } from '../sclip/framingGeometry.js'
 import { locateLayer } from '../state/mutations/helpers.js'
 import { quantizeParam } from '../state/quantize.js'
@@ -101,7 +115,7 @@ const WITHDRAW_ISSUE_TOOL = {
 
 const MEDIA_CONTEXT_TOOL = {
   name: 'get_media_context',
-  description: 'Read cached source-media evidence. Overview returns availability/counts; segments returns exact chronological transcript text and source times without verbose word arrays or other modalities, preferred for source understanding, story discovery, and surrounding context; range returns actual transcript segment text, source timestamps and word timing, plus available visual/audio facts, reserved for when precise word-level cut boundaries are needed. Pass source-time bounds as flat start_us/end_us fields, never a nested range object. Supplying start_us or end_us selects range unless detail is explicit. Range/segments windows are at most 60 seconds. Original word timing and other modalities remain available via range. Missing modalities report not_generated. Does not transcribe or edit.',
+  description: 'Read cached source-media evidence. Overview returns availability/counts; segments returns exact chronological transcript text and source times without verbose word arrays or other modalities, preferred for source understanding, story discovery, and surrounding context; range returns actual transcript segment text, source timestamps and word timing, plus available visual/audio facts, reserved for when precise word-level cut boundaries are needed. Pass source-time bounds as flat start_us/end_us fields, never a nested range object. Supplying start_us or end_us selects range unless detail is explicit. Segments reads up to 15 source minutes in one cached-text call (32k character limit; request narrower bounds if exceeded). Detailed range/word windows remain at most 60 seconds. Original word timing and other modalities remain available via range. Missing modalities report not_generated. Does not transcribe or edit.',
   inputSchema: { type: 'object', properties: {
     media_id: { type: 'string', description: 'Imported media pool item UUID.' },
     start_us: { type: 'integer', minimum: 0, description: 'Source-media time in microseconds. Range default: 0.' },
@@ -140,8 +154,8 @@ If t_us, image_path, and image_paths are all omitted, the tool automatically cap
       composition_id: { type: 'string', description: 'Composition to render. Defaults to the root composition.' },
       image_path: { type: 'string', description: 'Absolute path to a pre-rendered PNG or JPEG file.' },
       image_paths: { type: 'array', items: { type: 'string' }, description: 'Array of pre-rendered image paths for multi-frame analysis in a single request.' },
-      resolution: { type: 'string', enum: ['auto', 'low', 'high', 'original'], description: 'Resolution profile. Defaults to auto (512px for subjects, 672px for text/OCR).' },
-      max_tokens: { type: 'integer', description: 'Max output tokens. Defaults to 64 for fast concise evidence.' },
+      resolution: { type: 'string', enum: ['auto', 'low', 'high', 'original'], description: 'Resolution profile. Defaults to auto (512px for subjects, 1024px for text/OCR); high uses 1280px for text.' },
+      max_tokens: { type: 'integer', minimum: 32, maximum: 384, description: 'Output token limit. Defaults to 96; request a larger limit explicitly when the question needs more detail. Ask one focused question; incomplete outputs do not establish the missing facts.' },
       context: { type: 'string', description: 'Optional: additional editing context to help the model focus.' },
     },
     required: ['question'],
@@ -261,15 +275,16 @@ export const IMPORT_EXTERNAL_MEDIA_TOOL = {
 } as const
 
 const REVISION_INSPECTION_TOOLS = new Set([
-  'get_editorial_evidence_packet', 'get_timeline_context', 'get_media_context', 'inspect_timeline_frame', 'render_timeline_range', 'inspect_rendered_audio', 'inspect_timeline_temporal_window',
+  'get_editorial_evidence_packet', 'get_timeline_context', 'get_media_context', 'inspect_timeline_frame', 'render_timeline_range', 'inspect_audio_visual_alignment', 'inspect_rendered_audio', 'inspect_timeline_temporal_window',
   'analyze_clip', 'describe_clip', 'compare_frames', 'detect_pauses', 'extract_clip_audio',
   'inspect_timeline_range_visuals', 'vision_inspect', 'get_timeline_critique', 'calculate_video_fit', 'get_param_track', 'get_source_observations', 'get_source_understanding', 'get_source_speech_context', 'evaluate_source_passages',
 ])
 const REVISION_NONMUTATING_TOOLS = new Set([
+  'get_transaction_receipt',
   'revision_control', 'validate_rough_cut_review', 'validate_rough_cut_plan', 'dry_run',
   'checkpoint', 'list_checkpoints', 'undo', 'redo', 'restore_checkpoint',
   'begin_agent_session', 'end_agent_session', 'lock_history', 'unlock_history',
-  'get_editorial_evidence_packet', 'get_timeline_context', 'inspect_timeline_frame', 'render_timeline_range', 'inspect_rendered_audio', 'inspect_timeline_temporal_window', 'get_param_track',
+  'get_editorial_evidence_packet', 'get_timeline_context', 'inspect_timeline_frame', 'render_timeline_range', 'inspect_audio_visual_alignment', 'inspect_rendered_audio', 'inspect_timeline_temporal_window', 'get_param_track',
   'inspect_timeline_range_visuals', 'vision_inspect', 'get_timeline_critique', 'video_search_external_media', 'resolve_visual_intents',
 ])
 const isRevisionMutation = (name: string) => (name === 'import_external_media' || MCP_TOOL_DEFS.some((def) => def.name === name) || HYBRID_TOOLS.has(name)) && !REVISION_NONMUTATING_TOOLS.has(name)
@@ -395,6 +410,13 @@ export async function callClipComputeTool(
   // Vision resolves against the selected profile's per-call configuration.
   if (name === 'describe_clip') {
     const vlm = getVlm()
+    // Timeline frame snapping may extend a full-source layer by a fraction of
+    // one frame. Only the default window is bounded; explicit bounds still
+    // undergo the native validator without silent correction.
+    const layer = merged.layer as any
+    if (merged.t_end_us == null && layer?.params?.kind === 'VideoClip' && layer.params.speed === 1) {
+      merged.t_end_us = Math.min(layer.t_end_us, layer.t_start_us + layer.params.src_out_us - layer.params.src_in_us)
+    }
     merged.vlm_config = vlm.config
     if (merged.backend == null && vlm.preferred && vlm.preferred !== 'auto') {
       merged.preferred_backend = vlm.preferred
@@ -413,7 +435,11 @@ export async function callClipComputeTool(
     if (merged.focus == null && vlm.focus) merged.focus = vlm.focus
   }
   const release = name === 'transcribe_clip' || name === 'describe_clip' ? beginModelUse() : () => {}
-  try { return unwrap(await backend.mcpCallTool(name, JSON.stringify(merged))) as ServerResult }
+  try {
+    if(name==='transcribe_clip')return await runtimeScheduler.run('source_asr',['audio_cpu'],async()=>unwrap(await backend.mcpCallTool(name,JSON.stringify(merged))) as ServerResult)
+    if(name==='describe_clip'&&['qwen3_vl','minicpm_v','auto'].includes(String(merged.backend??merged.preferred_backend??'auto')))return await runtimeScheduler.run('whole_video',['local_model'],async()=>unwrap(await backend.mcpCallTool(name,JSON.stringify(merged))) as ServerResult)
+    return unwrap(await backend.mcpCallTool(name, JSON.stringify(merged))) as ServerResult
+  }
   finally { release() }
 }
 
@@ -435,6 +461,7 @@ export async function handleCallTool(
   signal?: AbortSignal,
   audioUnderstanding?: AudioUnderstandingBackend,
   assertAuthority?: () => void,
+  speechIdentity?: string,
 ): Promise<ServerResult> {
   // Final delivery belongs to the user, including for clients with an old
   // cached catalog. Short temporary QA rendering remains available below.
@@ -472,6 +499,14 @@ export async function handleCallTool(
     }
   }
   const tsHost = getTsHost()
+  if(tsHost && ['add_motif','update_layer_params','apply_repair_transaction'].includes(name)){
+      args=normalizeGraphicToolArguments(name,args,
+        id=>(tsHost.motifTool('get_motif_source',{id}) as {manifest:import('../../shared/motifs/catalog').Manifest}).manifest,
+        layerId=>{
+          const layer=Object.values(tsHost.actor.snapshot().compositions).flatMap(c=>c.tracks.flatMap(t=>t.layers)).find(l=>l.id===layerId)
+          return layer?.params.kind==='Motif' ? layer.params.motif_id : undefined
+        })
+  }
   if (tsHost?.agent && ['begin_agent_session', 'end_agent_session', 'lock_history', 'unlock_history'].includes(name)) {
     try {
       let result: unknown = {}
@@ -636,7 +671,7 @@ export async function handleCallTool(
       }
       const context = typeof args.context === 'string' ? args.context.trim() : undefined
       const resolution = typeof args.resolution === 'string' ? args.resolution as 'auto' | 'low' | 'high' | 'original' : undefined
-      const maxTokens = typeof args.max_tokens === 'number' ? args.max_tokens : undefined
+      const maxTokens = typeof args.max_tokens === 'number' ? args.max_tokens : 96
 
       let imagePaths: string[] = []
       if (Array.isArray(args.image_paths) && args.image_paths.length > 0) {
@@ -756,13 +791,20 @@ export async function handleCallTool(
         }
       }
     }
-    if (name === 'inspect_rendered_audio' || name === 'inspect_timeline_temporal_window') {
+    if (name === 'inspect_audio_visual_alignment' || name === 'inspect_rendered_audio' || name === 'inspect_timeline_temporal_window') {
       try {
         const snap=tsHost.actor.snapshot()
         const evidence=name==='inspect_timeline_temporal_window' ? await inspectTimelineTemporalWindow(snap,args,getActiveWindow,undefined,signal) :
-          await inspectRenderedAudio(snap,args,getActiveWindow,{render:renderComposedTimelineRange,decode:decodeRenderedPcm,
+          await inspectRenderedAudio(snap,args,getActiveWindow,{modelIdentity:speechIdentity,render:renderComposedTimelineRange,decode:decodeRenderedPcm,
             understand: audioUnderstanding?.understand,
-            transcribe:async computeArgs => { const release=beginModelUse();try{return unwrap(await backend.mcpCallTool('transcribe_clip',JSON.stringify(computeArgs)))}finally{release()} }},signal)
+            transcribe:async computeArgs => { const release=beginModelUse();try{return await runtimeScheduler.run('rendered_asr',['audio_cpu'],async()=>unwrap(await backend.mcpCallTool('transcribe_clip',JSON.stringify(computeArgs))))}finally{release()} }},signal)
+        if (name === 'inspect_audio_visual_alignment') {
+          const plan=narrationAlignmentPlan(snap,evidence,Number(args.start_us),Number(args.end_us))
+          const visual=await inspectTimelineRangeVisuals(snap,{...args,question:'Describe visible subjects, exact labels, diagrams and actions. State which arrows or objects are visible; do not infer a named identity or tactical action from generic imagery.'},getActiveWindow,plan.sample_times,signal)
+          const paired=pairNarrationEvidence(plan,visual,evidence)
+          if(reviewState(snap)!==reviewState(tsHost.actor.snapshot()))throw new Error('Timeline changed during paired inspection.')
+          return {content:[{type:'text',text:JSON.stringify(paired)}]} as ServerResult
+        }
         if(reviewState(snap)!==reviewState(tsHost.actor.snapshot()))throw new Error('Timeline changed during inspection; reacquire evidence')
         return {content:[{type:'text',text:JSON.stringify(evidence)}]} as ServerResult
       }catch(error){return revisionToolError(String(error))}
@@ -1010,29 +1052,52 @@ export async function handleCallTool(
       const detail = args.detail ?? (args.start_us !== undefined || args.end_us !== undefined ? 'range' : 'overview')
       if (detail !== 'overview' && detail !== 'range' && detail !== 'segments') throw new Error('detail must be overview, range or segments')
       const startUs = args.start_us ?? 0
-      const endUs = args.end_us ?? (detail !== 'overview' ? Math.min(Number(startUs) + 60_000_000, media?.metadata.duration_us ?? Number(startUs) + 60_000_000) : media?.metadata.duration_us)
+      const endUs = args.end_us ?? (detail !== 'overview' ? Math.min(Number(startUs) + (detail === 'segments' ? 900_000_000 : 60_000_000), media?.metadata.duration_us ?? Number(startUs) + 60_000_000) : media?.metadata.duration_us)
       if (!Number.isSafeInteger(startUs) || Number(startUs) < 0 ||
           (endUs !== undefined && (!Number.isSafeInteger(endUs) || Number(endUs) <= Number(startUs))) ||
-          (detail !== 'overview' && Number(endUs) - Number(startUs) > 60_000_000)) {
-        throw new Error('Use a valid source-time range of at most 60 seconds (start_us/end_us in microseconds).')
+          (detail !== 'overview' && Number(endUs) - Number(startUs) > (detail === 'segments' ? 900_000_000 : 60_000_000))) {
+        throw new Error('Use valid source microseconds: segments up to 15 minutes; detailed range up to 60 seconds.')
       }
-      const result = unwrap(await backend.mcpCallTool(name, JSON.stringify({ ...args, detail: detail === 'segments' ? 'range' : detail, start_us: startUs, end_us: endUs, media }))) as ServerResult
-      const final: any = detail === 'segments' ? compactMediaContext(result) : result
+      const readWindow = async (start: number,end: number) => unwrap(await backend.mcpCallTool(name, JSON.stringify({ ...args, detail: detail === 'segments' ? 'range' : detail, start_us: start, end_us: end, media }))) as ServerResult
+      const result = detail === 'segments' && Number(endUs)-Number(startUs)>60_000_000
+        ? await compactTranscriptRange(Number(startUs),Number(endUs),readWindow)
+        : await readWindow(Number(startUs),Number(endUs))
+      const final: any = detail === 'segments' && Number(endUs)-Number(startUs)<=60_000_000 ? compactMediaContext(result) : result
       const body = final.content?.find((c: any) => c.type === 'text')
       if (body) body.text = JSON.stringify({ ...JSON.parse(body.text), coordinate_space: 'source', evidence_origin: 'SOURCE_MEDIA', media_id: mediaId })
       return final
     }
     // route === 'rust' → fall through (other reads are served by the backend).
   }
-  if (name === 'preview_motif_draft') {
-    const a = args as { id?: string; motif_id?: string; t_sec?: number; props?: unknown; width?: number; height?: number }
-    const motifId = a.id ?? a.motif_id ?? ''
-    const source = getTsHost()?.motifTool('get_motif_source', { id: motifId }) as { manifest: { size: [number, number] } } | undefined
-    const b64 = await captureMotifFrameB64({
-      motifId, tSec: a.t_sec ?? 0, propsJson: JSON.stringify(a.props ?? {}),
-      width: a.width ?? source?.manifest?.size[0] ?? 480, height: a.height ?? source?.manifest?.size[1] ?? 480, settleRafs: null, contentHash: '',
+  if(name==='get_hyperframes_authoring_context'){
+    const project=getTsHost()?.actor.snapshot();if(!project)throw new Error('Current project required')
+    const canvas=project.compositions[project.root_id],all=Object.values(project.compositions).flatMap(c=>c.tracks.flatMap(t=>t.layers.filter(l=>l.params.kind==='Motif')))
+    const existing=all.slice(0,12).map(layer=>{
+      const params=layer.params as import('../state/model.js').MotifParams
+      try {const source=getTsHost()!.motifTool('get_motif_source',{id:params.motif_id}) as {manifest:any;html:string}
+        return {layer_id:layer.id,motif_id:params.motif_id,name:source.manifest.name,scene_intent:sceneIntentFromHtml(source.html),source_sha256:createHash('sha256').update(source.html).digest('hex'),timeline_range_us:[layer.t_start_us,layer.t_end_us]}
+      }catch{return {layer_id:layer.id,unavailable:true}}
     })
-    return { content: [{ type: 'image', data: b64, mimeType: 'image/png' }] } as unknown as ServerResult
+    return {content:[{type:'text',text:JSON.stringify({canvas:{width:canvas.width,height:canvas.height,fps:canvas.fps},existing_graphics:existing,omitted_graphics:Math.max(0,all.length-12),image_assets:Object.values(project.media_pool).filter(m=>m.kind==='Image').slice(0,16).map(m=>({media_id:m.id,name:m.label??path.basename(m.path_abs),width:m.metadata.width,height:m.metadata.height})),motion_primitives:MOTION_PRIMITIVES,
+      authoring:'Choose a purpose, subject-specific objects/relationships, visual language and actual narration beats in the current planning step. Compose primitives or arbitrary custom HTML/SVG/GSAP; no extra director model is required. Recipes are optional. Use scene_intent for your intent and asset_bindings/font_bindings for local immutable assets. Preview meaningful readable/motion beats, place a working scene and refine in context.',scope:'Intent/source metadata is not observed motion, factual truth or an aesthetic verdict.'})}]} as ServerResult
+  }
+  if (name === 'preview_motif_draft') {
+    const a = args as { id?: string; motif_id?: string; t_sec?: number;t_secs?:number[]; props?: unknown; width?: number; height?: number; inspect?:boolean; question?:string; inspection_reason?:string }
+    const motifId=a.id??a.motif_id??''
+    const source=getTsHost()?.motifTool('get_motif_source',{id:motifId}) as {manifest:import('../../shared/motifs/catalog').Manifest;html:string}|undefined
+    const times=a.t_secs??[a.t_sec??0]
+    if(a.t_secs&&(a.t_sec!==undefined||!Array.isArray(a.t_secs)||a.t_secs.length<2||a.t_secs.length>4))throw new Error('Use 2–4 increasing t_secs or one t_sec')
+    if(times.some((t,i)=>!Number.isFinite(t)||t<0||t>180||i>0&&t<=times[i-1]))throw new Error('Preview times must increase inside the graphic duration')
+    const placed=Object.values(getTsHost()?.actor.snapshot().compositions??{}).flatMap(c=>c.tracks.flatMap(t=>t.layers.filter(l=>l.params.kind==='Motif'&&l.params.motif_id===motifId).map(l=>l.id)))
+    const content:any[]=[],observations:any[]=[]
+    for(const t of times){
+      signal?.throwIfAborted()
+      const b64=await captureMotifFrameB64({motifId,tSec:t,propsJson:JSON.stringify(source?normalizeGraphicProps(source.manifest,a.props??{}):a.props??{}),width:a.width??source?.manifest.size[0]??480,height:a.height??source?.manifest.size[1]??480,settleRafs:null,contentHash:source?createHash('sha256').update(source.html).digest('hex'):''})
+      const observation=await observeGraphicPreview(motifId,t,b64,a,getVisionRuntime(),placed)
+      content.push({type:'image',data:b64,mimeType:'image/png'},{type:'text',text:JSON.stringify(observation)});observations.push(observation)
+    }
+    if(times.length>1)content.push({type:'text',text:JSON.stringify({draft_motion_samples:times,distinct_pixel_hashes:new Set(observations.map(o=>o.image_sha256)).size,scene_intent:source?sceneIntentFromHtml(source.html):undefined,scope:'Sampled draft states. Different pixels do not prove meaningful motion; identical frames may be an intentional hold. Compare against the actual purpose/voice beats, then inspect composed placement.'})})
+    return {content} as ServerResult
   }
   return unwrap(await backend.mcpCallTool(name, JSON.stringify(args))) as ServerResult
 }
@@ -1250,6 +1315,14 @@ export const AUDIO_UNDERSTANDING_STATUS_TOOL = {name:'get_audio_understanding_st
  *  positionals: `log` is the fourth and every one of them is optional, and each
  *  omitted seam must keep the behaviour it had before it existed. */
 export interface McpServerOptions {
+  reviewJobs?: AssetJobs
+  assetJobs?: AssetJobs
+
+  getRuntimeIdentity?: () => RuntimeIdentity
+  getSpeechIdentity?: () => string
+  getReasoningProfile?: () => {model:string;provider:string;readiness:string}
+  getRuntimePermissions?: () => {jev_credentials:boolean;jev_background:boolean;jev_failure:boolean;local_background_perception:boolean}
+
   localGeneration?: LocalGeneration
   /** Native connection only: acquire a lease for its current request/turn. */
   captureRequestAuthority?: () => import('../sclip/completionCheckpoint.js').RequestAuthority
@@ -1287,6 +1360,7 @@ export interface McpServerOptions {
   /** Shared normal-completion lifecycle; explicit review uses its existing guard. */
   completionReviews?: Map<string, CompletionReview>
   observeCompletion?: () => void
+  authorizeTool?: (name: string) => void
   verifyCompletionOutput?: (project: Project, requirements: CompletionReview['requirements'], signal?: AbortSignal) => Promise<DeliveryProof>
   reviewAtCompletion?: (signal?: AbortSignal) => Promise<import('../sclip/reviewer/reviewerTypes.js').TimelineReviewSummary>
   /** Real-time summary from background audio/visual reviewer. */
@@ -1305,6 +1379,7 @@ export function speechToolCatalog(tool: CatalogTool): CatalogTool {
   return {...tool, description: 'Generate speech with local Kokoro by default. engine=kokoro is strict; engine=auto explicitly permits Edge/macOS substitutes; engine=openai explicitly requests configured paid OpenAI TTS. list_speech_voices lists installed IDs/aliases. Preview_only generates cached audio without timeline/pool changes. Otherwise place on YOUR target_track_id/time (omitted track is the last existing track; time appends). Placement is atomic: failure leaves no imported pool item/layer, generated audio remains cached. Returns actual engine/voice/model provenance and duration. Voice style is a creative choice, not guaranteed by gain or a voice name.', inputSchema: {...schema, properties: {...schema.properties,
     voice: {type: 'string', description: 'Explicit installed Kokoro ID or reported alias. Unknown local voices reject, never silently substitute. For OpenAI use its supported voice IDs.'},
     engine: {type: 'string', enum: ['kokoro','auto','openai'], description: 'Default kokoro: local only. auto permits free network Edge/OS fallback. openai is an explicit cloud request.'},
+    after_layer_id: {type:'string', description:'Place at this current layer exact end in the target composition. Omit t_start_us. Resolves again after synthesis; avoids rounded-duration overlap.'},
     preview_only: {type: 'boolean', description: 'Generate a local preview/cache asset only; no pool or timeline writes.'},
   }}}
 }
@@ -1337,20 +1412,30 @@ export async function registeredMcpTools(backend: Backend, opts: McpServerOption
     mediaContextTool,
     VISION_INSPECT_TOOL,
     RANGE_VISUALS_TOOL,
-    RENDERED_AUDIO_TOOL,
+    RENDERED_AUDIO_TOOL, AUDIO_VISUAL_ALIGNMENT_TOOL,
     TEMPORAL_WINDOW_TOOL,
     CALCULATE_VIDEO_FIT_TOOL,
     GET_TIMELINE_CRITIQUE_TOOL,
     ...externalTools,
     ...(opts.sourceObservationIndex ? [GET_SOURCE_OBSERVATIONS_TOOL,...SOURCE_UNDERSTANDING_TOOLS] : []),
     ...(opts.evaluateSourcePassages ? [SOURCE_PASSAGE_TOOL] : []),
-  ]).filter(t => t.name !== 'export_timeline').map(speechToolCatalog)
+  ]).filter(t => t.name !== 'export_timeline').map(speechToolCatalog).map(t=>t.name==='add_text_layer'?{...t,description:'For designed motion use custom HyperFrames HTML/SVG/GSAP or an appropriate optional recipe; get_hyperframes_authoring_context supplies canvas and primitives. Native Text remains suitable for captions and deliberate simple typography. '+t.description}:t)
+  const video = opts.getVlm?.()
+  if (video && (!video.preferred || video.preferred === 'auto') && !Object.keys(video.config).length) {
+    const tool = all.find(t => t.name === 'describe_clip')
+    if (tool) tool.description = 'UNAVAILABLE: no whole-video understanding model selected/configured. Do not call or repeatedly retry. Frame vision is a separate local engine: use get_source_understanding(detail=coarse) for bounded sampled observations, or vision_inspect for a specific frame. Samples do not establish unsampled events. To enable whole-video analysis, the user selects/prepares a model in Settings → Video understanding. ' + tool.description
+  }
+  all.push(RUNTIME_STATUS_TOOL,GRAPHIC_AUTHORING_TOOL,{name:'get_completion_status',description:'Read authoritative current output/review completion status. No render, inspection, mutation, model request or creative verdict. Unverified/incomplete remains incomplete regardless of final prose.',inputSchema:{type:'object',properties:{},additionalProperties:false}})
+  if(opts.assetJobs)all.push(PREPARE_ASSETS_TOOL,ASSET_JOB_TOOL)
+  if(opts.reviewJobs)all.push(PREPARE_REVIEW_TOOL,{...ASSET_JOB_TOOL,name:'review_job',description:'Read, await (at most 15 seconds), or cancel an owned current-turn review/render job. Actual evidence is in the result; running is not verification. '+ASSET_JOB_TOOL.description})
+  for(const tool of all)if(SCLIP_PARALLEL_READS.has(tool.name))(tool as CatalogTool & {annotations:unknown}).annotations={readOnlyHint:true,destructiveHint:false}
   return opts.toolFilter ? all.filter(t => opts.toolFilter!(t.name)) : all
 }
 
 export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): Server {
   let revisionGuard = opts.revisionGuard ?? new RevisionLoopGuard(opts.revisionLoop === true)
   const completionSessions = opts.completionReviews ?? new Map<string, CompletionReview>()
+  let argumentCatalog: ReturnType<typeof registeredMcpTools> | undefined
   const ordinaryCompletion = !opts.revisionGuard && opts.revisionLoop !== true
   if (ordinaryCompletion && opts.getTsHost?.()) {
     revisionGuard = completionReview(opts.getTsHost()!.actor.snapshot(), completionSessions).guard
@@ -1358,6 +1443,7 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
   const getTsHost = opts.getTsHost ?? (() => null)
   // A disconnected/stopping old Hermes connection must not read a newly bound creator.
   const initialProjectId = getTsHost()?.actor.snapshot().project_id
+  const initialOpening = getTsHost()?.agent?.snapshot().workspace_id
   let creatorSessionKey = initialProjectId && opts.creatorStyleStore ? opts.creatorStyleStore.sessionKey(initialProjectId) : undefined
   const getPreferredEngine = opts.getPreferredEngine ?? (() => null)
   const getVlm = opts.getVlm ?? NO_VLM
@@ -1389,9 +1475,12 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
     const execute = async () => {
       const result=await handler(req,extra)
       const ts=getTsHost(),snapshot=ts?.actor.snapshot()
+      const exploration = snapshot && completionSessions.get(snapshot.project_id)?.sourceInspectionBudget
+      if (method === 'tools/call' && exploration && revisionGuard.status.phase === 'idle' && ['vision_inspect','get_source_understanding','get_source_observations','describe_clip'].includes(tool) && Array.isArray((result as any).content)) (result as any).content.push({type:'text',text:JSON.stringify({source_inspection_progress:exploration.guidance()})})
       if (method === 'tools/call' && snapshot && snapshot.project_id === initialProjectId && !(result as any)?.isError && Array.isArray((result as any).content)) {
         try {
-        const feedback = feedbackContext(snapshot, opts.getReviewerSummary?.().live_feedback)
+        const summary=opts.getReviewerSummary?.()
+        const feedback = feedbackContext(snapshot, summary?.live_feedback,summary)
         const key = feedback ? `${feedback.state_version}:${feedback.epoch}` : ''
         if (feedback && key !== lastLiveFeedback) {
           // The same current native lease gate used by review guidance. Never
@@ -1423,19 +1512,41 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
     const tools = await registeredMcpTools(backend, opts)
     return { tools } as unknown as ServerResult
   }, log, clientInfo))
-  server.setRequestHandler(CallToolRequestSchema, track('tools/call', async (req: CallToolRequest, extra) => {
+  const executeTool = async (req:CallToolRequest,extra:any):Promise<ServerResult> => runtimeRequest(req.params.name,extra,opts.getRuntimeIdentity?.()??{},opts.captureRequestAuthority,async()=>{
     try {
       const name = req.params.name
-      const args = (req.params.arguments ?? {}) as Record<string, unknown>
+      const catalog = await (argumentCatalog ??= registeredMcpTools(backend, opts))
+      const schema = catalog.find(tool => tool.name === name)?.inputSchema
+      const args = normalizeToolArguments(req.params.arguments ?? {}, schema) as Record<string, unknown>
+      opts.authorizeTool?.(name)
       opts.observeCompletion?.()
       // Revoke admission for every tool, including early review/lifecycle
       // branches. A cancelled terminal remains open for its next genuine turn.
       const admission=opts.captureRequestAuthority?.()
       try {(extra as {signal?:AbortSignal}).signal?.throwIfAborted();admission?.()}finally{admission?.release()}
+      if(name==='get_sclip_runtime_status')return {content:[{type:'text',text:JSON.stringify(await runtimeCapabilities(opts))}]} as ServerResult
       const snapshot = getTsHost()?.actor.snapshot()
+      if(initialOpening&&getTsHost()?.agent?.snapshot().workspace_id!==initialOpening)return revisionToolError('Project opening changed; reconnect to the current opening')
       if (initialProjectId && snapshot?.project_id !== initialProjectId) return revisionToolError('Project changed; reconnect for current project evidence.')
       const completion = ordinaryCompletion && snapshot ? completionReview(snapshot, completionSessions) : undefined
       if (completion) revisionGuard = completion.guard
+      if(snapshot)revisionGuard.configureForOutput(snapshot)
+      const sourceAnalysis = isSourceDiscovery(snapshot,name,args)
+      if((sourceAnalysis||REVISION_INSPECTION_TOOLS.has(name))&&typeof args.media_id==='string'&&snapshot&&!snapshot.media_pool[args.media_id])return revisionToolError('Unknown media_id: read the fresh media inventory and use a current ID. No review inspection consumed.')
+      if(completion?.originalBrief && name==='vision_inspect' && (args.image_path!==undefined || args.image_paths!==undefined) && args.media_id===undefined){
+        const budget=completion.sourceInspectionBudget??=new SourceInspectionBudget()
+        if(!budget.admitArtifactPreview())return revisionToolError('Graphic/image preview inspection budget reached (12 calls). Reuse observations or inspect the composed changed sections; do not restart unchanged previews.')
+      }
+      if (completion?.originalBrief && sourceAnalysis && revisionGuard.status.phase === 'idle') {
+        const budget = completion.sourceInspectionBudget ??= new SourceInspectionBudget()
+        budget.configureSources(snapshot!)
+        const refusal = budget.admit(isSourceSurvey(snapshot,name) || name === 'get_source_observations' || name === 'get_source_understanding' && args.detail === 'coarse' ? 6 : 1)
+        if (refusal && !(name === 'vision_inspect' && budget.admitStockPreview(args.media_id))) return revisionToolError(refusal)
+      }
+      if(completion?.originalBrief && name==='preview_motif_draft' && args.inspect!==false){
+        const budget=completion.sourceInspectionBudget??=new SourceInspectionBudget()
+        if(!budget.admitArtifactPreview(Array.isArray(args.t_secs)?args.t_secs.length:1)){args.inspect=false;args.inspection_reason='Artifact observation budget reached; reuse observations and inspect changed composed sections.'}
+      }
       const restartCompletion = name === 'begin_agent_session' && completion && (revisionGuard.status.phase === 'done' || completion.limitation)
       if (completion && name === 'begin_agent_session') completion.deliveryRequested = true
       if (name === 'end_agent_session' && snapshot && completion && requiresDeliveryReview(snapshot,completion)) {
@@ -1483,6 +1594,7 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
           return revisionToolError('Completion review is pending. Inspect relevant current rendered evidence, decide/repair/verify, and conclude with revision_control. force does not bypass review. Report review_unavailable_reason if inspection cannot finish.')
         }
         if (completion.started) {
+          if(requiredRenderedDimensions(snapshot,completion.requirements).includes('alignment') && completion.alignmentState!==state)return revisionToolError('Narrated video requires current paired evidence: call inspect_audio_visual_alignment over the narrated range, compare each spoken claim with its actual visual, repair mismatches or report the limitation. Separate audio and visual receipts do not establish alignment.')
           const epoch=completion.epoch??0,sources=sourceFingerprint(snapshot)
           if(completion.renderedEpoch!==epoch || completion.renderedSources!==sources || !revisionGuard.hasCurrentRenderedEvidence(state,requiredRenderedDimensions(snapshot,completion.requirements)))return revisionToolError('Completion requires fresh current rendered evidence in every relevant requested modality. Inspect the current video/audio/speech, then decide again.')
           if(Object.values(revisionGuard.status.outcomes).includes('unresolved')){completion.limitation='Hermes review retains unresolved issues';getTsHost()?.agent?.end('agent');return {content:[{type:'text',text:JSON.stringify({completion:'incomplete',limitation:completion.limitation})}]} as ServerResult}
@@ -1547,6 +1659,7 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
         return { content: [{ type: 'text', text: JSON.stringify(result) }] } as ServerResult
       }
       if (name === 'revision_control') {
+        if(completion?.started && snapshot && requiredRenderedDimensions(snapshot,completion.requirements).includes('alignment') && ['conclude_no_repair','complete'].includes(String(args.action)) && completion.alignmentState!==reviewState(getTsHost()?.actor.snapshot()))return revisionToolError('Before concluding a narrated video, inspect_audio_visual_alignment and compare its paired requested speech/visual evidence; repair contradictions. No success is recorded without that current worksheet.')
         if (completion?.started && ['complete', 'conclude_no_repair', 'finalize'].includes(String(args.action)) && (!snapshot || !revisionGuard.hasCurrentRenderedEvidence(reviewState(snapshot),requiredRenderedDimensions(snapshot,completion.requirements)))) {
           return revisionToolError('Completion requires current rendered evidence in every relevant requested modality before concluding. Inspect the actual video, audio and requested speech; if unavailable, report review_unavailable_reason at end_agent_session without claiming success.')
         }
@@ -1574,6 +1687,7 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
         return { content: [{ type: 'text', text: JSON.stringify(status) }] } as ServerResult
       }
       if (REVISION_INSPECTION_TOOLS.has(name)) {
+        if(args.start_us!==undefined&&args.end_us!==undefined&&(!Number.isSafeInteger(args.start_us)||!Number.isSafeInteger(args.end_us)||Number(args.start_us)<0||Number(args.end_us)<=Number(args.start_us)))return revisionToolError('Use integer timeline/source start_us < end_us with start_us >= 0. No review inspection consumed.')
         const refusal = revisionGuard.beforeInspection(name, args, completion?.started && snapshot ? {
           state: reviewState(snapshot), required: requiredRenderedDimensions(snapshot,completion.requirements),
         } : undefined)
@@ -1581,7 +1695,7 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
       }
       // A speech audition creates a cache asset, not a project mutation. It
       // must remain available while Hermes is considering/verifying a repair.
-      const mutation = isRevisionMutation(name) && !(name === 'synthesize_speech' && args.preview_only === true)
+      const mutation = !['import_media','import_external_media'].includes(name) && isRevisionMutation(name) && !(name === 'synthesize_speech' && args.preview_only === true)
       if (mutation) {
         // Track even failed editing attempts and edits later undone. Imports
         // alone put media in the pool; they do not promise a timeline output.
@@ -1603,9 +1717,52 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
         if (!opts.listSpeechVoices) return revisionToolError('Local voice catalog unavailable')
         return {content: [{type: 'text', text: JSON.stringify(await opts.listSpeechVoices())}]} as ServerResult
       }
+      if(name==='get_completion_status'){
+        if(Object.keys(args).length||!snapshot)return revisionToolError('Current project and empty arguments required')
+        return {content:[{type:'text',text:JSON.stringify(completionDisposition(snapshot,completionSessions))}]} as ServerResult
+      }
       if (name === 'get_local_generation_status') {
         if (Object.keys(args).length || !opts.localGeneration) return revisionToolError('Local generation status unavailable or invalid arguments')
         return {content: [{type: 'text', text: JSON.stringify(opts.localGeneration.status())}]} as ServerResult
+      }
+      if(name==='prepare_review'){
+        if(!opts.reviewJobs||!opts.captureRequestAuthority)throw new Error('Review jobs require native request authority')
+        if(Object.keys(args).some(k=>!['tool','arguments'].includes(k))||!catalog.some(t=>t.name===args.tool))throw new Error('Use an available review tool and its exact arguments')
+        if(opts.reviewJobs.pending(opts.getRuntimeIdentity?.().opening))throw new Error('Review already running; await/cancel it before preparing another')
+        const job=opts.reviewJobs.submit(String(args.tool),opts.captureRequestAuthority,async(signal,assert)=>{assert();const result=await executeTool({method:'tools/call',params:{name:String(args.tool),arguments:(args.arguments??{}) as Record<string,unknown>}},{...extra,signal});assert();return result})
+        return {content:[{type:'text',text:JSON.stringify({job,instruction:'Use review_job await. Independent editing may continue; mutations can invalidate the acquisition.'})}]} as ServerResult
+      }
+      if(name==='review_job'){
+        if(!opts.reviewJobs)throw new Error('Review jobs unavailable')
+        return {content:[{type:'text',text:JSON.stringify(await opts.reviewJobs.read(String(args.id),String(args.action),args.wait_ms===undefined?15000:Number(args.wait_ms)))}]} as ServerResult
+      }
+      if(name==='asset_job'){
+        if(!opts.assetJobs)throw new Error('Asset job service unavailable')
+        return {content:[{type:'text',text:JSON.stringify(await opts.assetJobs.read(String(args.id),String(args.action),args.wait_ms===undefined?15000:Number(args.wait_ms)))}]} as ServerResult
+      }
+      if(name==='prepare_assets'){
+        if(!opts.assetJobs||!opts.captureRequestAuthority)throw new Error('Asset preparation requires an active native request')
+        if(!Array.isArray(args.jobs)||args.jobs.length<1||args.jobs.length>4)throw new Error('jobs requires 1–4 explicit preparations')
+        const prepared=args.jobs.map((job:any)=>{
+          if(!job||typeof job.tool!=='string'||!['generate_image','generate_music','synthesize_speech','resolve_visual_intents','evaluate_source_passages'].includes(job.tool))throw new Error('Unsupported asset preparation')
+          const target=catalog.find(t=>t.name===job.tool)
+          if(!target)throw new Error(`Preparation tool unavailable in this session: ${job.tool}`)
+          const values=normalizeToolArguments(job.arguments??{},target.inputSchema) as Record<string,unknown>
+          if(job.tool==='synthesize_speech')values.preview_only=true
+          return {tool:job.tool,arguments:values}
+        })
+        const jobs=prepared.map(job=>opts.assetJobs!.submit(job.tool,opts.captureRequestAuthority!,async(signal,assert)=>{
+          if(job.tool==='generate_image'||job.tool==='generate_music'){
+            if(!opts.localGeneration)throw new Error('Optional local generation unavailable')
+            return callLocalGeneration(opts.localGeneration,getTsHost,job.tool,job.arguments,signal,assert)
+          }
+          if(job.tool==='evaluate_source_passages'){
+            if(!opts.evaluateSourcePassages)throw new Error('Jev passage ranking disabled')
+            const result=await opts.evaluateSourcePassages(job.arguments,signal);assert();return result
+          }
+          return handleCallTool(backend,getTsHost,job.tool,job.arguments,getPreferredEngine,getVlm,peaksPathFor,opts.getActiveWindow,opts.getReviewerSummary,opts.sourceObservationIndex,opts.externalMediaService,externalEnabled,signal,opts.audioUnderstanding,assert,opts.getSpeechIdentity?.())
+        }))
+        return {content:[{type:'text',text:JSON.stringify({jobs,placed:false,instruction:'Continue independent editing. Await a job when its result is needed; preparation is not placement or completion evidence.'})}]} as ServerResult
       }
       const evidenceState = reviewState(getTsHost()?.actor.snapshot())
       const evidenceHost = getTsHost(), evidenceActor = evidenceHost?.actor
@@ -1634,8 +1791,10 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
           if (!opts.localGeneration) throw new Error('Optional local generation is unavailable')
           const generated = await callLocalGeneration(opts.localGeneration, getTsHost, name, args, requestSignal, assertAuthority)
           result = {content: [{type: 'text', text: JSON.stringify(generated)}]} as ServerResult
-        } else result = await handleCallTool(backend, getTsHost, name, args, getPreferredEngine, getVlm, peaksPathFor, opts.getActiveWindow, opts.getReviewerSummary, opts.sourceObservationIndex, opts.externalMediaService, externalEnabled, requestSignal, opts.audioUnderstanding, assertAuthority)
-      } finally { unsubscribeInspection?.(); assertAuthority?.release() }
+        } else result = await handleCallTool(backend, getTsHost, name, args, getPreferredEngine, getVlm, peaksPathFor, opts.getActiveWindow, opts.getReviewerSummary, opts.sourceObservationIndex, opts.externalMediaService, externalEnabled, requestSignal, opts.audioUnderstanding, assertAuthority, opts.getSpeechIdentity?.())
+      } catch(error) {if(inspection)revisionGuard.inspectionFailed(error);throw error}
+      finally { unsubscribeInspection?.(); assertAuthority?.release() }
+      if(inspection&&(result as any).isError)revisionGuard.inspectionFailed(JSON.stringify(result))
       if (restartCompletion && completion && !('isError' in result && result.isError)) {
         completion.baseline = outputState(getTsHost()!.actor.snapshot())
         completion.guard = revisionGuard = new RevisionLoopGuard()
@@ -1647,7 +1806,15 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
       if (['get_timeline_critique','get_editorial_evidence_packet'].includes(name) && getTsHost()) {
         (result as any).content.push({type:'text',text:JSON.stringify({review_disposition:completionDisposition(getTsHost()!.actor.snapshot(),completionSessions)})})
       }
+      if(['import_external_media','import_media'].includes(name) && snapshot && outputState(snapshot)===outputState(getTsHost()!.actor.snapshot()))revisionGuard.rebaseUnchangedOutput(reviewState(snapshot),reviewState(getTsHost()?.actor.snapshot()))
+      if (name === 'import_external_media' && !('isError' in result && result.isError) && completion) {
+        const imported = JSON.parse(String((result as any).content?.find((c:any)=>c.type==='text')?.text ?? '{}'))
+        if(typeof imported.media_id==='string')(completion.sourceInspectionBudget ??= new SourceInspectionBudget()).registerStock(imported.media_id)
+      }
       if (mutation && before !== reviewState(getTsHost()?.actor.snapshot())) {
+        const identity=opts.getRuntimeIdentity?.()??{}
+        runtimeTrace.record('edit.commit',{...identity,tool_name:name})
+        if (['apply_rough_cut_plan','split_layer','trim_layer','ripple_cut_range'].includes(name)) completion?.sourceInspectionBudget?.assemblyCommitted()
         const auditDir = process.env.SCLIP_MCP_AUDIT_DIR
         if (auditDir && auditBefore) {
           try { fs.mkdirSync(auditDir, { recursive: true }); fs.writeFileSync(path.join(auditDir, `${Date.now()}-${randomUUID()}.json`), JSON.stringify({ tool: name, args, issue_id: revisionGuard.status.active_issue, before: auditBefore, after: getTsHost()?.actor.snapshot() })) } catch {}
@@ -1658,15 +1825,14 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
           if (notes.length) (result as any).content.push({type:'text',text:JSON.stringify({relationship_changes:notes,interpretation:'Observed relative source mappings; offsets can be intentional. Hermes decides whether these support its claim.'})})
         }
         if(afterSnapshot)(result as any).content.push({type:'text',text:JSON.stringify({current_output:currentOutput(afterSnapshot,completion?.requirement)})})
-        revisionGuard.mutationCommitted(reviewState(afterSnapshot))
-        getVisionRuntime().clearCache?.()
+        if(auditBefore&&afterSnapshot&&outputState(auditBefore)===outputState(afterSnapshot))revisionGuard.rebaseUnchangedOutput(before!,reviewState(afterSnapshot))
+        else revisionGuard.mutationCommitted(reviewState(afterSnapshot))
 
       }
       if (name === 'restore_checkpoint' && !('isError' in result && result.isError)) {
         revisionGuard.checkpointRestored(String(args.checkpoint_id), evidenceState, reviewState(getTsHost()?.actor.snapshot()))
-        getVisionRuntime().clearCache?.()
       }
-      if (['inspect_timeline_range_visuals', 'vision_inspect', 'inspect_timeline_frame', 'get_timeline_context', 'render_timeline_range', 'inspect_rendered_audio', 'inspect_timeline_temporal_window', 'get_media_context'].includes(name)) {
+      if (['inspect_timeline_range_visuals', 'vision_inspect', 'inspect_timeline_frame', 'get_timeline_context', 'render_timeline_range', 'inspect_audio_visual_alignment', 'inspect_rendered_audio', 'inspect_timeline_temporal_window', 'get_media_context'].includes(name)) {
         const text = (result as any).content?.find((c: any) => c.type === 'text')
         let evidence: any = {}; try { evidence = text ? JSON.parse(text.text) : {} } catch {}
         try { opts.log?.emit({ level: 'debug', category: { kind: 'Mcp' }, source: { kind: 'System' }, message: 'Evidence coordinate validation', details: { inspected_tool: name, coordinate_space: evidence.coordinate_space ?? (name === 'get_media_context' || args.source_t_us !== undefined ? 'source' : 'timeline'), timeline_t_us: args.timeline_t_us ?? args.t_us, source_t_us: args.source_t_us, accepted: !('isError' in result && result.isError), ...(evidence.code ? { rejection: evidence } : {}) } }) } catch {}
@@ -1685,16 +1851,20 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
         if (revisionGuard.status.phase !== 'idle') {
           const body = (result as any).content?.find((c: any) => c.type === 'text')
           let data: any = {}; try { data = body ? JSON.parse(body.text) : {} } catch {}
-          const timeline = ['get_editorial_evidence_packet', 'inspect_timeline_range_visuals', 'get_timeline_context', 'inspect_timeline_frame', 'render_timeline_range', 'inspect_rendered_audio', 'inspect_timeline_temporal_window', 'get_timeline_critique'].includes(name) || data.coordinate_space === 'timeline'
+          const timeline = ['get_editorial_evidence_packet', 'inspect_timeline_range_visuals', 'get_timeline_context', 'inspect_timeline_frame', 'render_timeline_range', 'inspect_audio_visual_alignment', 'inspect_rendered_audio', 'inspect_timeline_temporal_window', 'get_timeline_critique'].includes(name) || data.coordinate_space === 'timeline'
           const space = timeline ? 'timeline' : 'source'
           const comp = getTsHost()?.actor.snapshot().compositions[String(args.composition_id ?? getTsHost()?.actor.snapshot().root_id)]
           const t = data.timeline_t_us ?? args.timeline_t_us ?? args.t_us
           const range: [number, number] = timeline ? typeof t === 'number' ? [t, t] : [Number(args.start_us ?? 0), Number(args.end_us ?? comp?.duration_us ?? 0)] : [Number(args.source_t_us ?? args.start_us ?? 0), Number(args.source_t_us ?? args.end_us ?? 0)]
           const receipt = revisionGuard.recordEvidence(name, space, range, reviewState(getTsHost()?.actor.snapshot()), toolDimensions(name, data), undefined, evidenceCoverage(name,data,range))
-          if(completion&&space==='timeline'&&['vision_inspect','inspect_timeline_frame','inspect_timeline_range_visuals','inspect_timeline_temporal_window','inspect_rendered_audio','render_timeline_range'].includes(name)&&revisionGuard.hasCurrentRenderedEvidence(reviewState(getTsHost()?.actor.snapshot()))){completion.renderedEpoch=evidenceEpoch??0;completion.renderedSources=evidenceSources}
+          if(completion&&space==='timeline'&&['vision_inspect','inspect_timeline_frame','inspect_timeline_range_visuals','inspect_timeline_temporal_window','inspect_audio_visual_alignment', 'inspect_rendered_audio','render_timeline_range'].includes(name)&&revisionGuard.hasCurrentRenderedEvidence(reviewState(getTsHost()?.actor.snapshot()))){completion.renderedEpoch=evidenceEpoch??0;completion.renderedSources=evidenceSources}
           revisionGuard.inspectionCompleted(name, args)
           ;(result as any).content.push({ type: 'text', text: JSON.stringify({ evidence_receipt: receipt }) })
         }
+      }
+      if(name==='inspect_audio_visual_alignment' && completion && !('isError' in result && result.isError)){
+        const paired=JSON.parse(String((result as any).content?.[0]?.text??'{}')),voiced=getTsHost()?.actor.snapshot()
+        if(voiced)recordAlignmentCoverage(completion,voiced,reviewState(voiced),paired,completion.requirements?.requiresSpeech)
       }
       if (name === 'validate_rough_cut_review' && validatedReview(result)) {
         const review = typeof args.review === 'string' ? JSON.parse(args.review) : args.review as any
@@ -1725,7 +1895,8 @@ export function buildMcpServer(backend: Backend, opts: McpServerOptions = {}): S
       }
       return failed
     }
-  }, log, clientInfo))
+  },req.params.arguments)
+  server.setRequestHandler(CallToolRequestSchema,track('tools/call',executeTool,log,clientInfo))
   server.setRequestHandler(ListResourcesRequestSchema, track('resources/list', async () => {
     const cat = JSON.parse(await backend.mcpCatalog()) as { resources: Array<{ uri: string }> }
     return { resources: mergeMcpResources(cat.resources, MOTIF_RESOURCE_DEFS) } as unknown as ServerResult

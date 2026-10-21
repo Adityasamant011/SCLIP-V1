@@ -109,9 +109,13 @@
   "platform": "darwin-arm64",
   "source_revision": "515354038a3c383b38b43aba6959ceddd858bb12",
   "source_working_tree_overrides": {
-    "tools/tool_search.py": "67d2f1a180067b692418099d07878b84c46d05df632a99f1aa53fe11e3bba18e"
+    "tools/tool_search.py": "b14d04f52baaab9790a0ff5cab6038a4fb9cd67aa6f5b7bbf0067eebc113c02c",
+    "hermes_cli/plugins.py": "d3e8f0a2bd9590242d01f16ae3d706cae15ae3b7d8730d417d2913cc00261c76",
+    "agent/conversation_loop.py": "bb4d285594c5db25013febdb89b7506cbce09ce62323a416a7959dc9f32031e3",
+    "tools/mcp_tool.py": "2e886f52934712e6961bf0fb946305cdda4ac0f329d72fbce629e6c3557dc5e5",
+    "agent/tool_dispatch_helpers.py": "67105b443b6e38bbef80d7c72421eef2fc33af89e5b6da91210074e09e82c71e"
   },
   "hermes_version": "0.20.4",
   "uv_lock_sha256": "8fd868b9da8b6bc2f4aa94a845e210eccdd5e31be7a0b404f0a8527ced0fddec",
-  "scope": "Pinned supported current runtime, including pre-existing Sclip discovery patch; no dependency update. Internal staging; distribution license/signature gates separate."
+  "scope": "Pinned Hermes 0.20.4/Python/dependencies unchanged. Explicit Sclip native completion, stable authorized core, bulk discovery and read-only dispatch patches. Live creator acceptance pending."
 }

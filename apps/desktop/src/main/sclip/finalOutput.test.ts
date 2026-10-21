@@ -3,7 +3,7 @@ import {blankProject} from '../state/model'
 import {createActor} from '../state/actor'
 import {uuidV7Gen} from '../state/ids'
 import {mediaItemTemplate} from '../state/mutations/media'
-import {validateOutputState,outputRequirements,visualOutput,requiredRenderedDimensions,verifyDelivery,deliveryProofValid} from './finalOutput'
+import {validateOutputState,outputRequirements,followupRequirements,visualOutput,requiredRenderedDimensions,verifyDelivery,deliveryProofValid} from './finalOutput'
 vi.mock('electron',()=>({app:{isPackaged:true}}))
 function fixture(kind='video',duration=30e6) {
  const ids=uuidV7Gen(),p=blankProject(ids,'synthetic'),actor=createActor({initial:p,idGen:ids})
@@ -19,6 +19,8 @@ describe('Final output is observable content, not model prose or duration alone'
   ['Make a 30-second video with an audio track.',true,true,false],
   ['Make a 30-second video with audio.',true,true,false],
   ['Make a video with narration.',true,true,true],
+  ['make a 30 second teaser with an ai voiceover of places to eat at in paris',true,true,true],
+  ['Make a trailer with narration.',true,true,true],
   ['Make an audio-only narration.',false,true,true],
   ['Make a podcast.',false,true,false],
   ['Make a music track.',false,true,false],
@@ -44,6 +46,7 @@ describe('Final output is observable content, not model prose or duration alone'
    expect(deliveryProofValid(video.p(),req,{...decoded,has_video:true,has_audio:true})).toBe(true)
   }
  })
+ it('keeps existing visuals when adding narration without declaring an audio-only format',()=>{const f=fixture(); const req=outputRequirements('Add an AI voiceover.',f.p()); expect(req.media).toBe('video'); expect(deliveryProofValid(f.p(),req,{valid:true,decoded:true,duration_us:30e6,has_video:false,has_audio:true})).toBe(false)})
  it('accepts a correctly bounded 30s video state',()=>{const f=fixture();expect(validateOutputState(f.p(),outputRequirements('Make a 30-second product video.',f.p())).valid).toBe(true)})
  it('refuses a 30s audio-only output for a video brief',()=>{const f=fixture('audio');const v=validateOutputState(f.p(),outputRequirements('Make a 30-second product video.',f.p()));expect(v.errors).toContain('REQUIRED_VIDEO_ABSENT');expect(v.current_output.duration_requirement?.met).toBe(true)})
  it('refuses entirely empty output',()=>{const f=fixture('empty');expect(validateOutputState(f.p(),outputRequirements('Make a product video.',f.p())).errors).toContain('EMPTY_OUTPUT')})
@@ -58,4 +61,14 @@ describe('Final output is observable content, not model prose or duration alone'
  it('bounds whole-output proof rather than certifying a long prefix',async()=>{const f=fixture();const p=structuredClone(f.p());p.compositions[p.root_id].duration_us=30_000e6;const w=vi.fn();expect((await verifyDelivery(p,undefined,w)).valid).toBe(false);expect(w).not.toHaveBeenCalled()})
  it('refuses missing source provenance before a surviving cache can masquerade as current output',async()=>{const f=fixture(),exportSurface=vi.fn();const r=await verifyDelivery(f.p(),outputRequirements('Make a video.',f.p()),()=>({isDestroyed:()=>false,webContents:{executeJavaScript:exportSurface}}));expect(r.valid).toBe(false);expect(r.reason).toContain('Required source file unavailable');expect(exportSurface).not.toHaveBeenCalled()})
  it('fails precise render refusal when the real compositor is unavailable',async()=>{const f=fixture();const r=await verifyDelivery(f.p(),undefined,()=>null);expect(r.valid).toBe(false);expect(r.reason).toContain('open Sclip desktop window')})
+})
+
+it('retains narration and duration for the observed start-from-scratch follow-up, but honors explicit silence',()=>{const f=fixture();const first=outputRequirements('Make a 30 second teaser with AI voiceover.',f.p());const follow=followupRequirements('delete this whole teaser and start from scratch and make it from the footage in the media pool',f.p(),first);expect(follow.requirements.requiresSpeech).toBe(true);expect(follow.requirements.duration).toEqual(first.duration);expect(followupRequirements('Redo this as a silent teaser',f.p(),first).requirements.requiresSpeech).toBe(false)})
+
+it('requires speech and paired evidence for authored voiceover even when the brief never said narration',()=>{
+ const f=fixture(),p=structuredClone(f.p()),c=p.compositions[p.root_id]
+ c.tracks[0].layers.push({id:'voice',enabled:true,locked:false,t_start_us:0,t_end_us:30e6,params:{kind:'Audio',media:'voice',role:'voiceover',mute:false,gain_db:{mode:'Static',value:0}}} as any)
+ expect(requiredRenderedDimensions(p,outputRequirements('Make a TikTok with animations.',p))).toEqual(['visual','audio','speech','alignment'])
+ p.audio_roles.voiceover={gain_db:0,muted:true,solo:false}
+ expect(requiredRenderedDimensions(p,outputRequirements('Make a TikTok with animations.',p))).not.toContain('alignment')
 })

@@ -29,6 +29,7 @@
 /// logic unit-testable in Node, where `ImageBitmap` doesn't exist.
 export interface Closeable {
   close(): void;
+  width?:number; height?:number;
 }
 
 const DEFAULT_MAX_FRAMES = 240;
@@ -71,8 +72,22 @@ export class MotifFrameCache {
   /// to the tail (delete + re-insert) so recency stays accurate.
   private readonly store = new Map<string, Closeable>();
   private readonly maxFrames: number;
+  private maxBytes:number;
+  private bytes=0;
+  private pins=new Map<Closeable,number>();
+  private retired=new Set<Closeable>();
+  /** Displayed frames outlive LRU eviction until the last sprite releases. */
+  retainFrame(value:unknown):()=>void {
+    const b=value as Closeable;if(typeof b?.close!=='function')return ()=>{};
+    this.pins.set(b,(this.pins.get(b)??0)+1);let released=false;
+    return ()=>{if(released)return;released=true;const n=(this.pins.get(b)??1)-1;if(n)this.pins.set(b,n);else{this.pins.delete(b);if(this.retired.delete(b))b.close()}};
+  }
 
-  constructor(maxFrames: number = DEFAULT_MAX_FRAMES) {
+  private frameBytes(b:Closeable){return Math.max(1,(b.width??1)*(b.height??1)*4)}
+  private remove(k:string){const b=this.store.get(k);if(b){this.bytes-=this.frameBytes(b);this.store.delete(k);if(this.pins.has(b))this.retired.add(b);else b.close()}}
+
+  constructor(maxFrames: number = DEFAULT_MAX_FRAMES,maxBytes=256*1024*1024) {
+    this.maxBytes=Number.isFinite(maxBytes)&&maxBytes>0?maxBytes:256*1024*1024;
     // Guard against a zero/negative cap silently disabling the cache. A NaN
     // cap is especially dangerous: `store.size > NaN` is always false, so
     // eviction would never fire and the cache would grow unbounded — fall back
@@ -127,19 +142,18 @@ export class MotifFrameCache {
       return prev as unknown as ImageBitmap;
     }
     this.store.set(k, bmp as unknown as Closeable);
+    this.bytes+=this.frameBytes(bmp);
     this.evictToCapacity();
     return bmp;
   }
 
   /// Evict LRU entries until at most `maxFrames` remain, closing each.
   private evictToCapacity(): void {
-    while (this.store.size > this.maxFrames) {
+    while (this.store.size > this.maxFrames || this.bytes>this.maxBytes&&this.store.size>1) {
       // The first key in insertion order is the LRU victim.
       const oldest = this.store.keys().next();
       if (oldest.done) break;
-      const victim = this.store.get(oldest.value);
-      this.store.delete(oldest.value);
-      victim?.close();
+      this.remove(oldest.value);
     }
   }
 
@@ -152,7 +166,8 @@ export class MotifFrameCache {
 
   /// The max-frames cap (the prewarmer uses it as its warm budget).
   capacity(): number {
-    return this.maxFrames;
+    const largest=Math.max(4,...[...this.store.values()].map(b=>this.frameBytes(b)));
+    return Math.min(this.maxFrames,Math.max(1,Math.floor(this.maxBytes/largest)));
   }
 
   /// True when at least one frame of `cacheKey` is currently held.
@@ -168,20 +183,19 @@ export class MotifFrameCache {
   clearKey(cacheKey: string): void {
     for (const k of Array.from(this.store.keys())) {
       if (keyMatchesCacheKey(k, cacheKey)) {
-        const bmp = this.store.get(k);
-        this.store.delete(k);
-        bmp?.close();
+        this.remove(k);
       }
     }
   }
 
   /// Close every held bitmap and empty the store. Call on teardown.
   dispose(): void {
-    for (const bmp of this.store.values()) bmp.close();
-    this.store.clear();
+    for (const key of [...this.store.keys()]) this.remove(key);
+    this.bytes=0;
   }
 
   /// Frames currently held across all keys, for diagnostics.
+  byteSize():number{return this.bytes}
   size(): number {
     return this.store.size;
   }

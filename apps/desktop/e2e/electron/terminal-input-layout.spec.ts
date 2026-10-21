@@ -14,7 +14,7 @@ test('Agent input stays visible through startup resize, wrapping and reattachmen
   fs.writeFileSync(fixture, `#!/bin/sh\ncd '${source}'\nexport PYTHONPATH='${source}'\nexec '${source}/.venv/bin/python' '${path.resolve('e2e/electron/helpers/wrappingTerminal.py')}'\n`, {mode:0o700})
   const require=createRequire(import.meta.url), modulePath=path.join(root,'runtime.cjs')
   await build({entryPoints:[path.resolve('src/main/sclip/hermesTerminalRuntime.ts')],outfile:modulePath,bundle:true,platform:'node',format:'cjs',alias:{'node-pty':require.resolve('node-pty')},external:[require.resolve('node-pty')]})
-  const browser=await build({stdin:{contents:`import React from 'react';import {createRoot} from 'react-dom/client';import {HermesTerminal} from './src/renderer/agent/HermesTerminal';import './src/renderer/agent/sclip.css';export function mount(){window.inputRoot=createRoot(document.getElementById('input-test'));window.inputRoot.render(React.createElement(HermesTerminal,{projectId:window.testProjectId,sessionId:'same'}));}export function unmount(){window.inputRoot.unmount();}`,resolveDir:process.cwd(),loader:'tsx'},bundle:true,jsx:'automatic',platform:'browser',format:'iife',globalName:'InputTest',write:false,outdir:root,
+  const browser=await build({stdin:{contents:`import React from 'react';import {createRoot} from 'react-dom/client';import {HermesTerminal} from './src/renderer/agent/HermesTerminal';import './src/renderer/agent/sclip.css';export function mount(){window.inputRoot=createRoot(document.getElementById('input-test'));window.inputRoot.render(React.createElement(HermesTerminal,{projectId:window.testProjectId,sessionId:'same',onRetry:()=>{window.testRetries=(window.testRetries||0)+1;}}));}export function unmount(){window.inputRoot.unmount();}`,resolveDir:process.cwd(),loader:'tsx'},bundle:true,jsx:'automatic',platform:'browser',format:'iife',globalName:'InputTest',write:false,outdir:root,
     plugins:[{name:'offline-ipc',setup(b){b.onResolve({filter:/ipc\/sclip$/},()=>({path:'offline-ipc',namespace:'offline'}));b.onLoad({filter:/.*/,namespace:'offline'},()=>({contents:`export const sclipOpenTerminal=(...a)=>window.inputOpen(...a);export const sclipTerminalInput=(...a)=>window.inputSend(...a);export const sclipTerminalResize=(...a)=>window.inputResize(...a);`}))}}]})
   const {app,page}=await launchApp({env:{OPENROUTER_API_KEY:'',OPENAI_API_KEY:'',SCLIP_JEV_ENABLED:'0',SCLIP_BACKGROUND_JEV_AUTHORIZED:'0'}})
   page.on('pageerror', error => console.log('INPUT_ERROR', error.message))
@@ -25,7 +25,7 @@ test('Agent input stays visible through startup resize, wrapping and reattachmen
     await app.evaluate((_electron,o)=>{
       const {HermesTerminalRuntime}=(process as any).getBuiltinModule('module').createRequire(o.modulePath)(o.modulePath)
       const target=_electron.BrowserWindow.getAllWindows()[0]!
-      ;(globalThis as any).inputRuntime=new HermesTerminalRuntime({isPackaged:false,resourcesPath:'',userDataPath:o.root,executableOverride:o.fixture,getMcpInfo:()=>o.mcp,getProviderEnvironment:()=>({SCLIP_TEST_INPUT_LOG:o.log}),assertSession:async()=>{},onOutput:(event:unknown)=>target.webContents.send('evt:sclip:terminal_output',event),onExit:()=>{}})
+      ;(globalThis as any).inputRuntime=new HermesTerminalRuntime({isPackaged:false,resourcesPath:'',userDataPath:o.root,executableOverride:o.fixture,getMcpInfo:()=>o.mcp,getProviderEnvironment:()=>({SCLIP_TEST_INPUT_LOG:o.log}),assertSession:async()=>{},onOutput:(event:unknown)=>target.webContents.send('evt:sclip:terminal_output',event),onExit:(event:unknown)=>target.webContents.send('evt:sclip:terminal_exit',event)})
     },{modulePath,root,fixture,mcp,log})
     let release!:()=>void, opens=0
     const gate=new Promise<void>(resolve=>{release=resolve})
@@ -69,6 +69,11 @@ test('Agent input stays visible through startup resize, wrapping and reattachmen
     await expect.poll(()=>state().text).toContain('XZ');expect(state().pid).toBe(pid)
     await checkCursor('TAIL_VISIBXZE')
     await page.screenshot({path:test.info().outputPath('long-input.png')})
+    await app.evaluate(()=>{const runtime=(globalThis as any).inputRuntime;runtime.sessions.values().next().value.pty.kill()})
+    await expect(page.locator('#input-test')).toContainText('Sclip terminal stopped')
+    await page.locator('#input-test').getByRole('button',{name:'Retry Connection'}).click()
+    expect(await page.evaluate(()=>(window as any).testRetries)).toBe(1)
+    await page.screenshot({path:test.info().outputPath('terminal-exit-recovery.png')})
     console.log('INPUT_LAYOUT',JSON.stringify({sameProcess:true,widths:[280,300,500,650,800],characters:text.length,providerCalls:0}))
   }catch(error){console.log('TERMINAL_CONTENT',await page.locator('#input-test').textContent());throw error}finally{await app.evaluate(()=>(globalThis as any).inputRuntime?.stopAll()).catch(()=>{});await app.close()}
 })

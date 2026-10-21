@@ -4,6 +4,7 @@ import type {
   ExternalMediaSearchOptions,
 } from '../types.js'
 import { getProviderKey } from '../credentials.js'
+import { sharedStockAvailable, stockSearchRequest } from '../sharedStock.js'
 
 export class PixabayProvider implements ExternalMediaProvider {
   readonly name = 'pixabay' as const
@@ -14,7 +15,7 @@ export class PixabayProvider implements ExternalMediaProvider {
     const pageSize = Math.max(3, Math.min(200, limit))
     const apiKey = getProviderKey('pixabay')
 
-    if (!apiKey) {
+    if (!apiKey && !sharedStockAvailable()) {
       throw new Error('PROVIDER_NOT_CONFIGURED: Pixabay API key is not configured.')
     }
 
@@ -24,9 +25,9 @@ export class PixabayProvider implements ExternalMediaProvider {
 
     if (media_type === 'either' || media_type === 'video') {
       try {
-        const videoRes = await fetch(
-          `https://pixabay.com/api/videos/?key=${encodeURIComponent(apiKey)}&q=${encodeURIComponent(query)}&per_page=${pageSize}${orientationParam}`,
-          { signal: AbortSignal.timeout(8000) },
+        const videoRes = await stockSearchRequest('pixabay',
+          `https://pixabay.com/api/videos/?key=${encodeURIComponent(apiKey ?? '')}&q=${encodeURIComponent(query)}&per_page=${pageSize}${orientationParam}`,
+          { signal: AbortSignal.timeout(8000) }, !!apiKey,
         )
         if (videoRes.ok) {
           const data = (await videoRes.json()) as any
@@ -74,9 +75,9 @@ export class PixabayProvider implements ExternalMediaProvider {
 
     if (media_type === 'either' || media_type === 'image') {
       try {
-        const imageRes = await fetch(
-          `https://pixabay.com/api/?key=${encodeURIComponent(apiKey)}&q=${encodeURIComponent(query)}&image_type=all&per_page=${pageSize}${orientationParam}`,
-          { signal: AbortSignal.timeout(8000) },
+        const imageRes = await stockSearchRequest('pixabay',
+          `https://pixabay.com/api/?key=${encodeURIComponent(apiKey ?? '')}&q=${encodeURIComponent(query)}&image_type=all&per_page=${pageSize}${orientationParam}`,
+          { signal: AbortSignal.timeout(8000) }, !!apiKey,
         )
         if (imageRes.ok) {
           const data = (await imageRes.json()) as any

@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button'
 import { AppInput } from '../components/AppInput'
 import { settingsSetApiKey, settingsClearApiKey } from '../ipc'
 
-type StockStatus = { providers: Array<{ provider: 'pexels' | 'pixabay'; configured: boolean }> }
+type StockStatus = { sharedAvailable?: boolean; providers: Array<{ provider: 'pexels' | 'pixabay'; configured: boolean }> }
 
 /** Provider keys are write-only here; status never returns credentials. */
 export function StockMediaSection() {
@@ -26,7 +26,8 @@ export function StockMediaSection() {
   }
   return <section className="settings-section">
     <h3>Stock images and video</h3>
-    <p className="settings-blurb">Connect your own Pexels or Pixabay account. Sclip Agent can search stock, import an asset and use it as B-roll when you request it. Search terms go to the selected provider. No generation credits are used.</p>
+    <p className="settings-blurb">Sclip Agent can search Pexels and Pixabay stock, import an asset and use it as B-roll when you request it. Search terms go to the selected provider. Stock searches do not consume your AI allowance; the assistant’s model calls still use your chosen AI connection.</p>
+    <p role="status">{status?.sharedAvailable ? 'Shared stock access is active with fair usage limits. A personal key takes priority when saved.' : 'Shared stock access is not available. You can connect your own free stock API keys below.'}</p>
     <p className="settings-blurb">Keys are stored using your operating system’s encrypted key storage. Provider quotas and usage terms apply. Source and license details stay with imported assets.</p>
     {error && <p className="settings-error" role="alert">{error}</p>}
     {(['pexels', 'pixabay'] as const).map(provider => {
@@ -39,7 +40,7 @@ export function StockMediaSection() {
           onValueChange={value => setValues(v => ({ ...v, [provider]: value }))} />
         <Button disabled={busy || !values[provider].trim()} onClick={() => void save(provider)}>Save {label} key</Button>
         <Button variant="secondary" disabled={busy || !configured} onClick={() => void save(provider, true)}>Remove {label} key</Button>
-        <p className="settings-toggle-hint">Get a key at {provider === 'pexels' ? 'pexels.com/api' : 'pixabay.com/api/docs'}. Sclip does not supply a shared key.</p>
+        <p className="settings-toggle-hint">Optional personal key: {provider === 'pexels' ? 'pexels.com/api' : 'pixabay.com/api/docs'}. Provider quotas apply. Shared credentials are managed securely by Sclip when shared access is enabled.</p>
       </div>
     })}
   </section>

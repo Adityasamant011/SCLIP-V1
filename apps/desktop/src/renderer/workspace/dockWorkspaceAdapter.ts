@@ -314,68 +314,26 @@ export class DockWorkspaceAdapter implements DockWorkspaceController {
 
     const width = positiveSize(viewport?.width ?? this.api.width, 1_000);
     const height = positiveSize(viewport?.height ?? this.api.height, 720);
-    // The Quick Actions strip claims a fixed slice of width; everything else
-    // divides the remainder. Mirrors `createEditingLayout`'s `bodyWidth`, so
-    // the imperative first-boot tree and the declarative reset baseline agree.
-    const stripWidth = STRIP_THICKNESS;
-    const bodyWidth = Math.max(1, width - stripWidth);
-    const editorHeight = Math.round(height * 0.72);
-    const columnWidth = Math.round(bodyWidth * 0.25);
-    const playheadHeight = Math.round(editorHeight * 0.4);
-
-    const media = this.addPanel("media", {
-      initialWidth: Math.round(bodyWidth * 0.22),
-    });
-    this.addPanel("transitions", {
-      position: { referencePanel: "media", direction: "within" },
-      inactive: true,
-    });
-    this.addPanel("preview", {
-      position: { referencePanel: "media", direction: "right" },
-      initialWidth: Math.round(bodyWidth * 0.53),
-    });
-    // The right column is a vertical split, not a tab stack: the Playhead
-    // Panel takes the top on its own so the stack under the playhead — how
-    // A/B-Roll is read — is on screen from the first launch, and the
-    // inspector's tabs sit below it. `playhead` therefore anchors the column,
-    // and Attribute splits off it downward.
-    const playhead = this.addPanel("playhead", {
-      position: { referencePanel: "preview", direction: "right" },
-      initialWidth: columnWidth,
-    });
-    this.addPanel("attribute", {
-      position: { referencePanel: "playhead", direction: "below" },
-    });
-    this.addPanel("effect", {
-      position: { referencePanel: "attribute", direction: "within" },
-      inactive: true,
-    });
+    const bodyWidth = Math.max(1, width - STRIP_THICKNESS);
+    const rightWidth = Math.round(bodyWidth * 0.30);
+    this.addPanel("preview", { initialWidth: bodyWidth - rightWidth });
     const timeline = this.addPanel("timeline", {
-      position: { direction: "below" },
+      position: { referencePanel: "preview", direction: "below" },
       initialHeight: Math.round(height * 0.28),
     });
-    // Inserted LAST and root-relative so it ends up beside the whole grid —
-    // the editor row and the Timeline row both — giving one full-height edge
-    // bar. Inserting it first instead would leave the root-relative Timeline
-    // spanning underneath it.
-    const strip = this.addPanel("quick-actions", {
-      position: { direction: "left" },
-      initialWidth: stripWidth,
+    // Add the right group beside the complete preview/timeline column.
+    const agent = this.addPanel("agent", {
+      position: { direction: "right" }, initialWidth: rightWidth,
     });
-
-    // `initialWidth` sizes the newly inserted split, so later insertions can
-    // redistribute an earlier sibling. Clamp the anchored columns after the
-    // complete tree exists; Preview naturally receives the 53% remainder.
-    strip?.api.setSize({ width: stripWidth });
-    media?.api.setSize({ width: Math.round(bodyWidth * 0.22) });
+    for (const kind of ["attribute", "effect", "playhead", "media", "transitions", "caption"] as const) {
+      this.addPanel(kind, { position: { referencePanel: "agent", direction: "within" }, inactive: true });
+    }
+    const strip = this.addPanel("quick-actions", {
+      position: { direction: "left" }, initialWidth: STRIP_THICKNESS,
+    });
+    strip?.api.setSize({ width: STRIP_THICKNESS });
+    agent?.api.setSize({ width: rightWidth });
     timeline?.api.setSize({ height: Math.round(height * 0.28) });
-    // Last, and both axes in one call: the Playhead group sits one level deeper
-    // than the other columns, so `width` is its ORTHOGONAL size and bubbles up
-    // to size the whole right column, while `height` splits that column against
-    // the inspector. The Timeline clamp has to land first — `playheadHeight` is
-    // a share of the editor row, which only reaches its final height once the
-    // Timeline row has taken its own.
-    playhead?.api.setSize({ width: columnWidth, height: playheadHeight });
     this.captureOpenPlacements();
     this.emitChange();
     return true;
@@ -954,7 +912,7 @@ export class DockWorkspaceAdapter implements DockWorkspaceController {
         // Root-relative: splits the whole grid rather than one Panel's cell.
         // `below` gives the full-width Timeline row; `left` gives the
         // full-height Quick Actions edge strip.
-        | { direction: "below" | "left" }
+        | { direction: "below" | "left" | "right" }
         | {
             referencePanel: string;
             direction: "left" | "right" | "above" | "below" | "within";

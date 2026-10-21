@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const terminal = vi.hoisted(() => ({
   writes: [] as string[],
   onData: null as ((data: string) => void) | null,
+  exit: null as ((event: unknown) => void) | null,
   output: null as ((event: unknown) => void) | null,
   replayDone: null as (() => void) | null,
   asyncWrite: false,
@@ -48,6 +49,7 @@ beforeEach(() => {
   terminal.writes = []
   terminal.onData = null
   terminal.output = null
+  terminal.exit = null
   terminal.replayDone = null
   terminal.asyncWrite = false
   terminal.handlers = []
@@ -55,7 +57,8 @@ beforeEach(() => {
   ipc.sclipTerminalInput.mockResolvedValue(undefined)
   ipc.sclipTerminalResize.mockResolvedValue(undefined)
   Object.defineProperty(window, 'api', { configurable: true, value: {
-    on: (_channel: string, callback: (event: unknown) => void) => {
+    on: (channel: string, callback: (event: unknown) => void) => {
+      if (channel === 'sclip:terminal_exit') { terminal.exit = callback; return () => { terminal.exit = null } }
       terminal.output = callback
       return () => { terminal.output = null }
     },
@@ -66,7 +69,7 @@ beforeEach(() => {
   })
 })
 
-afterEach(() => { cleanup(); vi.unstubAllGlobals() })
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals() })
 
 describe('HermesTerminal startup and typing', () => {
   it('sends the latest panel dimensions after asynchronous PTY startup, before typing', async () => {
@@ -146,5 +149,49 @@ describe('HermesTerminal startup and typing', () => {
     await act(async () => { releases.shift()?.() })
     await waitFor(() => expect(sent).toEqual(['a', 'b', 'c']))
     await act(async () => { releases.shift()?.() })
+  })
+})
+
+
+describe('terminal failure recovery', () => {
+  it('shows loading until visible output, then reports only this terminal exit and offers retry', async () => {
+    ipc.sclipOpenTerminal.mockResolvedValue({ history: '', sequence: 0 })
+    const retry = vi.fn()
+    render(<HermesTerminal projectId="project" sessionId="session" onRetry={retry} />)
+    expect(screen.getByText('Opening Sclip terminal…')).toBeTruthy()
+    await act(async () => {})
+    act(() => terminal.output?.({ projectId:'project',sessionId:'session',sequence:1,data:'Ready> ' }))
+    expect(screen.queryByText('Opening Sclip terminal…')).toBeNull()
+    act(() => terminal.exit?.({ projectId:'other',sessionId:'session',code:1 }))
+    expect(screen.queryByText(/terminal stopped/)).toBeNull()
+    act(() => terminal.exit?.({ projectId:'project',sessionId:'session',code:3 }))
+    expect(screen.getByText(/terminal stopped.*exit 3/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button',{ name:'Retry Connection' }))
+    expect(retry).toHaveBeenCalledOnce()
+    act(() => terminal.onData?.('ignored'))
+    await act(async () => {})
+    expect(ipc.sclipTerminalInput).not.toHaveBeenCalled()
+  })
+
+  it.each([false,true])('bounds a stalled startup (IPC resolves: %s) and ignores a late reply', async resolves => {
+    vi.useFakeTimers()
+    let resolve!: (snapshot:{ history:string; sequence:number }) => void
+    ipc.sclipOpenTerminal.mockImplementation(() => resolves ? Promise.resolve({ history:'\x1b[c',sequence:0 }) : new Promise(r => { resolve=r }))
+    render(<HermesTerminal projectId="project" sessionId="session" onRetry={vi.fn()} />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
+    expect(screen.getByText(/did not produce output/)).toBeTruthy()
+    if (!resolves) await act(async () => { resolve({ history:'late banner', sequence:1 }) })
+    expect(terminal.writes.join('')).not.toContain('late banner')
+    expect(screen.getByRole('button',{name:'Retry Connection'})).toBeTruthy()
+  })
+
+  it('preserves an exit that arrives before terminal open completes', async () => {
+    let resolve!: (snapshot:{history:string;sequence:number}) => void
+    ipc.sclipOpenTerminal.mockImplementation(() => new Promise(r => { resolve=r }))
+    render(<HermesTerminal projectId="project" sessionId="session" onRetry={vi.fn()} />)
+    act(() => terminal.exit?.({projectId:'project',sessionId:'session',code:1}))
+    await act(async () => { resolve({history:'late banner',sequence:1}) })
+    expect(screen.getByText(/terminal stopped.*exit 1/)).toBeTruthy()
+    expect(terminal.writes).toEqual([])
   })
 })

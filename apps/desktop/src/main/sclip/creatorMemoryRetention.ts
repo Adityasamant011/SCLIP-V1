@@ -16,7 +16,8 @@ function sample(e: CreatorEvidence): CreatorEvidence {
   const data: Record<string, unknown> = { actor:e.data.actor, opId:e.data.opId, beforeState:e.data.beforeState, afterState:e.data.afterState,
     relationship:e.data.relationship, operationCount:operationCount(e), intention:e.data.intention,
     changes:summary.changes.slice(0,2).map(c=>({...c,properties:(c.properties as string[] | undefined)?.slice(0,2),values:c.values.slice(0,2)})),
-    ...(e.kind==='explicit_instruction'?{quote:e.data.quote}:{}),
+    ...(e.kind==='explicit_instruction'||e.kind==='user_prompt'?{quote:String(e.data.quote).slice(0,800),quoteTruncated:e.data.quoteTruncated||String(e.data.quote).length>800}:{}),
+    precedingPromptId:e.data.precedingPromptId,
     ...(e.kind==='reference'?{reference:summary.reference}:{}),
     detailCompacted:true, originalBytes:size(e), limitations:'Bounded factual sample; omitted detail is not recoverable from a hash.' }
   const out = {...e, data, claims:undefined}

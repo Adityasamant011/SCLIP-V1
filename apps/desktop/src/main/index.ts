@@ -1,8 +1,15 @@
+import { runtimeScheduler } from './sclip/runtimeScheduler.js'
+import { configurationIdentity } from './sclip/runtimeCapabilities.js'
+import { runtimeTrace } from './sclip/runtimeTrace.js'
 import { shotCompute } from './state/shotCompute.js'
+import { CloudAccount, validateCloudOrigin } from './sclip/cloudAccount.js'
+import { setManagedHermesEndpoint } from './sclip/hermesRuntime.js'
+import { SCLIP_MANAGED_MODEL } from '../shared/cloud-account.js'
 import { createAudioUnderstanding, managedAudioPaths, prepareAudioRuntime } from './sclip/audioUnderstanding'
 import { createLocalGeneration } from './sclip/localGeneration'
 import { ExternalMediaService } from './media/external/externalMediaService'
-import { isProviderConfigured } from './media/external/credentials'
+import { getProviderKey } from './media/external/credentials'
+import { configureSharedStock } from './media/external/sharedStock.js'
 import path from 'node:path'
 import { sourceSignature } from './state/mutations/textCorrection.js'
 import { locateLayer } from './state/mutations/helpers.js'
@@ -12,7 +19,7 @@ import os from 'node:os'
 import { Readable } from 'node:stream'
 import { createRequire } from 'node:module'
 import { execFile } from 'node:child_process'
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, Notification, protocol, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, Notification, protocol, safeStorage, shell } from 'electron'
 import { loadAllKeys, setKey, clearKey } from './keys.js'
 import { configuredHermesKeys, credentialTags, resolveHermesProviderEnvironment, testHermesConnection, validateHermesProfile } from './sclip/hermesSettings.js'
 import { createJevClient, JEV_MODEL } from './sclip/jevClient.js'
@@ -135,6 +142,7 @@ let windowGeometryStore: import('./windowGeometry.js').WindowGeometryStore | nul
 // in-flight transfer (its partial stays; the persisted queue resumes it next boot).
 let contentQueue: ContentQueue | null = null
 let hermesRuntime: import('./sclip/hermesRuntime.js').HermesRuntime | null = null
+let cloudAccount: CloudAccount | null = null
 let hermesTerminalRuntime: import('./sclip/hermesTerminalRuntime.js').HermesTerminalRuntime | null = null
 
 const isDev = !!process.env['ELECTRON_RENDERER_URL']
@@ -1001,11 +1009,17 @@ app.whenReady().then(async () => {
   const sourceBackend = backend
   const { backgroundJevAuthorized } = await import('./sclip/reviewer/backgroundAuthorization.js')
   const jevCredential = () => {
+    const profile = readHermesProfile(path.join(app.getPath('userData'), 'sclip-hermes'))
+    if (profile.provider === 'sclip-managed' && cloudAccount) return cloudAccount.managedEnvironment().OPENAI_API_KEY!
     const keys = loadAllKeys()
+    try {
     return resolveHermesProviderEnvironment({ provider: 'openrouter', model: JEV_MODEL, maxIterations: 60 }, tag => keys[tag], app.isPackaged ? {} : process.env).OPENROUTER_API_KEY
+    } catch { return '' } // Missing optional Jev credentials must remain a readiness result.
   }
   const jevDecide = createJevClient(jevCredential, fetch, receipt => emitLogEntry({ level: 'debug', category: { kind: 'Mcp' }, source: { kind: 'System' },
-    message: 'Jev inference usage', details: { provider: 'openrouter', ...receipt } }))
+    message: 'Jev inference usage', details: { provider: 'openrouter', ...receipt } }),
+    () => readHermesProfile(path.join(app.getPath('userData'), 'sclip-hermes')).provider === 'sclip-managed' && cloudAccount
+      ? `${cloudAccount.managedEndpoint()}/decisions` : 'https://openrouter.ai/api/alpha/decisions')
   const evaluateSourcePassages = createSourcePassageEvaluator(async id => {
     if (!tsHost?.actor.snapshot().media_pool[id]) throw new Error('Imported source media not found.')
     const result = await handleReadResource(sourceBackend, () => tsHost, `media://${id}/transcript`)
@@ -1062,7 +1076,11 @@ app.whenReady().then(async () => {
   })
   app.once('before-quit', () => liveFeedback.dispose())
 
+  runtimeTrace.configure(path.join(app.getPath('userData'),'runtime','timing.jsonl'))
   const mcpHost = await startMcpHost(backend, {
+    getRuntimePermissions:()=>({jev_credentials:!!jevCredential(),jev_background:backgroundJevAuthorized(process.env,jevCredential),jev_failure:process.env.SCLIP_FAILURE_JEV_AUTHORIZED==='1'&&!!jevCredential(),local_background_perception:process.env.SCLIP_BACKGROUND_PERCEPTION_AUTHORIZED==='1'}),
+    getSpeechIdentity:()=>configurationIdentity({backend:getPreferredEngine(),local:speechConfig.get().local}),
+    getReasoningProfile:()=>{const p=readHermesProfile(path.join(app.getPath('userData'),'sclip-hermes'));return {model:p.model,provider:p.provider,readiness:'configured_unverified'}},
     enableExternalMedia: true,
     externalMediaService: new ExternalMediaService(true),
     localGeneration: process.platform === 'darwin' && process.arch === 'arm64' ? createLocalGeneration({
@@ -1276,6 +1294,34 @@ app.whenReady().then(async () => {
     setKey(SCLIP_GATEWAY_KEY_TAG, generated)
     return generated
   }
+  let cloudOrigin = app.isPackaged ? '' : process.env.SCLIP_CLOUD_URL?.trim() ?? ''
+  const cloudConfigPath = path.join(process.resourcesPath, 'sclip-cloud.json')
+  try {
+    if (fs.existsSync(cloudConfigPath)) {
+      const cloudConfig = JSON.parse(fs.readFileSync(cloudConfigPath, 'utf8')) as { gatewayUrl?: string }
+      cloudOrigin = cloudConfig.gatewayUrl ?? ''
+    }
+    if (cloudOrigin) cloudOrigin = validateCloudOrigin(cloudOrigin)
+  } catch { cloudOrigin = ''; console.warn('[Sclip] Account configuration is invalid; managed AI is unavailable.') }
+  // Separate vault: an account refresh token is not a model/provider key and
+  // must never enter the generic key cache, key-tag selector or agent process.
+  const accountSessionFile = path.join(app.getPath('userData'),'sclip-account-session.enc')
+  cloudAccount = new CloudAccount({ gatewayUrl: cloudOrigin, enforcePayment: app.isPackaged,
+    onUsage: () => broadcastEvent(BrowserWindow.getAllWindows(),'sclip:account_changed',{}),
+    readSecret: () => { try { return safeStorage.decryptString(fs.readFileSync(accountSessionFile)) } catch { return undefined } },
+    writeSecret: value => {
+      if (!encryptionAvailable()) throw new Error('Allow secure OS storage before signing in.')
+      fs.writeFileSync(`${accountSessionFile}.tmp`,safeStorage.encryptString(value),{ mode:0o600 })
+      fs.renameSync(`${accountSessionFile}.tmp`,accountSessionFile)
+    },
+    clearSecret: () => { fs.rmSync(accountSessionFile,{ force:true }) },
+  })
+  setManagedHermesEndpoint(await cloudAccount.startProxy())
+  configureSharedStock(cloudAccount.configured ? route => cloudAccount!.api(route) : null)
+  const initialHermesHome = path.join(app.getPath('userData'), 'sclip-hermes')
+  if (cloudAccount.configured && !fs.existsSync(path.join(initialHermesHome,'config.yaml'))) {
+    writeHermesProfile(initialHermesHome,0,{ provider:'sclip-managed', model:SCLIP_MANAGED_MODEL, maxIterations:100 })
+  }
   const DEFAULT_HERMES_SOURCE = '/Users/adityasamant/SCLIP/hermes-agent-src'
   const resolvedHermesSource = process.env.SCLIP_HERMES_SOURCE?.trim() || (fs.existsSync(DEFAULT_HERMES_SOURCE) ? DEFAULT_HERMES_SOURCE : undefined)
   hermesRuntime = new HermesRuntime({
@@ -1290,6 +1336,7 @@ app.whenReady().then(async () => {
     onStatus: status => broadcastEvent(BrowserWindow.getAllWindows(), 'sclip:hermes_runtime', status),
   })
   const resolveProviderEnvironment = (profile: import('./sclip/hermesRuntime.js').HermesProfileConfig) => {
+    if (profile.provider === 'sclip-managed') return cloudAccount!.managedEnvironment()
     const keys = loadAllKeys()
     return resolveHermesProviderEnvironment(profile, tag => keys[tag], app.isPackaged ? {} : process.env)
   }
@@ -1319,6 +1366,12 @@ app.whenReady().then(async () => {
     },
     getProfileConfig: () => readHermesProfile(path.join(app.getPath('userData'), 'sclip-hermes')),
     getCreatorContext: (projectId, request) => creatorStyleStore?.context(projectId, request) ?? '',
+    prepareCreatorRequest: (projectId, sessionId, turnId, text) => {
+      const project=tsHost!.actor.snapshot()
+      if(project.project_id!==projectId)throw new Error('Creator learning requires the current project')
+      creatorStyleStore?.observePrompt(project,sessionId,turnId,text)
+      return creatorStyleStore?.learningContext(projectId,text) ?? ''
+    },
     getCreatorSessionKey: projectId => creatorStyleStore?.sessionKey(projectId) ?? 'local:0',
     assertCreatorGateway: projectId => {
       if (creatorStyleStore?.binding(projectId).creatorId !== 'local') throw new Error('Use the Hermes terminal for an isolated creator session')
@@ -1329,6 +1382,12 @@ app.whenReady().then(async () => {
   })
   hermesTerminalRuntime = new HermesTerminalRuntime({
     onSubmittedPrompt: (projectId, brief) => mcpHost.setEditingBrief(brief,projectId),
+    prepareCreatorTurn: (projectId, sessionId, turnId, text) => {
+      const project=tsHost!.actor.snapshot()
+      if(project.project_id!==projectId)throw new Error('Creator learning requires the current project')
+      creatorStyleStore?.observePrompt(project,sessionId,turnId,text)
+      return creatorStyleStore?.learningContext(projectId,text) ?? ''
+    },
     registerLifecycle: (projectId,sessionId,handler) => mcpHost.registerHermesTerminal(projectId,sessionId,handler),
     isPackaged: app.isPackaged,
     resourcesPath: process.resourcesPath,
@@ -1341,6 +1400,7 @@ app.whenReady().then(async () => {
     getCreatorHome: (base, projectId) => creatorStyleStore?.home(base, projectId) ?? base,
     getCreatorSessionKey: projectId => creatorStyleStore?.sessionKey(projectId) ?? 'local:0',
     assertSession: async (projectId, sessionId) => {
+      await cloudAccount!.assertAiAccess(readHermesProfile(path.join(app.getPath('userData'), 'sclip-hermes')).provider === 'sclip-managed')
       if (hermesRuntime?.snapshot().state !== 'ready') throw new Error('Reconnect Hermes before opening its terminal')
       const activeProjectId = await (async () => {
         const summary = await tsHost!.handleInvoke('project_summary', {}) as { project_id?: unknown }
@@ -1362,6 +1422,28 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.handle('backend:invoke', async (_e, { channel, args }) => {
+    if (channel === 'sclip_account_get') return cloudAccount!.view()
+    if (channel === 'sclip_account_sign_in') {
+      const input = args as { email: string; password: string; signup?: boolean }
+      return cloudAccount!.signIn(input.email, input.password, input.signup === true)
+    }
+    if (channel === 'sclip_account_sign_out') {
+      await stopActiveHermesRuns()
+      hermesTerminalRuntime?.stopAll()
+      await cloudAccount!.signOut()
+      return { ok: true }
+    }
+    if (channel === 'sclip_account_checkout' || channel === 'sclip_account_portal') {
+      const plan = (args as { plan?: unknown } | undefined)?.plan
+      if (channel === 'sclip_account_checkout' && plan !== 'byok' && plan !== 'managed') throw new Error('Choose a supported plan.')
+      const url = await cloudAccount!.billingLink(channel === 'sclip_account_checkout' ? plan as 'byok'|'managed' : undefined)
+      await shell.openExternal(url)
+      return { ok: true }
+    }
+    if (channel === 'sclip_account_reset_password') {
+      await cloudAccount!.resetPassword((args as { email:string }).email)
+      return { ok:true }
+    }
     if (channel === 'sclip_creator_style') {
       if (!creatorStyleStore) throw new Error('Creator memory unavailable; existing file preserved')
       const project = tsHost!.actor.snapshot()
@@ -1420,6 +1502,7 @@ app.whenReady().then(async () => {
         apiKey?: string
       }
       validateHermesProfile({ provider, model, customBaseUrl, maxIterations })
+      if (provider === 'sclip-managed' && model !== SCLIP_MANAGED_MODEL) throw new Error('Sclip AI uses GLM 5.3 Flash.')
       if (apiKey !== undefined && provider) {
         if (apiKey.trim()) {
           if (!encryptionAvailable()) throw new Error('Allow macOS Keychain access before saving API keys.')
@@ -1463,6 +1546,10 @@ app.whenReady().then(async () => {
       const home = path.join(app.getPath('userData'), 'sclip-hermes')
       const input = (args ?? {}) as { provider?: string; model?: string; customBaseUrl?: string }
       validateHermesProfile(input)
+      if (input.provider === 'sclip-managed') {
+        try { await cloudAccount!.assertAiAccess(true); return { ok: true, message: 'Your managed plan is active. Model inference has not been tested by this check.' } }
+        catch (e) { return { ok: false, message: e instanceof Error ? e.message : 'Sclip AI is unavailable.' } }
+      }
       const profile = { ...readHermesProfile(home), ...input }
       const keys = loadAllKeys()
       return testHermesConnection(profile, tag => keys[tag], app.isPackaged ? {} : process.env)
@@ -1499,7 +1586,10 @@ app.whenReady().then(async () => {
       await hermesTerminalRuntime?.resize(projectId, sessionId, cols, rows)
       return null
     }
-    if (channel === 'sclip_start_hermes_run') return startHermesRun(args as { prompt: string; projectId: string; sessionId: string })
+    if (channel === 'sclip_start_hermes_run') {
+      await cloudAccount!.assertAiAccess(readHermesProfile(path.join(app.getPath('userData'), 'sclip-hermes')).provider === 'sclip-managed')
+      return startHermesRun(args as { prompt: string; projectId: string; sessionId: string })
+    }
     if (channel === 'sclip_stop_hermes_run') {
       const { runId } = (args ?? {}) as { runId: string }
       return stopHermesRun(runId)
@@ -1512,7 +1602,10 @@ app.whenReady().then(async () => {
       const { runId } = (args ?? {}) as { runId: string }
       return getHermesRun(runId)
     }
-    if (channel === 'sclip_list_project_sessions') return listProjectSessions((args as { projectId: string }).projectId)
+    if (channel === 'sclip_list_project_sessions') {
+      const input = args as { projectId: string; includeMessages?: boolean }
+      return listProjectSessions(input.projectId, input.includeMessages !== false)
+    }
     if (channel === 'sclip_create_project_session') {
       const { projectId, name } = args as { projectId: string; name: string }
       return createProjectSession(projectId, name)
@@ -1550,7 +1643,9 @@ app.whenReady().then(async () => {
     // API-key writes need safeStorage (main-only) + a push into the backend
     // cache. Intercept here; status/test fall through to the Rust dispatcher.
     if (channel === 'stock_media_status') {
-      return { providers: (['pexels', 'pixabay'] as const).map(provider => ({ provider, configured: isProviderConfigured(provider) })) }
+      const account = await cloudAccount?.view().catch(() => null)
+      return { sharedAvailable: !!account?.active && !!account?.sharedStockEnabled,
+        providers: (['pexels', 'pixabay'] as const).map(provider => ({ provider, configured: !!getProviderKey(provider) })) }
     }
     if (channel === 'settings_set_api_key') {
       const { provider, key } = (args ?? {}) as { provider: string; key: string }
@@ -2766,6 +2861,8 @@ app.on('window-all-closed', () => app.quit())
 // A null tsHost early-returns: nothing to flush before whenReady constructs the host.
 let quitFlushed = false
 app.on('before-quit', (event) => {
+  runtimeScheduler.close()
+  cloudAccount?.close()
   motifWatcher?.close(); motifWatcher = null
   // Abort an in-flight content download so its file handle closes at a chunk
   // boundary. The partial and the persisted queue both stay: the next boot

@@ -1,3 +1,8 @@
+import { ownedCommand } from '../ownedCommand.js'
+import { resolveFfmpegPath } from '../rangeRender.js'
+import { evidenceStore } from '../evidenceStore.js'
+import { runtimeScope } from '../runtimeScheduler.js'
+import { placedLayers } from '../audioAudibility.js'
 import { textLayoutBox, textHorizontalBounds } from '../textLayoutFacts.js'
 import { timelineCoverage, audioAudibility } from '../audioAudibility.js'
 import { fontAvailability } from '../../fonts/resolveSystemFont.js'
@@ -6,7 +11,6 @@ import { reviewState } from '../evidenceCoordinates.js'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import * as os from 'node:os'
-import { spawn } from 'node:child_process'
 import type { TsActorHost } from '../../state/ts-actor-host.js'
 import type { Composition, Layer, Project } from '../../state/model.js'
 import type { VisionSidecarManager } from '../visionSidecar.js'
@@ -18,19 +22,8 @@ import type {
 import type { JevDecide } from '../jevClient.js'
 
 
-export async function extractFrameAtTime(videoPath: string, timeSec: number, outputPath: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    const child = spawn('ffmpeg', [
-      '-y',
-      '-ss', timeSec.toFixed(3),
-      '-i', videoPath,
-      '-vframes', '1',
-      '-q:v', '2',
-      outputPath,
-    ], { stdio: 'ignore' })
-    child.on('exit', (code) => resolve(code === 0))
-    child.on('error', () => resolve(false))
-  })
+export async function extractFrameAtTime(videoPath:string,timeSec:number,outputPath:string,signal?:AbortSignal):Promise<boolean> {
+  try {await ownedCommand(resolveFfmpegPath(process.resourcesPath),['-y','-ss',timeSec.toFixed(3),'-i',videoPath,'-vframes','1','-q:v','2',outputPath],signal);return true}catch{return false}
 }
 
 export class BackgroundReviewer {
@@ -52,13 +45,14 @@ export class BackgroundReviewer {
   private generation = 0
   private controller?: AbortController
   private cachedState?: string
+  private readonly narrativeCache=new Map<string,Record<string,number>>()
 
   constructor(
     private readonly tsHost: TsActorHost,
     private readonly visionSidecar?: VisionSidecarManager,
     private readonly debounceMs = 1500,
     private readonly rangeRenderer: typeof renderTimelineRange = renderTimelineRange,
-    private readonly frameExtractor: (videoPath: string, timeSec: number, outputPath: string) => Promise<boolean> = extractFrameAtTime,
+    private readonly frameExtractor: (videoPath: string, timeSec: number, outputPath: string,signal?:AbortSignal) => Promise<boolean> = extractFrameAtTime,
     private readonly jevDecide?: JevDecide,
     private readonly authorization: { jev?: () => boolean; localPerception?: () => boolean; deadlineMs?: number } = {},
   ) {
@@ -108,7 +102,7 @@ export class BackgroundReviewer {
       coverage: deep ? 'Authorized optional observations where available; partial, not comprehensive. Vocal delivery quality unassessed.' : 'Deterministic layout estimates only; rendered audio, vocal delivery, meaning, story and export uninspected',
       issues: unique.map(i => ({ ...i, coordinate_space: 'timeline', ...identity,
         evidence_class: /^(visual_mismatch|broken_thought|narrative_whiplash)/.test(i.id) ? 'MODEL_OBSERVATION' : 'DETERMINISTIC_MEASUREMENT',
-        evidence_basis: /^(broken_thought|narrative_whiplash)/.test(i.id) ? 'Legacy inline VIDEO source transcript windows mapped to the cut; not proof of the audible mixed speech. Normal cached transcript availability is separate.' : /^(speech_chop|pop_|silence_|beat_|energy_)/.test(i.id) ? 'Optional bounded rendered-range waveform/spectral measurements, estimated beats or provided source word timings; not a semantic delivery judgment.' : /^visual_mismatch/.test(i.id) ? 'Optional cross-modal perception observation; partial coverage and fallible interpretation.' : 'Authoritative layer/media metadata, deterministic layout estimate; not rendered pixels.',
+        evidence_basis: /^(broken_thought|narrative_whiplash)/.test(i.id) ? 'Current dependency-validated rendered-mix recognition around authored visual boundaries. Partial, fallible text-only Jev concern; not visual alignment or a story verdict.' : /^(speech_chop|pop_|silence_|beat_|energy_)/.test(i.id) ? 'Optional bounded rendered-range waveform/spectral measurements, estimated beats or provided source word timings; not a semantic delivery judgment.' : /^visual_mismatch/.test(i.id) ? 'Optional cross-modal perception observation; partial coverage and fallible interpretation.' : 'Authoritative layer/media metadata, deterministic layout estimate; not rendered pixels.',
         requires_inspection: true, uncertainty: 'Potential concern; Hermes must inspect relevant rendered evidence and decide whether intentional or actionable.' })),
     }
     return this.currentSummary
@@ -167,7 +161,7 @@ export class BackgroundReviewer {
     const issues: TimelineCritiqueIssue[] = []
     this.auditLayoutAndMotifs(snap, comp, issues)
     // Optional perception has its own explicit local authorization. No automatic model calls.
-    if (this.visionSidecar && this.authorized('localPerception')) await this.auditAudioPerception(snap, comp, issues, commitId)
+    if (this.visionSidecar && this.authorized('localPerception')) await runtimeScope.run({...runtimeScope.getStore(),signal:this.controller.signal,priority:0},()=>this.auditAudioPerception(snap,comp,issues,commitId))
     if (this.isCurrent(generation, state) && this.jevDecide && this.authorized('jev')) await this.auditNarrativeCoherence(snap, comp, issues, commitId)
     if (!this.isCurrent(generation, state)) return this.getSummary()
     return this.publish(snap, issues, state, true)
@@ -470,8 +464,8 @@ export class BackgroundReviewer {
               const tmp1 = path.join(os.tmpdir(), `av_sync_1_${Date.now()}.jpg`)
               const tmp2 = path.join(os.tmpdir(), `av_sync_2_${Date.now()}.jpg`)
               try {
-                const ok1 = await this.frameExtractor(rendered.path, relSec, tmp1)
-                const ok2 = await this.frameExtractor(rendered.path, relSec + 0.4, tmp2)
+                const ok1 = await this.frameExtractor(rendered.path, relSec, tmp1,this.controller?.signal)
+                const ok2 = await this.frameExtractor(rendered.path, relSec + 0.4, tmp2,this.controller?.signal)
                 if (ok1 && ok2) {
                   if (this.destroyed || this.controller?.signal.aborted || !this.authorized('localPerception')) return
                   const seqRes = await this.visionSidecar.inspectSequence({
@@ -510,7 +504,7 @@ export class BackgroundReviewer {
               const relSec = (speechMidpointUs - reviewStartUs) / 1e6
               const tmpF = path.join(os.tmpdir(), `av_semantic_${Date.now()}.jpg`)
               try {
-                const ok = await this.frameExtractor(rendered.path, relSec, tmpF)
+                const ok = await this.frameExtractor(rendered.path, relSec, tmpF,this.controller?.signal)
                 if (ok) {
                   if (this.destroyed || this.controller?.signal.aborted || !this.authorized('localPerception')) return
                   const visRes = await this.visionSidecar.analyze({
@@ -546,180 +540,37 @@ export class BackgroundReviewer {
   }
 
   /**
-   * Uses Jev to detect narrative incoherence at cut boundaries across the A-roll track.
+   * Uses optional Jev advice on dependency-validated current rendered speech around visual boundaries.
    * Checks two things per boundary:
    *   1. Broken thought / Frankenbite: dialogue at the cut leaves a dangling, incomplete sentence.
    *   2. Narrative whiplash: the topic of clip B abruptly abandons or contradicts clip A.
    *
    * Only runs in the async runReview() path (NOT auditSynchronous).
-   * Gracefully no-ops if: jevDecide is absent, no A-roll, no transcripts, or Jev offline.
+   * No-ops when authorization or current rendered speech is absent; no inline source-transcript substitute.
    */
-  private async auditNarrativeCoherence(
-    project: Project,
-    comp: Composition,
-    issues: TimelineCritiqueIssue[],
-    commitId: string,
-  ): Promise<void> {
-    if (!this.jevDecide) return
-
+  private async auditNarrativeCoherence(project:Project,_comp:Composition,issues:TimelineCritiqueIssue[],commitId:string):Promise<void> {
+    if(!this.jevDecide||!this.authorized('jev'))return
+    const speech=evidenceStore.currentAudio(project)
+    const segments=speech.flatMap(e=>e.result.transcript?.status==='available'?e.result.transcript.segments??[]:[])
+    if(!segments.length)return
+    const cuts=[...new Set(placedLayers(project).filter(p=>p.layer.params.kind==='VideoClip'||p.layer.params.kind==='Motif').map(p=>p.start_us))].filter(t=>t>0).sort((a,b)=>a-b)
+    const boundaries=cuts.flatMap(t=>{
+      if(!speech.some(e=>e.start<=Math.max(0,t-2000000)&&e.end>=t+2000000))return []
+      const before=segments.filter(s=>s.t_start_us<t&&s.t_end_us>t-6000000).map(s=>s.text).join(' ').slice(-700)
+      const after=segments.filter(s=>s.t_end_us>t&&s.t_start_us<t+6000000).map(s=>s.text).join(' ').slice(0,700)
+      return before&&after?[{t_us:t,before,after}]:[]
+    }).slice(0,8)
+    if(!boundaries.length)return
+    const key=createHash('sha256').update(JSON.stringify({state:reviewState(project),boundaries,version:2})).digest('hex')
+    const questions:Record<string,import('../jevClient.js').JevQuestion>={}
+    boundaries.forEach((_b,i)=>{questions['boundary_'+i]={type:'noul',instructions:`Evaluate adjacent recognized audible-mix context at visual boundary ${i}. A visual cut is not necessarily a speech edit; an unfinished phrase continued in after is valid. ASR can be wrong.`,criteria:{true:'The combined before/after audible text appears to contain a broken logical connection or contradictory discontinuity needing human/foreground inspection.',false:'The audible text continues plausibly, including continuous narration across a visual cut, or evidence is insufficient.'}}})
     try {
-      // Find A-roll track
-      const aRollTrack = comp.tracks.find((t) => {
-        const label = ((t as any).label ?? (t as any).name ?? '').toLowerCase()
-        return t.role === 'ARoll' || label.includes('a-roll') || label.includes('aroll') || label.includes('video')
-      })
-      if (!aRollTrack || aRollTrack.layers.length < 2) return
-
-      const sortedClips = [...aRollTrack.layers]
-        .filter((l) => l.enabled && (l.params as any).kind === 'VideoClip')
-        .sort((a, b) => a.t_start_us - b.t_start_us)
-      if (sortedClips.length < 2) return
-
-      // Build a word-boundary index keyed by media_id
-      type WordBoundary = { word: string; t_start_us: number; t_end_us: number }
-      const mediaWords = new Map<string, WordBoundary[]>()
-      for (const [mediaId, media] of Object.entries(project.media_pool)) {
-        const trans = (media as any).transcript
-        if (!trans || !Array.isArray(trans.segments)) continue
-        const words: WordBoundary[] = []
-        for (const seg of trans.segments) {
-          if (!Array.isArray(seg.words)) continue
-          for (const w of seg.words) {
-            if (w.text && typeof w.t_start_us === 'number' && typeof w.t_end_us === 'number') {
-              words.push({ word: w.text.trim(), t_start_us: w.t_start_us, t_end_us: w.t_end_us })
-            }
-          }
-        }
-        if (words.length > 0) mediaWords.set(mediaId, words)
-      }
-      if (mediaWords.size === 0) return
-
-      // Collect context sentences around each cut boundary
-      // Grab the last ~3 sentence-boundary words of clip A and first ~3 of clip B.
-      // Keep the window tiny to stay well within Jev's 30KB limit.
-      const WINDOW_WORDS = 30 // words per side of a cut
-      type BoundaryCtx = {
-        cutIdx: number
-        cutTimeUs: number
-        beforeText: string
-        afterText: string
-      }
-      const boundaries: BoundaryCtx[] = []
-
-      for (let i = 0; i < sortedClips.length - 1; i++) {
-        const clipA = sortedClips[i]
-        const clipB = sortedClips[i + 1]
-        const mediaIdA = (clipA.params as any).media as string | undefined
-        const mediaIdB = (clipB.params as any).media as string | undefined
-
-        const wordsA = mediaIdA ? (mediaWords.get(mediaIdA) ?? []) : []
-        const wordsB = mediaIdB ? (mediaWords.get(mediaIdB) ?? []) : []
-
-        // Words in clip A's used range (source offset via in_point_us)
-        const inA = (clipA.params as any).src_in_us ?? (clipA.params as any).in_point_us ?? 0
-        const outA = (clipA.params as any).src_out_us ?? inA + (clipA.t_end_us - clipA.t_start_us)
-        const tailWordsA = wordsA
-          .filter((w) => w.t_start_us >= inA && w.t_end_us <= outA)
-          .slice(-WINDOW_WORDS)
-
-        const inB = (clipB.params as any).src_in_us ?? (clipB.params as any).in_point_us ?? 0
-        const outB = (clipB.params as any).src_out_us ?? inB + (clipB.t_end_us - clipB.t_start_us)
-        const headWordsB = wordsB
-          .filter((w) => w.t_start_us >= inB && w.t_end_us <= outB)
-          .slice(0, WINDOW_WORDS)
-
-        if (tailWordsA.length === 0 && headWordsB.length === 0) continue
-
-        boundaries.push({
-          cutIdx: i,
-          cutTimeUs: clipA.t_end_us,
-          beforeText: tailWordsA.map((w) => w.word).join(' '),
-          afterText: headWordsB.map((w) => w.word).join(' '),
-        })
-      }
-
-      if (boundaries.length === 0) return
-
-      // Build Jev state: an array of {before, after} objects at each cut
-      // Two questions per boundary: broken_thought and topic_whiplash
-      const jevState = boundaries.map((b) => ({
-        before: b.beforeText,
-        after: b.afterText,
-      }))
-
-      // Check byte limit; if too large, reduce to first N boundaries that fit
-      const MAX_BYTES = 28_000 // conservative headroom below Jev's 30KB limit
-      let stateTrimmed = jevState
-      while (Buffer.byteLength(JSON.stringify(stateTrimmed)) > MAX_BYTES && stateTrimmed.length > 1) {
-        stateTrimmed = stateTrimmed.slice(0, Math.floor(stateTrimmed.length * 0.75))
-      }
-      const activeBoundaries = boundaries.slice(0, stateTrimmed.length)
-
-      // Build one set of Jev questions per boundary index
-      const questions: Record<string, import('../jevClient.js').JevQuestion> = {}
-      for (let i = 0; i < activeBoundaries.length; i++) {
-        questions[`broken_${i}`] = {
-          type: 'noul',
-          instructions: `Evaluate cut boundary #${i}. "before" is the last words of clip A; "after" is the first words of clip B.`,
-          criteria: {
-            true: 'The dialogue in "before" ends with an incomplete or dangling sentence fragment — a word or phrase that clearly expects continuation (e.g. "and then…", "which means that…", mid-enumeration, trailing conjunction, or unfinished thought).',
-            false: 'The dialogue in "before" ends at a natural sentence boundary or pause — the thought is complete even if brief.',
-          },
-        }
-        questions[`whiplash_${i}`] = {
-          type: 'noul',
-          instructions: `Evaluate cut boundary #${i}. "before" is the last words of clip A; "after" is the first words of clip B.`,
-          criteria: {
-            true: 'The topic or subject of "after" abruptly contradicts or completely abandons the topic of "before" with no logical connection — jarring, confusing for a viewer.',
-            false: 'The topic of "after" follows naturally from or is reasonably related to the topic of "before".',
-          },
-        }
-      }
-
-      if (this.destroyed || this.controller?.signal.aborted || this.inFlightCommitId !== commitId) return
-
-      if (this.destroyed || this.controller?.signal.aborted || !this.authorized('jev')) return
-      const result = await this.jevDecide(stateTrimmed, questions, this.controller?.signal)
-
-      if (this.destroyed || this.controller?.signal.aborted || this.inFlightCommitId !== commitId) return
-
-      const BROKEN_THRESHOLD = 0.72
-      const WHIPLASH_THRESHOLD = 0.72
-
-      for (let i = 0; i < activeBoundaries.length; i++) {
-        const b = activeBoundaries[i]
-        const brokenScore = result.answers[`broken_${i}`] ?? 0
-        const whiplashScore = result.answers[`whiplash_${i}`] ?? 0
-
-        if (brokenScore >= BROKEN_THRESHOLD) {
-          issues.push({
-            id: `broken_thought_${b.cutTimeUs}`,
-            severity: 'warning',
-            category: 'audio_cutoff',
-            t_us: b.cutTimeUs,
-            affected_range_us: [b.cutTimeUs, b.cutTimeUs],
-            description: `Possible Frankenbite/broken thought at cut ${(b.cutTimeUs / 1e6).toFixed(2)}s (uncalibrated Jev score ${brokenScore.toFixed(2)}): clip A ends mid-sentence ("…${b.beforeText.slice(-60)}"), leaving dialogue incomplete.`,
-            suggested_action: `Inspect actual rendered speech and source context; choose a repair only if the boundary damages meaning.`,
-          })
-        }
-
-        if (whiplashScore >= WHIPLASH_THRESHOLD) {
-          issues.push({
-            id: `narrative_whiplash_${b.cutTimeUs}`,
-            severity: 'warning',
-            category: 'pacing',
-            t_us: b.cutTimeUs,
-            affected_range_us: [b.cutTimeUs, b.cutTimeUs],
-            description: `Possible narrative whiplash at cut ${(b.cutTimeUs / 1e6).toFixed(2)}s (uncalibrated Jev score ${whiplashScore.toFixed(2)}): clip B topic appears to abruptly abandon clip A ("${b.beforeText.slice(0, 40)}…" → "${b.afterText.slice(0, 40)}…").`,
-            suggested_action: `Inspect surrounding rendered context; Hermes decides whether the transition serves the intended story.`,
-          })
-        }
-      }
-    } catch (err) {
-      // Non-fatal — Jev may be offline, over quota, or input too large.
-      // The reviewer continues; layout/audio audits are unaffected.
-      console.warn('[BackgroundReviewer] Narrative coherence pass skipped:', err instanceof Error ? err.message : err)
-    }
+      if(this.destroyed||this.controller?.signal.aborted||this.inFlightCommitId!==commitId)return
+      let answers=this.narrativeCache.get(key)
+      if(!answers){answers=(await this.jevDecide(boundaries,questions,this.controller?.signal)).answers;this.narrativeCache.set(key,answers);if(this.narrativeCache.size>8)this.narrativeCache.delete(this.narrativeCache.keys().next().value!)}
+      if(this.destroyed||this.controller?.signal.aborted||this.inFlightCommitId!==commitId)return
+      boundaries.forEach((b,i)=>{const score=answers!['boundary_'+i]??0;if(score>=0.72)issues.push({id:`narrative_whiplash_${b.t_us}`,severity:'suggestion',category:'pacing',t_us:b.t_us,affected_range_us:[Math.max(0,b.t_us-2000000),b.t_us+2000000],description:`Possible audible-context discontinuity near this visual boundary (uncalibrated Jev score ${score.toFixed(2)}). This may be intentional or an ASR error.`,suggested_action:'Inspect surrounding current audible speech and source context; the foreground agent decides whether any repair serves the brief.'})})
+    }catch{/* Optional advice never replaces current facts or fails the edit. */}
   }
 
   public dispose(): void {

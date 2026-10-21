@@ -4,12 +4,13 @@ import { createHash, randomUUID } from 'node:crypto'
 import type { ChangeEvent } from '../state/actor.js'
 import type { Project, Layer } from '../state/model.js'
 import type { CreatorBinding, CreatorEvidence, CreatorPreference, CreatorStyleView, StyleScope } from '../../shared/creator-style.js'
-import { changedProperties, canGroupAdjustments } from './creatorEvidence.js'
+import { changedProperties, canGroupAdjustments, summarizeCreatorEvidence } from './creatorEvidence.js'
 import { emptyMemory, readMemory, validateMemory, memoryDigest, type CreatorMemoryDocument } from './creatorMemoryDocument.js'
 import { controlKey, emptyFilter, filterAdd, filterHas, filterUnion, preferenceKey } from './creatorMemoryKeys.js'
 import { selectCreatorMemory, creatorPreferenceIsLive } from './creatorMemoryRetrieval.js'
 import { protectedKnowledge } from './creatorMemoryRecovery.js'
 import { retainMemory, statsFor } from './creatorMemoryRetention.js'
+import { creatorProjectFacts, CREATOR_LEARNING_GUIDANCE, isHostFeedback, learningPending } from './creatorLearning.js'
 
 const clean = (value: unknown, name: string, max = 1000): string => {
   if (typeof value !== 'string' || !value.trim() || value.length > max) throw new Error(`Invalid ${name} (1–${max} characters required)`)
@@ -23,8 +24,10 @@ function layers(project: Project) {
   return new Map(Object.values(project.compositions).flatMap(c => c.tracks.flatMap(t => t.layers.map((l, index) => [l.id, { ...relevantLayer(l), compositionId: c.id, trackId: t.id, stackIndex: index }] as const))))
 }
 function structure(project: Project) {
-  return { audio_roles: project.audio_roles, compositions: Object.values(project.compositions).map(c => ({ id: c.id, width: c.width, height: c.height, fps: c.fps, transitions: c.transitions, links: c.links, tracks: c.tracks.map(t => ({ id: t.id, enabled: t.enabled, muted: t.muted, solo: t.solo, role: t.role })) })) }
+  return { audio_roles: project.audio_roles, compositions: Object.fromEntries(Object.values(project.compositions).map(c => [c.id,{ id: c.id, width: c.width, height: c.height, fps: c.fps, transitions: c.transitions, links: c.links, tracks: Object.fromEntries(c.tracks.map(t => [t.id,{ id: t.id, enabled: t.enabled, muted: t.muted, solo: t.solo, role: t.role }])) }])) }
 }
+const propertyHash=(value:unknown,key:string)=>{const item=key.split('.').reduce<any>((v,k)=>v?.[k],value);return digest({present:item!==undefined,value:item})}
+const overlaps=(a:string,b:string)=>a===b||a.startsWith(`${b}.`)||b.startsWith(`${a}.`)
 function scopeFor(value: unknown, projectId: string, binding: CreatorBinding): StyleScope {
   const scope = value as Partial<StyleScope> | undefined
   if (!scope || scope.kind === 'creator') return { kind: 'creator' }
@@ -131,6 +134,41 @@ export class CreatorStyleStore {
     return this.selection(projectId,request).context
   }
   private selection(projectId:string,request='') { return selectCreatorMemory(this.doc,projectId,request,e=>this.relevantEvidence(e,projectId)) }
+  /** Native accepted user messages, never keystroke guesses, generated followups or assistant text. */
+  observePrompt(project: Project, sessionId: string, turnId: string, text: string): void {
+    const projectId=project.project_id
+    if(!this.enabled(projectId)||!text.trim()||text.startsWith('/')||isHostFeedback(text))return
+    const key=digest([this.sessionKey(projectId),projectId,sessionId,turnId]),hex=key.slice(0,32)
+    const id=[hex.slice(0,8),hex.slice(8,12),hex.slice(12,16),hex.slice(16,20),hex.slice(20)].join('-')
+    if(this.doc.evidence.some(e=>e.id===id)||this.doc.promptReceipts?.includes(key))return
+    const binding=this.binding(projectId)
+    this.mutate(doc=>{
+      doc.evidence.push({id,creatorId:binding.creatorId,projectId,seriesId:binding.seriesId,at:new Date().toISOString(),kind:'user_prompt',authority:'creator_statement',
+        data:{quote:text.slice(0,6000),quoteTruncated:text.length>6000,session: digest(sessionId).slice(0,24),turn: digest(turnId).slice(0,24),
+          project:creatorProjectFacts(project),precedingAgentOperations:doc.proposals.filter(p=>p.creatorId===binding.creatorId&&p.projectId===projectId).slice(-4).map(p=>({opId:p.opId,layerId:p.layerId,promptEvidenceId:p.promptEvidenceId,properties:p.properties,before:p.before,after:p.after})),
+          intention:'User request/reaction; whether it expresses style, a technical repair, approval, or unrelated conversation requires foreground interpretation.'}})
+      doc.promptReceipts=[...doc.promptReceipts??[],key].slice(-128)
+      statsFor(doc,binding.creatorId).admittedObservations++
+    })
+  }
+  learningContext(projectId: string, request=''): string {
+    if(!this.enabled(projectId))return ''
+    const packet=this.agent(projectId,{action:'context',request})
+    return `${packet.context}\n${CREATOR_LEARNING_GUIDANCE}\n${JSON.stringify({creator_id:packet.binding.creatorId,expected_revision:packet.revision,pending_evidence:packet.pending_evidence,learning_status:packet.learning_status})}`
+  }
+  /** Explicit migration of reviewed legacy entries. This never edits generic Hermes files. */
+  archiveLegacyStyleNotes(projectId: string, sourceSha256: string, notes: string[]): void {
+    if(!this.enabled(projectId))throw Error('Creator learning is disabled')
+    if(!/^[a-f0-9]{64}$/.test(sourceSha256)||!notes.length||notes.length>20||notes.some(n=>!n.trim()||n.length>6000))throw Error('Invalid reviewed legacy archive')
+    const binding=this.binding(projectId),id=digest([binding.creatorId,sourceSha256,'legacy-style-archive'])
+    if(this.doc.evidence.some(e=>e.id===id))return
+    this.mutate(doc=>{
+      doc.generation++
+      doc.evidence.push({id,creatorId:binding.creatorId,projectId,seriesId:binding.seriesId,at:new Date().toISOString(),kind:'legacy_note',authority:'legacy_memory',
+        data:{sourceSha256,notes,intention:'Historical model-authored generic style notes, not direct creator statements or approved preferences. Require actual creator evidence before learning.'}})
+      statsFor(doc,binding.creatorId).admittedObservations++
+    })
+  }
   user(projectId: string, args: Record<string, unknown>): CreatorStyleView {
     const action = clean(args.action, 'action', 40), binding = this.binding(projectId)
     if (action === 'view') return this.view(projectId)
@@ -213,15 +251,37 @@ export class CreatorStyleStore {
     const response = () => {
       this.assertControlFloor()
       const enabled=this.enabled(projectId),selected=this.selection(projectId,typeof args.request==='string'?args.request.slice(0,1000):'')
+      const pending=enabled?learningPending(this.doc.evidence.filter(e=>this.relevantEvidence(e,projectId))):[]
       return {binding:this.binding(projectId),learning_enabled:enabled,generation:this.doc.generation,revision:this.doc.revision,context:enabled?selected.context:'',
         preferences:enabled?selected.payload.preferences.map(p=>({id:p.id,version:p.version,status:p.status,scope:p.scope})):[],
         evidence:enabled?selected.payload.recent_evidence.map(e=>({id:e.id,kind:e.kind,authority:e.authority,projectId:e.projectId})):[],
         omitted_evidence:enabled?selected.payload.omitted_evidence:0,omitted_preferences:enabled?selected.payload.omitted_preferences:0,
-        omitted_creator_instructions:enabled?selected.payload.omitted_creator_instructions:0,retention:this.doc.stats[this.binding(projectId).creatorId]}
+        omitted_creator_instructions:enabled?selected.payload.omitted_creator_instructions:0,retention:this.doc.stats[this.binding(projectId).creatorId],
+        pending_evidence:pending.slice(-8).map(e=>({id:e.id,kind:e.kind,projectId:e.projectId})),
+        learning_status:{pending_observations:pending.length,reviewed_observations:enabled?this.doc.evidence.filter(e=>this.relevantEvidence(e,projectId)&&e.review).length:0,
+          saved_preferences:enabled?selected.all.length:0,coverage:'Retained local observations only; capture/retention limits are disclosed. A recorded edit or model response is not a learned preference.'}}
     }
     if (args.action === 'context') return response()
     const binding = this.binding(projectId)
     if (!this.enabled(projectId)) throw new Error('Creator learning is disabled')
+    if(args.action==='observations'){
+      const cursor=Number(args.cursor??0)
+      if(!Number.isSafeInteger(cursor)||cursor<0)throw Error('Invalid cursor')
+      // A first read establishes current bindings, like context/evidence. Later
+      // pages must remain bound to that exact revision and creator.
+      if((args.creator_id!==undefined&&args.creator_id!==binding.creatorId)||
+        (cursor>0&&(args.expected_revision!==this.doc.revision||args.creator_id!==binding.creatorId)))throw Error('Fresh creator/revision required for observation pagination')
+      if(args.filter!==undefined&&!['all','pending','reviewed'].includes(String(args.filter)))throw Error('Invalid observation filter')
+      const words=String(args.request??'').toLowerCase().match(/[\p{L}\p{N}]{3,}/gu)??[]
+      const score=(e:CreatorEvidence)=>words.reduce((n,w)=>n+Number(JSON.stringify(e).toLowerCase().includes(w)),0)
+      const all=[...new Map([...this.doc.evidence,...this.doc.capsules.flatMap(c=>c.samples)].filter(e=>this.relevantEvidence(e,projectId)).map(e=>[e.id,e])).values()]
+        .filter(e=>args.filter==='pending'?!e.review&&!e.claims?.length&&e.kind!=='explicit_instruction':args.filter==='reviewed'?!!e.review:true)
+        .sort((a,b)=>score(b)-score(a)||b.at.localeCompare(a.at)||a.id.localeCompare(b.id))
+      const items=all.slice(cursor,cursor+8)
+      return {...response(),observations:items.map(summarizeCreatorEvidence),total:all.length,next_cursor:cursor+8<all.length?cursor+8:null,
+        evidence_dimensions:[...new Set(all.flatMap(e=>(e.data.deltas as Array<{properties?:string[]}>??[]).flatMap(d=>d.properties??[])))].slice(0,40),
+        project_count:new Set(all.map(e=>e.projectId)).size}
+    }
     if(args.action==='preferences'){
       if(args.expected_revision!==this.doc.revision || args.creator_id!==binding.creatorId)throw Error('Fresh creator/revision required for pagination')
       const cursor=Number(args.cursor??0)
@@ -237,11 +297,25 @@ export class CreatorStyleStore {
     if (args.action === 'evidence') {
       const evidence = [...this.doc.evidence,...this.doc.capsules.flatMap(c=>c.samples)].find(e => e.id === args.id && this.relevantEvidence(e, projectId))
       if (!evidence) throw new Error('Unknown or cross-creator evidence')
-      return { ...response(), evidence: [structuredClone(evidence)] }
+      return { ...response(), evidence: [structuredClone(evidence)], related_agent_changes:this.doc.proposals.filter(p=>p.creatorId===binding.creatorId&&p.promptEvidenceId===evidence.id).slice(-8),
+        provenance_note:'Agent changes are authored proposals, not creator support or approval. Prompt adjacency is temporal context, not proof of the creator\'s reason. Proposal detail is bounded and may have rotated out.' }
     }
     if (args.creator_id !== binding.creatorId) throw new Error('Unknown or cross-creator memory identity; retrieve current context')
     const repeat = args.action === 'maintenance' && this.doc.maintenance?.find(r=>r.creatorId===binding.creatorId && r.id===args.request_id && r.digest===digest(args.operations))
     if (!repeat && args.expected_revision !== this.doc.revision) throw new Error('Stale memory revision; retrieve current context. Nothing changed.')
+    if(args.action==='review'){
+      const ids=args.evidence_ids,outcome=String(args.outcome),reason=clean(args.reason,'review reason',600)
+      if(!Array.isArray(ids)||ids.length<1||ids.length>12||!ids.every(id=>typeof id==='string'))throw Error('Review requires 1–12 actual evidence_ids')
+      if(!['learned','insufficient','project_specific','not_style','technical_repair'].includes(outcome))throw Error('Invalid learning review outcome')
+      const rows=ids.map(id=>[...this.doc.evidence,...this.doc.capsules.flatMap(c=>c.samples)].find(e=>e.id===id&&this.relevantEvidence(e,projectId)))
+      if(rows.some(e=>!e))throw Error('Unknown or controlled review evidence')
+      const preferenceIds=Array.isArray(args.preference_ids)?args.preference_ids:[]
+      const linked=(id:string)=>this.doc.preferences.some(p=>preferenceIds.includes(p.id)&&creatorPreferenceIsLive(this.doc,binding.creatorId,p.id)&&this.relevantScope(p.scope,projectId)&&
+        (p.support.includes(id)||p.counterexamples.includes(id)||rows.some(e=>e?.id===id&&e.claims?.some(v=>v.preferenceId===p.id&&v.version===p.version))||this.doc.capsules.some(c=>c.preferenceId===p.id&&c.version===p.version&&c.samples.some(e=>e.id===id))))
+      if(outcome==='learned'&&(!preferenceIds.length||!ids.every(linked)))throw Error('Learned review requires successful current evidence-linked preference writes')
+      this.mutate(doc=>{for(const e of [...doc.evidence,...doc.capsules.flatMap(c=>c.samples)])if(ids.includes(e.id)&&e.creatorId===binding.creatorId)e.review={outcome:outcome as NonNullable<CreatorEvidence['review']>['outcome'],reason,at:new Date().toISOString()}})
+      return response()
+    }
     if(args.action === 'maintenance') {
       const operations=args.operations
       if(!Array.isArray(operations)||operations.length<1||operations.length>8)throw Error('Maintenance requires 1–8 explicit foreground operations')
@@ -268,6 +342,7 @@ export class CreatorStyleStore {
         if (!e) throw new Error('Unknown or cross-creator evidence')
         return e
       })
+      if(evidence.every(e=>e.kind==='legacy_note'))throw Error('Historical generic notes alone do not establish creator intent; require actual creator evidence')
       let preference = doc.preferences.find(p => p.id === args.id && p.creatorId === binding.creatorId)
       if (args.id && !preference) throw new Error('Unknown/forgotten preference; creator controls cannot be bypassed')
       if (preference && (args.expected_version !== preference.version || !this.relevantScope(preference.scope, projectId))) throw new Error('Stale preference version or wrong scope; retrieve current evidence')
@@ -281,6 +356,10 @@ export class CreatorStyleStore {
         if(linking && !preference)throw Error('Link requires an existing candidate')
         if(linking && (args.scope && digest(scopeFor(args.scope,projectId,binding))!==digest(preference!.scope) || args.applicability!==undefined || args.exception_to!==undefined))throw Error('Link attaches facts only; it cannot revise meaning/scope or creator-approved knowledge')
         const hypothesis = linking ? preference!.hypothesis : clean(args.hypothesis, 'hypothesis'), dimension = linking ? preference!.dimension : clean(args.dimension, 'dimension', 80)
+        if(!linking&&args.lesson_kind!==undefined){
+          if(hypothesis.length>360)throw Error('Pattern statement must be at most 360 characters: one concise reusable principle. Keep sample measurements and inferred ratios out of the statement; provide applicability and rationale separately.')
+          clean(args.applicability,'pattern applicability',400);clean(args.rationale,'pattern rationale',600)
+        }
         const applicability=args.applicability===undefined ? preference?.applicability : clean(args.applicability,'applicability',400)
         const exceptionTo=args.exception_to===undefined ? preference?.exceptionTo : clean(args.exception_to,'exception_to',100)
         const exceptionVersion=args.exception_version===undefined?preference?.exceptionVersion:Number(args.exception_version)
@@ -296,13 +375,19 @@ export class CreatorStyleStore {
           doc.preferences.push(preference)
         } else { if (hypothesis !== preference.hypothesis || dimension !== preference.dimension || digest(scope) !== digest(preference.scope) || applicability !== preference.applicability || exceptionTo !== preference.exceptionTo || exceptionVersion !== preference.exceptionVersion) this.newVersion(preference, hypothesis, dimension, scope); if(!linking)preference.status = 'candidate' }
         preference.applicability=applicability;preference.exceptionTo=exceptionTo;preference.exceptionVersion=exceptionVersion
+        if(!linking){
+          if(args.lesson_kind!==undefined&&!['style_pattern','mistake_prevention'].includes(args.lesson_kind))throw Error('Invalid lesson_kind')
+          if(args.lesson_kind!==undefined)preference.lessonKind=args.lesson_kind
+          if(args.rationale!==undefined)preference.rationale=clean(args.rationale,'pattern rationale',600)
+        }
         preference.support = [...new Set([...preference.support, ...ids])]
         if(args.action==='consolidate'||args.action==='supersede'){
           if(!Array.isArray(args.source_preferences)||!args.source_preferences.length||args.source_preferences.length>8)throw Error('Select 1–8 source candidate IDs and versions')
           const sourceIds=new Set<string>()
           for(const ref of args.source_preferences){
             const old=doc.preferences.find(p=>p.id===ref.id && p.creatorId===binding.creatorId)
-            if(!old || old.id===preference.id || old.version!==ref.expected_version || old.approved || old.status==='disabled' || digest(old.scope)!==digest(preference.scope))throw Error('Invalid/stale/protected or differently scoped consolidation source')
+            if(old?.id===preference.id)throw Error('To revise this same candidate, use hypothesis with id and expected_version. consolidate/supersede require distinct source candidates; do not include the target in source_preferences.')
+            if(!old || old.version!==ref.expected_version || old.approved || old.status==='disabled' || digest(old.scope)!==digest(preference.scope))throw Error('Invalid/stale/protected or differently scoped consolidation source')
             if(old.counterexamples.some(id=>!Array.isArray(args.counterexample_ids)||!args.counterexample_ids.includes(id)))throw Error('Consolidation must explicitly preserve retained counterexamples')
             const oldCaps=doc.capsules.filter(c=>c.preferenceId===old.id&&c.version===old.version)
             preference.consolidation=[...preference.consolidation??[],{id:old.id,version:old.version!,hypothesis:old.hypothesis,reason:clean(args.reason,'reason',600),observations:oldCaps.filter(c=>c.role==='support').reduce((n,c)=>n+c.observations,0),counterexamples:oldCaps.filter(c=>c.role==='counterexample').reduce((n,c)=>n+c.observations,0),omittedSamples:oldCaps.reduce((n,c)=>n+c.omittedSamples,0)}].slice(-8)
@@ -329,9 +414,10 @@ export class CreatorStyleStore {
     return !e.scope || e.scope.kind === 'creator' // Project instructions cannot silently become global taste.
   }
   private newVersion(p: CreatorPreference, hypothesis: string, dimension: string, scope: StyleScope) {
-    p.history!.push({ version: p.version!, hypothesis: p.hypothesis, dimension: p.dimension, scope: p.scope, support: [...p.support], counterexamples: [...p.counterexamples], updated: p.updated, applicability:p.applicability, exceptionTo:p.exceptionTo, exceptionVersion:p.exceptionVersion })
+    p.history!.push({ version: p.version!, hypothesis: p.hypothesis, dimension: p.dimension, scope: p.scope, support: [...p.support], counterexamples: [...p.counterexamples], updated: p.updated, applicability:p.applicability, exceptionTo:p.exceptionTo, exceptionVersion:p.exceptionVersion,lessonKind:p.lessonKind,rationale:p.rationale })
     p.version!++; p.hypothesis = hypothesis; p.dimension = dimension; p.scope = scope
     p.support = []; p.counterexamples = []
+    delete p.rationale;delete p.lessonKind
     p.lineageFilter = filterAdd(p.lineageFilter!, controlKey(scope, hypothesis))
   }
   private control(doc: CreatorMemoryDocument, p: CreatorPreference, kind: 'disabled' | 'forgotten') {
@@ -352,13 +438,20 @@ export class CreatorStyleStore {
     if (!this.enabled(after.project_id)) return
     const old = layers(before), next = layers(after)
     const beforeStructure = structure(before), afterStructure = structure(after), structureChanged = digest(beforeStructure) !== digest(afterStructure)
+    const structuralProperties=structureChanged?changedProperties(beforeStructure,afterStructure):[]
     const changed = [...new Set([...old.keys(), ...next.keys()])].filter(id => digest(old.get(id) ?? null) !== digest(next.get(id) ?? null))
     if (!changed.length && !structureChanged) return
     this.mutate(doc => {
       if (change.actor.kind === 'Agent') {
+        const prompt=[...doc.evidence].reverse().find(e=>e.creatorId===binding.creatorId&&e.projectId===after.project_id&&e.kind==='user_prompt'&&!e.suppressed)
         for (const layerId of changed) {
           doc.proposals = doc.proposals.filter(p => !(p.creatorId === binding.creatorId && p.projectId === after.project_id && p.layerId === layerId))
-          doc.proposals.push({ creatorId: binding.creatorId, projectId: after.project_id, layerId, opId: change.op_id, valueHash: digest(next.get(layerId) ?? null) })
+          doc.proposals.push({ creatorId: binding.creatorId, projectId: after.project_id, layerId, opId: change.op_id, valueHash: digest(next.get(layerId) ?? null),promptEvidenceId:prompt?.id,
+            before:JSON.stringify(old.get(layerId)??null).slice(0,1000),after:JSON.stringify(next.get(layerId)??null).slice(0,1000),properties:changedProperties(old.get(layerId)??null,next.get(layerId)??null).slice(0,16) })
+        }
+        if(structureChanged){
+          doc.proposals.push({creatorId:binding.creatorId,projectId:after.project_id,layerId:'__project_structure__',opId:change.op_id,valueHash:digest(afterStructure),promptEvidenceId:prompt?.id,
+            before:JSON.stringify(beforeStructure).slice(0,1000),after:JSON.stringify(afterStructure).slice(0,1000),properties:structuralProperties.slice(0,16),propertyHashes:Object.fromEntries(structuralProperties.slice(0,16).map(key=>[key,propertyHash(afterStructure,key)]))})
         }
         return // retention applies the bound independently to each creator
       }
@@ -370,15 +463,20 @@ export class CreatorStyleStore {
         before: JSON.stringify(old.get(layerId) ?? null).slice(0, 2000), after: JSON.stringify(next.get(layerId) ?? null).slice(0, 2000),
         beforeTruncated: JSON.stringify(old.get(layerId) ?? null).length > 2000, afterTruncated: JSON.stringify(next.get(layerId) ?? null).length > 2000,
         proposalOpId: doc.proposals.find(p => p.creatorId === binding.creatorId && p.projectId === after.project_id && p.layerId === layerId && p.valueHash === digest(old.get(layerId) ?? null))?.opId ?? null,
+        proposalPromptId: doc.proposals.find(p => p.creatorId === binding.creatorId && p.projectId === after.project_id && p.layerId === layerId && p.valueHash === digest(old.get(layerId) ?? null))?.promptEvidenceId ?? null,
       }))
-      const linked = deltas.some(d => d.proposalOpId !== null)
+      const structuralProposal=structureChanged?[...doc.proposals].reverse().find(p=>p.creatorId===binding.creatorId&&p.projectId===after.project_id&&p.layerId==='__project_structure__'&&p.properties?.some(key=>structuralProperties.some(current=>overlaps(key,current))&&p.propertyHashes?.[key]===propertyHash(beforeStructure,key))):undefined
+      const linked = deltas.some(d => d.proposalOpId !== null)||!!structuralProposal
       const evidence: CreatorEvidence = { id, creatorId: binding.creatorId, projectId: after.project_id, seriesId: binding.seriesId, at: change.timestamp, kind: restoration ? 'undo' : linked ? 'correction' : 'manual_edit', authority: 'ProjectActor', data: { actor: change.actor, opId: change.op_id, operationIds:[change.op_id], operationCount:1, relationship: restoration ? 'ambiguous_restoration' : linked ? 'ai_proposal_correction' : 'independent_manual_edit', summary: change.summary, beforeState: digest(before), afterState: digest(after), deltas, ...(structureChanged ? { structureBefore: JSON.stringify(beforeStructure).slice(0, 2000), structureAfter: JSON.stringify(afterStructure).slice(0, 2000) } : {}), omittedLayers: Math.max(0, changed.length - deltas.length), intention: 'unknown; may be experiment or project-specific repair' } }
+      const precedingPrompt=[...doc.evidence].reverse().find(e=>e.creatorId===binding.creatorId&&e.projectId===after.project_id&&e.kind==='user_prompt'&&!e.suppressed)
+      evidence.data.precedingPromptId=precedingPrompt?.id
+      if(structureChanged){evidence.data.structureProperties=structuralProperties.slice(0,24);evidence.data.omittedStructureProperties=Math.max(0,structuralProperties.length-24);evidence.data.structureProposalOpId=structuralProposal?.opId??null;evidence.data.structureProposalPromptId=structuralProposal?.promptEvidenceId??null}
       const previous = doc.evidence.at(-1)
       const used = !!previous && (!!previous.claims?.length || doc.preferences.some(p => p.support.includes(previous.id) || p.counterexamples.includes(previous.id)))
       if (canGroupAdjustments(previous, evidence, used)) {
         const prior = previous!.data.deltas as typeof deltas
         const firstObserved = previous!.data.firstObserved ?? previous!.at
-        evidence.data.deltas = deltas.map(d => ({ ...d, before: prior.find(p => p.layerId === d.layerId)!.before, beforeTruncated: prior.find(p => p.layerId === d.layerId)!.beforeTruncated, proposalOpId: prior.find(p => p.layerId === d.layerId)!.proposalOpId ?? d.proposalOpId }))
+        evidence.data.deltas = deltas.map(d => ({ ...d, before: prior.find(p => p.layerId === d.layerId)!.before, beforeTruncated: prior.find(p => p.layerId === d.layerId)!.beforeTruncated, proposalOpId: prior.find(p => p.layerId === d.layerId)!.proposalOpId ?? d.proposalOpId, proposalPromptId: prior.find(p => p.layerId === d.layerId)!.proposalPromptId ?? d.proposalPromptId }))
         evidence.data.relationship = previous!.data.relationship
         previous!.at = evidence.at
         previous!.data = { ...evidence.data, beforeState: previous!.data.beforeState, firstObserved, operationCount: Number(previous!.data.operationCount ?? 1) + 1, operationIds: [...(previous!.data.operationIds as string[] ?? [previous!.id]), change.op_id].slice(-8), sequence: 'Adjacent same-property commits; not proof of a single gesture or intent' }

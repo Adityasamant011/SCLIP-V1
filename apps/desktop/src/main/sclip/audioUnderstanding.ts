@@ -1,3 +1,4 @@
+import { runtimeScheduler, runtimeScope } from './runtimeScheduler.js'
 /** On-demand CPU observations only. No editorial decisions, network, or resident model. */
 import fs from 'node:fs'
 import os from 'node:os'
@@ -45,6 +46,10 @@ export function createAudioUnderstanding(paths:()=>AudioModelPaths,run:Runner=ru
     return {status:platform!=='darwin'||arch!=='arm64'?'unsupported_platform':missing.length?'unavailable':'ready',missing,model:'SenseVoiceSmall INT8',runtime:'sherpa-onnx 1.13.4',provider:'local_cpu',threads:1,max_range_us:AUDIO_UNDERSTANDING_MAX_US,window_us:10_000_000,timeout_ms:60_000,concurrency:1,resident_model:false,paths:resolved,limitations:LIMITATIONS,provider_calls:0}
   }
   async function understand(pcm:Buffer,timelineStartUs:number,signal?:AbortSignal) {
+    const sig=signal??runtimeScope.getStore()?.signal
+    return runtimeScheduler.run('semantic_audio',['audio_cpu'],jobSignal=>understandAdmitted(pcm,timelineStartUs,jobSignal),{signal:sig})
+  }
+  async function understandAdmitted(pcm:Buffer,timelineStartUs:number,signal?:AbortSignal) {
     signal?.throwIfAborted()
     if(!Number.isSafeInteger(timelineStartUs)||timelineStartUs<0)throw new Error('Invalid timeline start')
     const ready=status(),base={evidence_class:'MODEL_OBSERVATION',coordinate_space:'timeline',evidence_origin:'CURRENT_TIMELINE',model:ready.model,runtime:ready.runtime,provider:'local_cpu',limitations:LIMITATIONS,provider_calls:0}
@@ -56,7 +61,7 @@ export function createAudioUnderstanding(paths:()=>AudioModelPaths,run:Runner=ru
     const mapped=(rows:ReturnType<typeof parseAudioObservations>)=>rows.map((r,i)=>({...r,timeline_range_us:[timelineStartUs+i*10_000_000,timelineStartUs+Math.round(Math.min((i+1)*WINDOW,pcm.length/4)/RATE*1e6)]}))
     const hit=cache.get(key)
     if(hit)return {...base,status:'available',cached:true,latency_ms:0,windows:mapped(hit)}
-    if(busy)return {...base,status:'busy',windows:[],retry:'Reuse current evidence or inspect later; one CPU model job at a time.'}
+    if(busy)throw new Error('Audio resource admission invariant violated')
     busy=true;let dir:string|undefined;const started=performance.now()
     try {
       dir=fs.mkdtempSync(path.join(os.tmpdir(),'sclip-sensevoice-'))

@@ -404,8 +404,10 @@ describe("Dock Panel registry", () => {
       "timeline",
       "quick-actions",
       "attribute",
+      "caption",
       "effect",
       "playhead",
+      "agent",
     ]);
     // History pulls the edit stack over its own IPC channel, so it joins the
     // on-demand tool Panels: closed by default, costing nothing until opened.
@@ -440,69 +442,17 @@ describe("DockWorkspaceAdapter", () => {
     expect(adapter.initializeEditingLayout()).toBe(true);
     expect(adapter.initializeEditingLayout()).toBe(false);
     expect(dock.added.map((panel) => panel.id)).toEqual([
-      "media",
-      "transitions",
-      "preview",
-      "playhead",
-      "attribute",
-      "effect",
-      "timeline",
-      "quick-actions",
+      "preview", "timeline", "agent", "attribute", "effect", "playhead", "media", "transitions", "caption", "quick-actions",
     ]);
-
-    // The three editor columns divide the 956px left after the 44px strip.
     const byId = new Map(dock.added.map((panel) => [panel.id, panel]));
-    expect(byId.get("media")).toMatchObject({
-      initialWidth: 210,
-      minimumWidth: 240,
-      minimumHeight: 160,
-    });
-    expect(byId.get("preview")).toMatchObject({
-      initialWidth: 507,
-      minimumWidth: 320,
-      minimumHeight: 180,
-      position: { referencePanel: "media", direction: "right" },
-    });
-    // Playhead anchors the right column — it is the one inserted beside
-    // Preview and the one carrying the column's width.
-    expect(byId.get("playhead")).toMatchObject({
-      initialWidth: 239,
-      position: { referencePanel: "preview", direction: "right" },
-    });
-    expect(byId.get("attribute")).toMatchObject({
-      position: { referencePanel: "playhead", direction: "below" },
-    });
-    expect(byId.get("quick-actions")).toMatchObject({
-      initialWidth: 44,
-      minimumWidth: 44,
-      minimumHeight: 44,
-      position: { direction: "left" },
-    });
-    expect(byId.get("effect")).toMatchObject({
-      inactive: true,
-      position: { referencePanel: "attribute", direction: "within" },
-    });
-    expect(byId.get("timeline")).toMatchObject({
-      initialHeight: 224,
-      minimumWidth: 420,
-      minimumHeight: 180,
-      position: { direction: "below" },
-    });
-    expect(dock.panels.get("quick-actions")?.api.setSize).toHaveBeenCalledWith({
-      width: 44,
-    });
-    expect(dock.panels.get("media")?.api.setSize).toHaveBeenCalledWith({
-      width: 210,
-    });
-    expect(dock.panels.get("timeline")?.api.setSize).toHaveBeenCalledWith({
-      height: 224,
-    });
-    // One call, both axes: width sizes the right column (orthogonal, bubbles
-    // up a level), height splits Playhead against the inspector inside it.
-    expect(dock.panels.get("playhead")?.api.setSize).toHaveBeenCalledWith({
-      width: 239,
-      height: 230,
-    });
+    expect(byId.get("agent")).toMatchObject({ initialWidth: 287, position: { direction: "right" } });
+    expect(byId.get("timeline")).toMatchObject({ initialHeight: 224, position: { referencePanel: "preview", direction: "below" } });
+    for (const id of ["attribute", "effect", "playhead", "media", "transitions", "caption"]) {
+      expect(byId.get(id)).toMatchObject({ inactive: true, position: { referencePanel: "agent", direction: "within" } });
+    }
+    expect(dock.panels.get("quick-actions")?.api.setSize).toHaveBeenCalledWith({ width: 44 });
+    expect(dock.panels.get("agent")?.api.setSize).toHaveBeenCalledWith({ width: 287 });
+    expect(dock.panels.get("timeline")?.api.setSize).toHaveBeenCalledWith({ height: 224 });
 
     for (const panel of dock.added) {
       expect(panel).toMatchObject({
@@ -511,7 +461,7 @@ describe("DockWorkspaceAdapter", () => {
         renderer: "always",
       });
     }
-    expect(dock.panels.has("caption")).toBe(false);
+    expect(dock.panels.has("caption")).toBe(true);
     expect(dock.panels.has("role-mixer")).toBe(false);
   });
 
@@ -806,12 +756,13 @@ describe("DockWorkspaceAdapter", () => {
     const adapter = new DockWorkspaceAdapter(dock.api);
     adapter.initializeEditingLayout();
 
+    adapter.closePanel("caption");
     adapter.openPanel("caption");
     adapter.openPanel("caption");
 
-    expect(dock.added.filter((panel) => panel.id === "caption")).toHaveLength(1);
-    expect(dock.added.find((panel) => panel.id === "caption")).toMatchObject({
-      position: { referencePanel: "attribute", direction: "within" },
+    expect(dock.added.filter((panel) => panel.id === "caption")).toHaveLength(2);
+    expect(dock.added.filter((panel) => panel.id === "caption").at(-1)).toMatchObject({
+      position: { referencePanel: "agent", direction: "within", index: 6 },
     });
     expect(dock.panels.get("caption")?.api.setActive).toHaveBeenCalledOnce();
   });
@@ -831,9 +782,9 @@ describe("DockWorkspaceAdapter", () => {
     expect(effects).toHaveLength(2);
     expect(effects.at(-1)).toMatchObject({
       position: {
-        referencePanel: "attribute",
+        referencePanel: "agent",
         direction: "within",
-        index: 1,
+        index: 2,
       },
     });
     expect(dock.panels.get("effect")).not.toBe(firstEffect);
@@ -848,6 +799,9 @@ describe("DockWorkspaceAdapter", () => {
     adapter.closePanel("attribute");
     adapter.closePanel("effect");
     adapter.closePanel("playhead");
+    adapter.closePanel("agent");
+    adapter.closePanel("media");
+    adapter.closePanel("transitions");
 
     adapter.openPanel("caption");
 
@@ -1034,7 +988,7 @@ describe("DockWorkspaceAdapter", () => {
     const dock = fakeDockview();
     const adapter = new DockWorkspaceAdapter(dock.api);
     adapter.initializeEditingLayout();
-    // Effect's remembered spot is the attribute tab group at index 1.
+    // Effect's remembered spot is the Agent tab group at index 2.
     adapter.closePanel("effect");
     const snapshot = adapter.serialize();
 
@@ -1046,7 +1000,7 @@ describe("DockWorkspaceAdapter", () => {
 
     restarted.openPanel("effect");
     expect(dock.added.find((panel) => panel.id === "effect")).toMatchObject({
-      position: { referencePanel: "attribute", direction: "within", index: 1 },
+      position: { referencePanel: "agent", direction: "within", index: 2 },
     });
   });
 

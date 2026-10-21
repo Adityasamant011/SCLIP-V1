@@ -218,6 +218,19 @@ describe("MotifSprite.refreshMotif", () => {
     sprite.dispose();
   });
 
+  it("does not certify a cold, stale or superseded graphic as the requested inspection frame", async () => {
+    getMotifMock.mockReset();getMotifMock.mockReturnValue(motifWith("inspect"));getFrameMock.mockReset();getFrameMock.mockReturnValue(null);
+    const {resolveMotifFrame}=await import("../motifs/motifRasterCache");
+    let first!:(b:ImageBitmap)=>void,second!:(b:ImageBitmap)=>void;
+    vi.mocked(resolveMotifFrame).mockImplementationOnce(()=>new Promise(r=>{first=r})).mockImplementationOnce(()=>new Promise(r=>{second=r}));
+    const sprite=new MotifSprite({layerId:"inspection",motifId:"d1",fpsNum:30,fpsDen:1});
+    sprite.update(view,0,5_000_000);expect(sprite.inspectionReady).toBe(false);
+    sprite.update(view,1_000_000,5_000_000);first({width:320,height:180} as ImageBitmap);
+    await Promise.resolve();await Promise.resolve();expect(sprite.inspectionReady).toBe(false);
+    second({width:320,height:180} as ImageBitmap);await Promise.resolve();await Promise.resolve();expect(sprite.inspectionReady).toBe(true);
+    sprite.refreshMotif();expect(sprite.inspectionReady).toBe(false);sprite.dispose();expect(sprite.inspectionReady).toBe(false);
+  });
+
   it("refreshMotif re-fetches the motif so the next update re-evaluates the key", () => {
     getFrameMock.mockClear();
     // getMotif: construction (#1) sees "A"; refreshMotif() re-fetch (#2) sees "B".

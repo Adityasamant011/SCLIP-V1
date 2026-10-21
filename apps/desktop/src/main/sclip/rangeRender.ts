@@ -1,3 +1,4 @@
+import { runtimeScheduler, runtimeScope } from './runtimeScheduler.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
@@ -80,7 +81,7 @@ export async function exportThroughLiveCompositor(
 }
 
 /** Hermes's short QA range: actual production video compositor and audio mix. */
-export async function renderComposedTimelineRange(
+async function renderComposedTimelineRangeOwned(
   project: Project,
   options: RangeRenderOptions & { getActiveWindow: () => { isDestroyed(): boolean; webContents: { executeJavaScript(code: string): Promise<unknown> } } | null },
 ): Promise<RangeRenderResult> {
@@ -107,6 +108,11 @@ export async function renderComposedTimelineRange(
   return { path: outputPath, duration_us: end_us - start_us,
     has_audio: hasAudio,
     cached: false }
+}
+
+export async function renderComposedTimelineRange(project:Project,options:Parameters<typeof renderComposedTimelineRangeOwned>[1]):Promise<RangeRenderResult> {
+  const signal=options.signal??runtimeScope.getStore()?.signal
+  return runtimeScheduler.run('composed_render',['ffmpeg'],jobSignal=>renderComposedTimelineRangeOwned(project,{...options,signal:jobSignal}),{signal,priority:options.background?0:runtimeScope.getStore()?.priority??10})
 }
 
 export function resolveFfmpegPath(resourcesPath?: string): string {

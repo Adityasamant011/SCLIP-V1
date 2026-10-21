@@ -74,9 +74,13 @@ export class MotifSprite implements StageableSprite {
   private injectedFrame = -1;
   private source: ImageSource | null = null;
   private texture: Texture | null = null;
+  private releaseFrame:(()=>void)|undefined;
   private onLoaded: (() => void) | null;
   private disposed = false;
   private boundOnce = false;
+  private requestedFrameReady = false;
+  /** The exact requested frame, excluding the cold 2px tile and held old frame. */
+  get inspectionReady(): boolean { return this.requestedFrameReady && !this.disposed; }
 
   constructor(init: MotifSpriteInit) {
     this.layerId = init.layerId;
@@ -180,6 +184,7 @@ export class MotifSprite implements StageableSprite {
       const bitmap = injectedFrames[idx];
       if (bitmap) {
         this.bindBitmap(bitmap);
+        this.requestedFrameReady = true;
         this.injectedFrame = idx;
       }
       return;
@@ -199,11 +204,13 @@ export class MotifSprite implements StageableSprite {
     }
     const { cacheKey, contentFrame: frame, tSec, durationSec, canonicalProps: canonical } = desc;
     if (cacheKey === this.targetCacheKey && frame === this.targetFrame) return;
+    this.requestedFrameReady = false;
     this.targetCacheKey = cacheKey;
     this.targetFrame = frame;
     const cached = sharedMotifFrameCache.getFrame(cacheKey, frame);
     if (cached) {
       this.bindBitmap(cached);
+      this.requestedFrameReady = true;
       return;
     }
     // First-ever cold frame: show a neutral placeholder so the layer doesn't
@@ -224,6 +231,7 @@ export class MotifSprite implements StageableSprite {
     this.motif = getMotif(this.motifId);
     this.targetCacheKey = null;
     this.targetFrame = -1;
+    this.requestedFrameReady = false;
   }
 
   /// Render + rasterize one frame, store it, and bind it iff the playhead
@@ -243,7 +251,7 @@ export class MotifSprite implements StageableSprite {
     if (!this.motif) return;
     try {
       const bitmap = await resolveMotifFrame(
-           this.motif, cacheKey, frame, tSec, durationSec, canonicalProps,
+           this.motif, cacheKey, frame, tSec, durationSec, canonicalProps,{priority:'interactive',owner:this.layerId},
          );
       // Hand the bitmap to the cache. `setFrame` is idempotent: if a sibling
       // sprite already cached this (cacheKey, frame), it keeps that bitmap and
@@ -256,6 +264,7 @@ export class MotifSprite implements StageableSprite {
       if (this.disposed) return;
       if (this.targetCacheKey !== cacheKey || this.targetFrame !== frame) return;
       this.bindBitmap(canonical);
+      this.requestedFrameReady = true;
       this.onLoaded?.();
     } catch (e) {
       // eslint-disable-next-line no-console
@@ -267,6 +276,7 @@ export class MotifSprite implements StageableSprite {
   }
 
   private bindBitmap(bitmap: ImageBitmap | HTMLCanvasElement): void {
+    const release=sharedMotifFrameCache.retainFrame(bitmap);this.releaseFrame?.();this.releaseFrame=release;
     // destroy(true) frees this sprite's own ImageSource/GPU texture on every
     // rebind, preventing a per-tick GPU-memory leak. The shared cache's
     // ImageBitmap is NOT closed by destroy(true) — ImageSource inherits
@@ -303,6 +313,7 @@ export class MotifSprite implements StageableSprite {
         // ignore
       }
     }
+    this.releaseFrame?.();this.releaseFrame=undefined;
     this.texture = null;
     this.source = null;
     this.sprite.destroy({ children: true });

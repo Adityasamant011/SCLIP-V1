@@ -3,18 +3,20 @@ export interface CreatorBinding { creatorId: string; seriesId?: string; learning
 export interface CreatorIdentity { id: string; label: string; enabled: boolean }
 export interface CreatorEvidence {
   id: string; creatorId: string; projectId: string; seriesId?: string; at: string
-  kind: 'explicit_instruction' | 'correction' | 'manual_edit' | 'undo' | 'reference'
-  authority: 'creator_statement' | 'ProjectActor' | 'source_metadata_and_local_observations'
+  kind: 'explicit_instruction' | 'correction' | 'manual_edit' | 'undo' | 'reference' | 'user_prompt' | 'legacy_note'
+  authority: 'creator_statement' | 'ProjectActor' | 'source_metadata_and_local_observations' | 'legacy_memory'
   data: Record<string, unknown>
   scope?: StyleScope
   suppressed?: boolean
   suppressedBy?: string[]
   claims?: Array<{ preferenceId: string; version: number }>
+  review?: { outcome: 'learned' | 'insufficient' | 'project_specific' | 'not_style' | 'technical_repair'; reason: string; at: string }
 }
 export interface CreatorPreferenceVersion {
   version: number; hypothesis: string; dimension: string; scope: StyleScope
   support: string[]; counterexamples: string[]; updated: string
   applicability?: string; exceptionTo?: string; exceptionVersion?: number
+  lessonKind?: 'style_pattern' | 'mistake_prevention'; rationale?: string
 }
 export interface CreatorPreference {
   id: string; creatorId: string; scope: StyleScope; dimension: string; hypothesis: string
@@ -24,6 +26,7 @@ export interface CreatorPreference {
   version?: number; approved?: boolean; history?: CreatorPreferenceVersion[]
   aliases?: string[]; lineageFilter?: string; applicability?: string; exceptionTo?: string; exceptionVersion?: number
   consolidation?: Array<{id:string;version:number;hypothesis:string;reason:string;observations:number;counterexamples:number;omittedSamples:number}>
+  lessonKind?: 'style_pattern' | 'mistake_prevention'; rationale?: string
   supersededBy?: string; legacyConfidence?: string
 }
 export interface CreatorMemoryControl {

@@ -309,6 +309,7 @@ export function createTsActorHost(deps: TsActorHostDeps): TsActorHost {
   function runMotif(name: string, args: Record<string, unknown>): unknown {
     if (!deps.motifStore) throw new Error('motifTool: motifStore not configured')
     const motifToolDeps: MotifToolDeps = {
+      getProject:()=>actor.snapshot(),
       store: deps.motifStore,
       builtins: deps.motifBuiltins ?? [],
       motifLayers: () =>

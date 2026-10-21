@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -54,8 +54,10 @@ describe('SourceObservationIndex', () => {
     expect(second.cached).toBe(true)
     expect(second.observations).toHaveLength(1)
     expect(analyze).toHaveBeenCalledTimes(2)
-    const cache = await readFile(path.join(cacheDir, 'source-observations', 'hash-1-v3-vision-sidecar+audio-analyzer+transcript-cache-0-40000000.json'), 'utf8')
-    expect(cache).toContain('"analysis_version": 3')
+    const directory=path.join(cacheDir,'source-observations'),files=await readdir(directory)
+    const cache = await readFile(path.join(directory,files.find(f=>f.endsWith('-0-40000000.json'))!), 'utf8')
+    expect(JSON.parse(cache).analysis_version).toBe(first.analysis_version)
+    expect(JSON.parse(cache).analysis_model).toBe(first.analysis_model)
     expect(cache).toContain('"source_t_us"')
 
     const secondWindow = await index.retrieve(media, 20_000_000, 40_000_000, 1)

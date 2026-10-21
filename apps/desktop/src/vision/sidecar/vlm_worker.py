@@ -230,9 +230,11 @@ def _run_inference(
     from mlx_vlm.prompt_utils import apply_chat_template
     from mlx_vlm.utils import load_config
 
-    full_question = question
+    full_question = ("Answer the question directly in at most three short sentences. "
+                     "For text, transcribe only legible words first; say unreadable when uncertain. "
+                     "Do not describe unrelated appearance, clothing or background.\n" + question)
     if context:
-        full_question = f"Context: {context}\n\n{question}"
+        full_question = f"Context: {context}\n\n{full_question}"
 
     try:
         config = load_config(getattr(_model, "model_path", None) or _model_id or MODEL_HF_ID)
@@ -393,13 +395,13 @@ def analyze(req: AnalyzeRequest):
         target_long = None
         actual_res_desc = "original"
     elif res_mode == "high":
-        target_long = 768
-        actual_res_desc = "high_768px"
+        target_long = 1280 if is_text else 768
+        actual_res_desc = f"high_{target_long}px"
     elif res_mode == "low":
         target_long = 512
         actual_res_desc = "low_512px"
     else:  # "auto"
-        target_long = 672 if is_text else 512
+        target_long = 1024 if is_text else 512
         actual_res_desc = f"auto_{target_long}px"
 
     # Preprocess / scale images
@@ -415,7 +417,7 @@ def analyze(req: AnalyzeRequest):
             processed_paths.append(p)
 
     # Token limit
-    max_tokens = req.max_tokens or (96 if is_text else MAX_TOKENS)
+    max_tokens = max(32, min(req.max_tokens or (160 if is_text else max(96, MAX_TOKENS)), 384))
 
     try:
         with _model_lock:

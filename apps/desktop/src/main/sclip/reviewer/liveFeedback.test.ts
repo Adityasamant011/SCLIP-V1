@@ -30,7 +30,7 @@ describe('continuous local feedback ownership and admission', () => {
     await vi.advanceTimersByTimeAsync(9); expect(f.observe).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(1); expect(f.observe).toHaveBeenCalledOnce()
     expect(f.reviewer.snapshot().status).toBe('available')
-    expect(feedbackContext(f.project, f.reviewer.snapshot())?.visual.description).toBe('Synthetic scene')
+    expect(feedbackContext(f.project, f.reviewer.snapshot())?.visual?.description).toBe('Synthetic scene')
     await vi.advanceTimersByTimeAsync(1000); expect(f.observe).toHaveBeenCalledOnce()
   })
   it('discards in-flight A→B→A results and aborts only its owned observation', async () => {

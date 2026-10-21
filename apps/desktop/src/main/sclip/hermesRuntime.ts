@@ -1,3 +1,4 @@
+import { SCLIP_DIRECT_TOOLS, SCLIP_PARALLEL_READS, mergeRuntimeContract } from './runtimeContract.js'
 import { createServer } from 'node:net'
 import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
@@ -6,6 +7,10 @@ import { parse as parseYaml } from 'yaml'
 import { hermesBaseEnvironment, redactHermesSecrets } from './hermesSecrets.js'
 import { validateHermesProfile } from './hermesSettings.js'
 import { pythonArgsWithoutBytecode } from '../pythonRuntime.js'
+import { SCLIP_MANAGED_MODEL } from '../../shared/cloud-account.js'
+
+let managedEndpoint = ''
+export function setManagedHermesEndpoint(endpoint: string): void { managedEndpoint = endpoint }
 
 export interface HermesRuntimeStatus {
   state: 'stopped' | 'starting' | 'ready' | 'failed'
@@ -231,6 +236,7 @@ export function readHermesProfile(home: string): HermesProfileConfig {
       const baseUrlMatch = existing.match(/^\s*base_url:\s*["']?([^"'\s#]+)["']?/m)
       const maxIterMatch = existing.match(/^\s*max_turns:\s*(\d+)/m) ?? existing.match(/^\s*max_iterations:\s*(\d+)/m)
       if (providerMatch?.[1]) provider = providerMatch[1].trim()
+      if (/^sclip_managed_ai: true$/m.test(existing)) provider = 'sclip-managed'
       if (defaultMatch?.[1]) model = defaultMatch[1].trim()
       if (baseUrlMatch?.[1]) {
         const candidate = baseUrlMatch[1].trim()
@@ -256,7 +262,8 @@ export function writeHermesProfile(
   const current = readHermesProfile(home)
   const provider = params?.provider ?? current.provider
   const model = params?.model ?? current.model
-  const customBaseUrl = params?.customBaseUrl !== undefined ? params.customBaseUrl : current.customBaseUrl
+  const customBaseUrl = provider === 'sclip-managed' ? managedEndpoint : params?.customBaseUrl !== undefined ? params.customBaseUrl
+    : params?.provider !== undefined && params.provider !== current.provider ? undefined : current.customBaseUrl
   const maxIterations = params?.maxIterations ?? current.maxIterations
   validateHermesProfile({ provider, model, customBaseUrl, maxIterations })
 
@@ -272,13 +279,14 @@ export function writeHermesProfile(
   const discoveryGuidance = 'Deferred MCP calls: invoke native tool_call with name and arguments at the top level. Its JSON arguments have exactly the shape {"name":"mcp__weftcut__get_timeline_context","arguments":{}} for this no-argument example; discover the actual target with tool_search/tool_describe. For an edit, put only that target schema\'s fields inside arguments. Do not wrap the whole call in another arguments object, and do not put another name/arguments wrapper inside the target arguments. A missing name error means repair the outer tool_call shape; missing target fields means repair the inner arguments against tool_describe. An argument/schema error is not a lost MCP connection and the rejected tool was not invoked. Diagnose that call rather than editing MCP/provider configuration or replacing discovery with CLI workarounds. Do not launch another Hermes agent to do this editing task. Use this current native session and its tools; a proposed edit or memory entry is not an applied mutation. Confirm the mutation result and current state before claiming it happened.'
   const creatorRoutingGuidance = 'Creator style routing: creator corrections and preferences belong in the canonical mcp__weftcut__creator_style_memory tool. Discover its current schema, retrieve action=context and relevant evidence details before interpreting, and use the returned creator identity, fresh revision/version and actual evidence IDs for any justified hypothesis or maintenance write. YOU choose the meaning, scope, applicability, uncertainty and whether to learn; a single correction is not a universal rule, and your own output is not creator confirmation. Decline learning when the evidence is insufficient. Do not put creator style interpretations into generic memory, USER.md or MEMORY.md: those entries bypass the canonical evidence and creator controls. Generic memory remains available for non-style facts. Current user instructions override remembered preferences. Never invent support, approve a candidate yourself, copy another creator\'s preferences or automatically apply a subjective correction.'
   const identityGuidance = 'Sclip identity and purpose: You are Sclip Agent, the autonomous video-editing assistant inside the Sclip desktop editor, powered by the native Hermes agent framework from Nous Research. Sclip is the product; Hermes is the agent framework, and WeftCut is the editing engine exposed through MCP. Your primary purpose is to help creators understand footage, choose moments, shape stories, edit picture and sound, review actual results and learn supported creator preferences. You make the creative decisions from the user brief and observed evidence; no fixed creative pipeline is required. Introduce yourself simply as Sclip Agent. Do not attribute the Sclip product itself to Nous Research or describe this embedded editor as merely a generic CLI assistant. For capability questions, distinguish the current project state, available editing tools, configured local sensing and optional external services. Consult the live catalog before naming specific tools; do not promise email, reminders, messaging integrations or web access solely because upstream Hermes supports them. Keep internal composition IDs and implementation details out of ordinary greetings unless useful to the user. Ordinary conversation does not require an edit; never manufacture work or claim a finished video from a conversational response.'
-  const systemPrompt = [previousPrompt, ...[identityGuidance, capabilityGuidance, discoveryGuidance, creatorRoutingGuidance].filter(guidance => !previousPrompt.includes(guidance))].filter(Boolean).join('\n\n')
+  const systemPrompt = mergeRuntimeContract(previousPrompt,[identityGuidance,capabilityGuidance,discoveryGuidance,creatorRoutingGuidance])
   const terminalCwd = typeof previous.terminal?.cwd === 'string' ? previous.terminal.cwd : '.'
 
   const modelLines = [
+    ...(provider === 'sclip-managed' ? ['sclip_managed_ai: true'] : []),
     'model:',
-    `  provider: ${provider}`,
-    `  default: ${model}`,
+    `  provider: ${provider === 'sclip-managed' ? 'custom' : provider}`,
+    `  default: ${provider === 'sclip-managed' ? SCLIP_MANAGED_MODEL : model}`,
   ]
   if (customBaseUrl) {
     modelLines.push(`  base_url: "${customBaseUrl}"`)
@@ -298,10 +306,11 @@ export function writeHermesProfile(
     '    headers:',
     '      Authorization: "Bearer ${SCLIP_MCP_TOKEN}"',
     '    timeout: 120',
+    `    parallel_read_tools: ${JSON.stringify([...SCLIP_PARALLEL_READS])}`,
     'terminal:',
     `  cwd: ${JSON.stringify(terminalCwd)}`,
     'tools:',
-    '  tool_search: true',
+    `  tool_search: ${JSON.stringify({enabled:'on',listing_max_tokens:1200,always_visible:SCLIP_DIRECT_TOOLS.map(name=>`mcp__weftcut__${name}`)})}`,
     'agent:',
     `  system_prompt: ${JSON.stringify(systemPrompt)}`,
     `  max_turns: ${maxIterations}`,

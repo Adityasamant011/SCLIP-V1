@@ -25,6 +25,7 @@ export async function captureMotifFramePngBlob(
   height: number,
   settleRafs?: number,
   contentHash?: string,
+  capture?: {priority?: 'inspection'|'interactive'|'background';owner?:string},
 ): Promise<Blob> {
   const b64: string = await invoke("motif_capture_frame", {
     motifId,
@@ -34,6 +35,7 @@ export async function captureMotifFramePngBlob(
     height,
     settleRafs: settleRafs ?? null,
     contentHash: contentHash ?? "",
+    priority:capture?.priority==='background'?'background':(window as any).__sclipCapturePriority??capture?.priority??'interactive', owner:capture?.owner,
   });
   const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
   return new Blob([bytes], { type: "image/png" });
@@ -61,7 +63,8 @@ export async function captureMotifFrame(
   height: number,
   settleRafs?: number,
   contentHash?: string,
+  capture?: {priority?: 'inspection'|'interactive'|'background';owner?:string},
 ): Promise<ImageBitmap> {
-  const blob = await captureMotifFramePngBlob(motifId, tSec, props, width, height, settleRafs, contentHash);
+  const blob = await captureMotifFramePngBlob(motifId, tSec, props, width, height, settleRafs, contentHash,capture);
   return createImageBitmap(blob);
 }

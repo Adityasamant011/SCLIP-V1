@@ -279,93 +279,22 @@ describe("normalizeLayout", () => {
 });
 
 describe("createEditingLayout", () => {
-  it("builds the strip + 22/53/25 by 72/28 baseline with Playhead over the inspector", () => {
+  it("matches the reference: preview/timeline at left and full-height Agent tabs at right", () => {
     const result = createEditingLayout({ width: 1_000, height: 800 });
-    // Axis/size semantics: see createEditingLayout's grid comment in
-    // workspaceLayout.ts. Walked with one recursive shape rather than a
-    // literal nesting depth: the right column added a fourth level, and a
-    // hand-spelled type would have to be re-spelled for the fifth.
-    type Node = {
-      type: string;
-      size: number;
-      data: Node[] | { views: string[]; activeView: string; id: string };
-    };
-    const dockview = result.dockview as unknown as {
-      grid: { orientation: string; width: number; height: number; root: Node };
-      panels: Record<string, unknown>;
-    };
-    const kids = (node: Node): Node[] => {
-      if (!Array.isArray(node.data)) throw new Error("expected a branch");
-      return node.data;
-    };
-    const leaf = (node: Node) => {
-      if (Array.isArray(node.data)) throw new Error("expected a leaf");
-      return node.data;
-    };
-
-    expect(result).toMatchObject({ version: 1, empty: false });
-    expect(dockview.grid).toMatchObject({
-      orientation: "HORIZONTAL",
-      width: 1_000,
-      height: 800,
-    });
-
-    const [strip, body] = kids(dockview.grid.root);
-    expect(strip).toMatchObject({ type: "leaf", size: 44 });
-    expect(leaf(strip!).views).toEqual(["quick-actions"]);
-    expect(body).toMatchObject({ type: "branch", size: 956 });
-
-    // Body rows: the 72/28 editor/timeline split (sizes = heights).
-    const [editor, timeline] = kids(body!);
-    expect(editor).toMatchObject({ type: "branch", size: 576 });
-    expect(timeline).toMatchObject({ type: "leaf", size: 224 });
-    expect(leaf(timeline!).views).toEqual(["timeline"]);
-
-    // Editor columns: library / Preview / the right column (sizes = widths).
-    const [library, preview, right] = kids(editor!);
-    expect(library).toMatchObject({ type: "leaf", size: 210 });
-    expect(leaf(library!).views).toEqual(["media", "transitions"]);
-    expect(preview).toMatchObject({ type: "leaf", size: 507 });
-    expect(leaf(preview!).views).toEqual(["preview"]);
-
-    // The right column alternates back to vertical: the Playhead Panel gets
-    // 40% of the editor row on its own, the inspector tabs the remainder.
-    expect(right).toMatchObject({ type: "branch", size: 239 });
-    const [playhead, inspector] = kids(right!);
-    expect(playhead).toMatchObject({ type: "leaf", size: 230 });
-    expect(leaf(playhead!)).toMatchObject({
-      views: ["playhead"],
-      activeView: "playhead",
-      id: "editing-playhead",
-    });
-    expect(inspector).toMatchObject({ type: "leaf", size: 346 });
-    expect(leaf(inspector!)).toMatchObject({
-      views: ["attribute", "effect"],
-      activeView: "attribute",
-      id: "editing-context",
-    });
-
-    expect(Object.keys(dockview.panels).sort()).toEqual([
-      "attribute",
-      "effect",
-      "media",
-      "playhead",
-      "preview",
-      "quick-actions",
-      "timeline",
-      "transitions",
-    ]);
-    // Placements are the reopen map: Playhead now remembers a group of its
-    // own, so closing and reopening it must not fold it back into Attribute.
-    expect(result.placements.playhead).toEqual({ siblings: ["playhead"], index: 0 });
-    expect(result.placements.effect).toEqual({
-      siblings: ["attribute", "effect"],
-      index: 1,
-    });
-    expect(result.placements["quick-actions"]).toEqual({
-      siblings: ["quick-actions"],
-      index: 0,
-    });
+    const dock = result.dockview as any;
+    const [strip, left, right] = dock.grid.root.data;
+    expect(strip.data.views).toEqual(["quick-actions"]);
+    expect(strip.size).toBe(44);
+    expect(left.size).toBe(669);
+    expect(left.data.map((n: any) => n.data.activeView)).toEqual(["preview", "timeline"]);
+    expect(left.data.map((n: any) => n.size)).toEqual([576, 224]);
+    expect(right.type).toBe("leaf");
+    expect(right.size).toBe(287);
+    const tabs = ["agent", "attribute", "effect", "playhead", "media", "transitions", "caption"] as const;
+    expect(right.data.views).toEqual(tabs);
+    expect(right.data.activeView).toBe("agent");
+    expect(Object.keys(dock.panels).sort()).toEqual(["quick-actions", "preview", "timeline", ...tabs].sort());
+    tabs.forEach((id, index) => expect(result.placements[id]).toEqual({ siblings: tabs, index }));
   });
 
   it("falls back to usable dimensions for an unmeasured viewport", () => {

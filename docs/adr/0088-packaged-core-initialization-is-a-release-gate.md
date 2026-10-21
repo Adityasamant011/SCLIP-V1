@@ -1,0 +1,13 @@
+# 0088: Verify core initialization in the packaged application
+
+Status: accepted; actual packaged core workflow validated on 2026-10-21
+
+Component/typecheck/signature checks did not catch two release packaging failures: a bundled CommonJS dependency required Node's process module inside an ESM bundle without createRequire, and the preserved shell initialized an evaluator instance different from the source-backed ProjectActor's evaluator. The app first failed on launch, then on creating a project. Prior component checks were insufficient evidence of packaged readiness.
+
+Bundled CommonJS dependencies must receive a native createRequire binding before their first evaluation. Scoped releases must preserve initialization identity across the shell/runtime boundary. The repair verifies that the generated evaluator bytes match, initializes its source module before binding, and shares the already initialized evaluator exports before exposing project operations. Normal source builds continue to import and await their single evaluator through main/state/snap.ts. Broad lazy initialization inside synchronous timeline operations is not introduced.
+
+Read-only runtime capability reporting is resilient to unavailable optional configuration. Each role reports unavailable configuration independently; a missing Jev/OpenRouter credential does not break the whole status tool or silently authorize another provider. Optional Jev credential access returns no token when configuration is absent. No aesthetic or media readiness is inferred from service presence.
+
+A release gate must execute the actual packaged app, using an isolated temporary userData directory and generated media. apps/desktop/scripts/packaged-core-smoke.cjs covers startup, 1080p60 project creation, another canvas, audio/video import and placement, edit/undo/redo, save/reopen, current-compositor frame capture, custom HyperFrames authoring/capture/placement, production audio/video export, capability status and absence of uncaught renderer/main-process errors. Reopening uses a fresh MCP connection; old opening bindings are correctly rejected. The test uses the packaged Chromium debugging interface rather than relying on a developer-only Node inspector. It does not use provider keys, private media or editing-model inference.
+
+For the repaired release, a separate output check measured motion in two exported frames and non-silent decoded audio; container/stream existence alone is insufficient. Candidate and installed app runs are recorded in acceptance-artifacts/packaged-readiness-20261021. This establishes those exercised core paths, not absence of all possible bugs or live provider/editorial quality acceptance.

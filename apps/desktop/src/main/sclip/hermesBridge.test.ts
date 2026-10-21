@@ -4,7 +4,7 @@ import { redactHermesSecrets } from './hermesSecrets.js'
 vi.mock('electron', () => ({ BrowserWindow: { getAllWindows: () => [] } }))
 vi.mock('../broadcast.js', () => ({ broadcastEvent: vi.fn() }))
 
-import { configureHermesBridge, createProjectSession, getHermesRun, startHermesRun } from './hermesBridge.js'
+import { configureHermesBridge, listProjectSessions, createProjectSession, getHermesRun, startHermesRun } from './hermesBridge.js'
 
 const SECRET = 'SCLIP_TEST_SECRET_DO_NOT_LEAK_12345'
 const sessions = { add: vi.fn(), owns: () => true, list: () => ({ activeSessionId: null, sessions: [] }) }
@@ -68,4 +68,17 @@ it('reports the current unavailable runtime before creating a remote or local se
   const add=vi.fn()
   configureHermesBridge({getGatewayUrl:()=> 'http://127.0.0.1:1',getGatewayToken:()=>SECRET,getActiveProjectId:async()=> 'project',getMcpStatus:()=>({tools:118,resources:1}),getRuntimeStatus:()=>({state:'failed',detail:'Bundled Hermes runtime is missing'}),sessions:{...sessions,add} as any})
   try{await expect(createProjectSession('project','test')).rejects.toThrow('HERMES_NOT_READY: Bundled Hermes runtime is missing');expect(fetchMock).not.toHaveBeenCalled();expect(add).not.toHaveBeenCalled()}finally{vi.unstubAllGlobals()}
+})
+
+
+it('opens old project session metadata without fetching historical conversations', async () => {
+  const fetchMock=vi.fn()
+  vi.stubGlobal('fetch',fetchMock)
+  const list=vi.spyOn(sessions,'list').mockReturnValue({activeSessionId:'old-session',sessions:[{id:'old-session',name:'Old edit'},{id:'older-session',name:'Older edit'}]} as any)
+  try {
+    const result=await listProjectSessions('project',false)
+    expect(result.activeSessionId).toBe('old-session')
+    expect(result.sessions.map(s=>({id:s.id,messages:s.messages}))).toEqual([{id:'old-session',messages:[]},{id:'older-session',messages:[]}])
+    expect(fetchMock).not.toHaveBeenCalled()
+  } finally { list.mockRestore();vi.unstubAllGlobals() }
 })

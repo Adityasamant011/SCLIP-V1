@@ -1,5 +1,7 @@
-import { CompletionCheckpoint, type HermesTurnEvent } from '../sclip/completionCheckpoint.js'
-import { validTurnEvent, type HermesLifecycleLease } from '../sclip/hermesLifecycle.js'
+import { AssetJobs } from '../sclip/assetJobs.js'
+import { runtimeTrace } from '../sclip/runtimeTrace.js'
+import { CompletionCheckpoint } from '../sclip/completionCheckpoint.js'
+import { validTurnEvent, type HermesLifecycleLease, type HermesTurnObserver } from '../sclip/hermesLifecycle.js'
 import { verifyDelivery } from '../sclip/finalOutput.js'
 import { randomBytes } from 'node:crypto'
 import { setEditingBrief } from '../sclip/completionReview.js'
@@ -31,7 +33,7 @@ export interface McpInfoView {
 
 export interface McpHost {
   setEditingBrief(brief: string | null, projectId?: string): void
-  registerHermesTerminal(projectId: string, sessionId: string, handler: (event: HermesTurnEvent) => void): HermesLifecycleLease
+  registerHermesTerminal(projectId: string, sessionId: string, handler: HermesTurnObserver): HermesLifecycleLease
   reviewDisposition(): ReturnType<typeof completionDisposition> | {status:string}
   getInfo(): McpInfoView
   getToolCount(): number
@@ -53,13 +55,16 @@ export async function startMcpHost(backend: Backend, opts: McpHostOptions = {}):
   const reviews = new Map<string, { projectId: string; guard: RevisionLoopGuard }>()
   const connections = new Map<string, AgentConnection>()
   const completionReviews = new Map<string, CompletionReview>()
+  const assetJobs=new AssetJobs()
+  const reviewJobs=new AssetJobs(['inspect_audio_visual_alignment','inspect_timeline_range_visuals','inspect_rendered_audio','inspect_timeline_temporal_window','render_timeline_range'])
+  opts={...opts,assetJobs,reviewJobs}
   const checkpoint = new CompletionCheckpoint(completionReviews,{
-    current:()=>{const ts=opts.getTsHost?.();if(!ts?.actor||!ts.agent)return undefined;const activity=ts.agent.snapshot();return {actor:ts.actor,opening:activity.workspace_id,pending:activity.activities.some(a=>a.state==='running')}},
+    current:()=>{const ts=opts.getTsHost?.();if(!ts?.actor||!ts.agent)return undefined;const activity=ts.agent.snapshot();return {actor:ts.actor,opening:activity.workspace_id,pending:activity.activities.some(a=>a.state==='running')||assetJobs.pending(activity.workspace_id)||reviewJobs.pending(activity.workspace_id),creatorKey:opts.creatorStyleStore?.sessionKey(ts.actor.snapshot().project_id)}},
     review:()=>opts.getReviewerSummary?.(true),
     verify:(project,requirements,signal)=>opts.verifyCompletionOutput?opts.verifyCompletionOutput(project,requirements,signal):verifyDelivery(project,requirements,opts.getActiveWindow??(()=>null),signal),
     endWork:binding=>{const agent=opts.getTsHost?.()?.agent,owned=agent?.snapshot().session?.connection_id;if(owned&&binding.connections.has(owned))agent!.end('agent',owned)},
   })
-  const nativeTerminals=new Map<string,{token:string;binding:import('../sclip/completionCheckpoint.js').TerminalBinding;handler:(event:HermesTurnEvent)=>void}>()
+  const nativeTerminals=new Map<string,{token:string;binding:import('../sclip/completionCheckpoint.js').TerminalBinding;handler:HermesTurnObserver}>()
   let available = true
   const log = opts.log ?? NO_MCP_LOG
 
@@ -109,11 +114,17 @@ export async function startMcpHost(backend: Backend, opts: McpHostOptions = {}):
     next()
   })
 
-  appExpress.post('/mcp/terminal/:id',(req,res)=>{
+  appExpress.post('/mcp/terminal/:id',async (req,res)=>{
     const terminal=nativeTerminals.get(String(req.params.id)),token=req.headers['x-sclip-lifecycle']
     if(!terminal||typeof token!=='string'||Buffer.byteLength(token)!==Buffer.byteLength(terminal.token)||!timingSafeEqual(Buffer.from(token),Buffer.from(terminal.token))){res.status(403).json({error:'Unknown native terminal lifecycle'});return}
+    if(req.body?.kind==='telemetry'){
+      if(terminal.binding.closed||req.body.turn_id!==terminal.binding.activeTurn||typeof req.body.event!=='string') {res.status(409).json({error:'Stale telemetry'});return}
+      const data=req.body.data&&typeof req.body.data==='object'?req.body.data:{}
+      runtimeTrace.record(req.body.event,{...data,project_id:terminal.binding.projectId,opening:terminal.binding.opening,session_id:terminal.binding.sessionId,turn_id:terminal.binding.activeTurn})
+      res.json({accepted:true});return
+    }
     if(!validTurnEvent(req.body)){res.status(400).json({error:'Invalid native task metadata'});return}
-    try{terminal.handler(req.body);res.json({accepted:true})}catch{res.status(409).json({error:'Stale native task/project binding'})}
+    try{const feedback=await terminal.handler(req.body);runtimeTrace.record(`turn.${req.body.kind}`,{project_id:terminal.binding.projectId,opening:terminal.binding.opening,session_id:terminal.binding.sessionId,turn_id:terminal.binding.activeTurn,status:completionDisposition(terminal.binding.actor.snapshot(),completionReviews).status});res.json({accepted:true,...(feedback?.context?{context:feedback.context.slice(0,24000)}:{}),...(feedback?.action?{action:feedback.action,message:feedback.message?.slice(0,24000)}:{})})}catch{res.status(409).json({error:'Stale native task/project binding'})}
   })
 
   async function sourceMaps(snap: import('../state/model.js').Project, coarse: boolean) {
@@ -133,7 +144,7 @@ export async function startMcpHost(backend: Backend, opts: McpHostOptions = {}):
   appExpress.post('/mcp/evidence', async (req,res) => {
     const snap=opts.getTsHost?.()?.actor.snapshot()
     if (!snap || snap.project_id!==req.body?.project_id) {res.status(409).json({error:'Evidence requires current project'});return}
-    const maps=await sourceMaps(snap,true)
+    const maps=await sourceMaps(snap,false)
     if(reviewState(snap)!==reviewState(opts.getTsHost?.()?.actor.snapshot())){res.status(409).json({error:'Project changed during source evidence acquisition; reacquire'});return}
     res.json({...buildEditorialEvidencePacket(snap,{transcriptsDir:req.body?.transcripts_dir},undefined,maps), background_review:{...currentCritique(snap,opts.getReviewerSummary),review_disposition:completionDisposition(snap,completionReviews)}})
   })
@@ -226,7 +237,7 @@ export async function startMcpHost(backend: Backend, opts: McpHostOptions = {}):
       const review = reviewId ? reviews.get(reviewId) : undefined
       if (reviewId && !review) { res.status(404).json({ error: 'Unknown review session' }); return }
       newServer = buildMcpServer(backend, { ...opts, observeCompletion:()=>checkpoint.observe(), completionReviews, connectionId,
-        ...(native ? {captureRequestAuthority: () => checkpoint.captureRequestAuthority(native.binding)} : {}),
+        ...(native ? {getRuntimeIdentity:()=>({project_id:native.binding.projectId,opening:native.binding.opening,session_id:native.binding.sessionId,turn_id:native.binding.activeTurn,request_id:String(native.binding.activeSerial??0)}),captureRequestAuthority: () => checkpoint.captureRequestAuthority(native.binding),authorizeTool:(name:string)=>checkpoint.admitTool(native.binding,name)} : {}),
         ...(review ? { revisionGuard: review.guard, reviewProjectId: review.projectId } : {}) })
       servers.add(newServer)
       // `getClientVersion()` is populated while the `initialize` REQUEST is
@@ -278,7 +289,7 @@ export async function startMcpHost(backend: Backend, opts: McpHostOptions = {}):
     registerHermesTerminal(projectId,sessionId,handler) {
       const binding=checkpoint.bind(projectId,sessionId),id=randomUUID(),token=randomBytes(32).toString('hex')
       nativeTerminals.set(id,{token,binding,handler})
-      return {url:`${url}/terminal/${id}`,token,start:e=>checkpoint.start(binding,e),finish:(e,allow,cancelled)=>checkpoint.finish(binding,e,allow,cancelled),cancel:()=>checkpoint.cancel(binding),interrupt:(reason,cancelled)=>checkpoint.interrupt(binding,reason,cancelled),close:()=>{checkpoint.closeBinding(binding);nativeTerminals.delete(id)}}
+      return {url:`${url}/terminal/${id}`,token,start:e=>checkpoint.start(binding,e),check:e=>checkpoint.check(binding,e),finish:(e,allow,cancelled)=>checkpoint.finish(binding,e,allow,cancelled),cancel:()=>checkpoint.cancel(binding),interrupt:(reason,cancelled)=>checkpoint.interrupt(binding,reason,cancelled),close:()=>{checkpoint.closeBinding(binding);nativeTerminals.delete(id)}}
     },
     setEditingBrief(brief,projectId) {checkpoint.observe(); const project=opts.getTsHost?.()?.actor.snapshot(); if(project&&(!projectId||project.project_id===projectId))setEditingBrief(project,completionReviews,brief) },
     reviewDisposition() { checkpoint.observe(); const project=opts.getTsHost?.()?.actor.snapshot(); return project ? completionDisposition(project,completionReviews) : {status:"not_considered_in_this_state"} },
@@ -305,7 +316,7 @@ export async function startMcpHost(backend: Backend, opts: McpHostOptions = {}):
       }
     },
     async close(): Promise<void> {
-      checkpoint.close();nativeTerminals.clear()
+      assetJobs.close();reviewJobs.close();checkpoint.close();nativeTerminals.clear()
       available = false
       reviews.clear()
       for (const t of transports.values()) await t.close().catch(() => {})

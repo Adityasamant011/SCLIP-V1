@@ -1,0 +1,9 @@
+import type {RoughCutPlanInput} from './roughCutPlan.js'
+export const SOURCE_RANGES_SCHEMA = {type:'array',minItems:1,maxItems:128,description:'Already selected source intervals in output order. No AI selection occurs in this tool.',items:{type:'object',properties:{media_id:{type:'string'},source_start_us:{type:'number',minimum:0},source_end_us:{type:'number',minimum:0},reason:{type:'string'}},required:['media_id','source_start_us','source_end_us'],additionalProperties:false}}
+/** Mechanical adapter only. The agent supplies every interval and its order;
+ * descriptive plan fields are neutral bookkeeping, not inferred story/style. */
+export function mechanicalPlanFromRanges(value:unknown):RoughCutPlanInput{
+ if(!Array.isArray(value)||!value.length||value.length>128)throw new Error('clips must contain 1–128 explicit source intervals.')
+ for(const c of value)if(!c||typeof c.media_id!=='string'||!Number.isSafeInteger(c.source_start_us)||!Number.isSafeInteger(c.source_end_us)||c.source_start_us<0||c.source_end_us<=c.source_start_us||Object.keys(c).some(k=>!['media_id','source_start_us','source_end_us','reason'].includes(k)))throw new Error('Each clip needs media_id and valid source_start_us/source_end_us numbers; no inferred/default ranges.')
+ return {version:1,brief:{goal:'Place explicit source intervals in supplied order.',audience:'Not specified.',tone:['Not specified.'],target_duration_us:value.reduce((n,c)=>n+c.source_end_us-c.source_start_us,0)},source_summary:'Explicit agent-selected source intervals.',editorial_thesis:'Keep supplied intervals in supplied order.',sections:[{id:'selection',purpose:'Mechanical assembly of explicitly selected intervals.',clips:value.map(c=>({...c,action:'keep',reason:c.reason??'Explicitly selected source interval.'}))}],removed_ranges:[],uncertainties:[]}
+}

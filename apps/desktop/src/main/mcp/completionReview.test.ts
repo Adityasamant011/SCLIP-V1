@@ -19,10 +19,39 @@ import { stageEditorialEvidence } from '../sclip/autonomousReview'
 import { reviewState } from '../sclip/evidenceCoordinates'
 vi.mock('electron',()=>({app:{isPackaged:true}}))
 vi.mock('./auth',()=>({loadOrInitAuth:()=>({token:'offline-token',port:0}),saveAuth:()=>{},rotateToken:(a:unknown)=>a}))
-vi.mock('../sclip/visionRuntime',()=>({getVisionRuntime:()=>({analyze:async()=>({ok:true,description:'Synthetic rendered frame observation; inset is visible',confidence:'low'}),clearCache:()=>{}})}))
+vi.mock('../sclip/visionRuntime',()=>({getVisionRuntime:()=>({status:async()=>({model:'synthetic-vision',state:'ready',modelLoaded:true,running:true}),analyze:async()=>({ok:true,description:'Synthetic rendered frame observation; inset is visible',confidence:'low'}),clearCache:()=>{}})}))
 const hermesSource=process.env.SCLIP_OFFLINE_HERMES_SOURCE ?? path.join(os.homedir(),'SCLIP/hermes-agent-src')
 const body=(r:any)=>JSON.parse(r.content[0].text)
 const receipt=(r:any)=>r.content.filter((b:any)=>b.type==='text').map((b:any)=>{try{return JSON.parse(b.text).evidence_receipt}catch{return null}}).find(Boolean)
+it('returns creator context only through an authenticated current native-turn binding',async()=>{
+ const f=await fixture()
+ try{
+  const id=f.actor.snapshot().project_id
+  let lease:ReturnType<typeof f.host.registerHermesTerminal>
+  lease=f.host.registerHermesTerminal(id,'learning-context',e=>{lease.start(e);return {context:'Fresh scoped creator evidence'}})
+  const send=(token:string)=>fetch(lease.url,{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer offline-token','X-Sclip-Lifecycle':token},body:JSON.stringify({kind:'start',turn_id:'native-accepted',user_message:'no'})})
+  expect((await send('wrong')).status).toBe(403)
+  expect(await (await send(lease.token)).json()).toEqual({accepted:true,context:'Fresh scoped creator evidence'})
+  lease.close();expect((await send(lease.token)).status).toBe(403)
+ }finally{await f.close()}
+})
+it('learning-only continuation cannot edit, is bounded to twelve canonical calls, and releases the restriction for a genuine user turn',async()=>{
+ const f=await fixture(),lease=f.host.registerHermesTerminal(f.actor.snapshot().project_id,'learning-budget',()=>{})
+ const info=f.host.getInfo(),url=new URL(info.url);url.searchParams.set('native_terminal',lease.url.split('/').at(-1)!)
+ const client=new Client({name:'native-learning-fixture',version:'1'},{}),made={content:'Synthetic label',t_start_us:0,duration_us:1000000}
+ try{
+  await client.connect(new StreamableHTTPClientTransport(url,{requestInit:{headers:{Authorization:`Bearer ${info.bearer_token}`}}}))
+  lease.start({kind:'start',turn_id:'learning',user_message:'[Sclip creator learning] Review only'})
+  const before=f.actor.snapshot()
+  const denied=await client.callTool({name:'add_text_layer',arguments:made})
+  expect(denied.isError).toBe(true);expect(JSON.stringify(denied)).toContain('LEARNING_ONLY');expect(f.actor.snapshot()).toBe(before)
+  for(let n=0;n<12;n++)await client.callTool({name:'creator_style_memory',arguments:{action:'context'}})
+  const exhausted=await client.callTool({name:'creator_style_memory',arguments:{action:'context'}})
+  expect(JSON.stringify(exhausted)).toContain('LEARNING_BUDGET_EXHAUSTED')
+  lease.start({kind:'start',turn_id:'genuine',user_message:'Add a text label now.'})
+  expect((await client.callTool({name:'add_text_layer',arguments:made})).isError).not.toBe(true)
+ }finally{await client.close();lease.close();await f.close()}
+})
 async function fixture(withAudio = false) {
  const ids=uuidV7Gen(),initial=blankProject(ids,'offline-completion')
  const media=mediaItemTemplate('00000000-0000-0000-0000-000000000001','Video',5000000)
@@ -60,6 +89,7 @@ async function fixture(withAudio = false) {
 describe('Normal completion: critique -> Hermes choice -> actor -> fresh evidence',()=>{
  it('can collect final audio/speech after a closed visual repair, preserving the completion evidence gate',async()=>{
   const audio=vi.spyOn(await import('../sclip/renderedAudioEvidence'),'inspectRenderedAudio').mockResolvedValue({coordinate_space:'timeline',evidence_origin:'CURRENT_TIMELINE',status:'measured',has_audio:true,signal:{duration_us:2000000,rms:0.1,peak:0.4},transcript:{status:'available',segments:[{text:'Synthetic speech',t_start_us:0,t_end_us:2000000}]},observed_dimensions:['audio','speech']} as any)
+  const visual=vi.spyOn(await import('../sclip/timelineVisualEvidence'),'inspectTimelineRangeVisuals').mockResolvedValue({representative_samples:[{timeline_t_us:1000000}],frame_observations:[{timeline_t_us:1000000,inference_ok:true,description:'Synthetic speech subject'}]} as any)
   const f=await fixture(true)
   try{
    const id=await f.assemble();f.host.setEditingBrief('Create a video with speech.');await f.call('end_agent_session')
@@ -73,11 +103,11 @@ describe('Normal completion: critique -> Hermes choice -> actor -> fresh evidenc
    const premature=await f.call('revision_control',{action:'complete'})
    expect(premature.isError).toBe(true)
    expect(JSON.stringify(premature)).toContain('current_rendered_inspection')
-   expect((await f.call('inspect_rendered_audio',{start_us:0,end_us:2000000})).isError).not.toBe(true)
+   expect((await f.call('inspect_audio_visual_alignment',{start_us:0,end_us:2000000})).isError).not.toBe(true)
    expect((await f.call('revision_control',{action:'complete'})).isError).not.toBe(true)
    expect(body(await f.call('end_agent_session')).completion).toBe('reviewed')
    expect(audio).toHaveBeenCalledTimes(2)
-  }finally{await f.close();audio.mockRestore()}
+  }finally{await f.close();audio.mockRestore();visual.mockRestore()}
  })
  it.each(['hi','What can you do with video?','Explain how to make a 30-second video.'])('ending read-only work on %s does not demand a media deliverable',async brief=>{
   const f=await fixture();try{
@@ -312,4 +342,27 @@ describe('background feedback transport is observational and bounded',()=>{
    expect(f.actor.snapshot().compositions[f.actor.snapshot().root_id].tracks.flatMap(t=>t.layers).find(l=>l.id===id)?.label).toBe('Verified committed label')
   }finally{await f.close()}
  })
+})
+it('native review jobs return before physical acquisition and preserve current evidence on await',async()=>{
+ const f=await fixture();let native:Client|undefined,release:(()=>void)|undefined
+ try{
+  await f.assemble();await f.call('end_agent_session')
+  const lease=f.host.registerHermesTerminal(f.actor.snapshot().project_id,'resumable-review',()=>{})
+  lease.start({kind:'start',turn_id:'owned-review',user_message:'Review this draft.'})
+  const url=new URL(f.host.getInfo().url);url.searchParams.set('native_terminal',lease.url.split('/').at(-1)!)
+  native=new Client({name:'native-review-jobs',version:'1'})
+  await native.connect(new StreamableHTTPClientTransport(url,{requestInit:{headers:{Authorization:'Bearer offline-token'}}}))
+  const original=f.activeWindow.webContents.executeJavaScript,gate=new Promise<void>(r=>release=r)
+  f.activeWindow.webContents.executeJavaScript=async()=>{await gate;return original()}
+  const prepared:any=await native.callTool({name:'prepare_review',arguments:{tool:'inspect_timeline_range_visuals',arguments:{start_us:0,end_us:1000000}}})
+  expect(prepared.isError).not.toBe(true);expect(prepared.structuredContent.contract).toBe('sclip.tool.v2')
+  const job=body(prepared).job
+  const running:any=await native.callTool({name:'review_job',arguments:{id:job.id,action:'status'}})
+  expect(body(running).state,JSON.stringify(body(running))).toBe('running');release!()
+  const done:any=await native.callTool({name:'review_job',arguments:{id:job.id,action:'await'}})
+  expect(body(done).state).toBe('completed');expect(body(done).result.isError).not.toBe(true)
+  lease.start({kind:'start',turn_id:'new-turn',user_message:'New request'})
+  const expired=await native.callTool({name:'review_job',arguments:{id:job.id,action:'status'}})
+  expect(expired.isError).toBe(true);lease.close()
+ }finally{release?.();await native?.close();await f.close()}
 })

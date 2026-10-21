@@ -70,6 +70,7 @@ def main():
     parser.add_argument("--output", default=None, help="Output destination WAV path")
     parser.add_argument("--model", default=None, help="Path to kokoro ONNX model file")
     parser.add_argument("--voices", default=None, help="Path to voices.bin file")
+    parser.add_argument("--batch-json", default=None, help="App-owned bounded synthesis batch file")
     args = parser.parse_args()
 
     model_path, voices_path = ensure_model_files(args.model, args.voices)
@@ -108,43 +109,47 @@ def main():
         "sohee": "af_nicole",
     }
 
-    voice_key = args.voice.lower().strip()
-    speaker = voice_alias_map.get(voice_key, voice_key)
-
     kokoro = kokoro_onnx.Kokoro(model_path, voices_path)
     available_voices = set(kokoro.get_voices())
 
     if args.list_voices:
         print(json.dumps({"voices": sorted(v for v in available_voices if v.startswith(("a", "b"))), "supported_languages": ["en-us", "en-gb"], "other_voice_count": sum(not v.startswith(("a", "b")) for v in available_voices), "aliases": {k: v for k, v in voice_alias_map.items() if v in available_voices}, "model": os.path.basename(model_path)}))
         return
-    if not args.text or not args.output:
-        parser.error("--text and --output are required for synthesis")
-    if speaker not in available_voices:
-        parser.error(f"Unknown Kokoro voice {speaker!r}; use --list-voices. No substitute voice was generated.")
-
-    if not speaker.startswith(("a", "b")):
-        parser.error("This worker currently supports English pronunciation only; no voice/language substitution performed.")
-    lang = "en-gb" if speaker.startswith("b") else "en-us"
-
-    output_dir = os.path.dirname(os.path.abspath(args.output))
-    os.makedirs(output_dir, exist_ok=True)
-
-    samples, sample_rate = kokoro.create(
-        text=args.text,
-        voice=speaker,
-        speed=args.speed,
-        lang=lang,
-    )
-
-    sf.write(args.output, samples, sample_rate)
-
-    if os.path.exists(args.output) and os.path.getsize(args.output) > 100:
-        print(json.dumps({"engine": "kokoro-tts", "resolved_voice": speaker, "requested_voice": args.voice,
-                          "model": os.path.basename(model_path), "language": lang, "speed": args.speed, "sample_rate": sample_rate}))
-        sys.exit(0)
-    else:
-        sys.stderr.write(f"Failed to write output audio file to {args.output}\n")
-        sys.exit(1)
+    jobs = [{"text": args.text, "output": args.output, "voice": args.voice, "speed": args.speed}]
+    if args.batch_json:
+        if os.path.getsize(args.batch_json) > 200000:
+            parser.error("Speech batch input too large")
+        with open(args.batch_json, encoding="utf-8") as source:
+            jobs = json.load(source)
+        if not isinstance(jobs, list) or not 1 <= len(jobs) <= 8:
+            parser.error("Speech batch requires 1-8 explicit requests")
+    if not args.batch_json and isinstance(args.output, str):
+        jobs[0]["output"] = os.path.abspath(args.output)
+    validated = []
+    for job in jobs:
+        if not isinstance(job, dict) or set(job) != {"text", "voice", "speed", "output"}:
+            parser.error("Invalid speech batch request fields")
+        if not isinstance(job["text"], str) or not job["text"].strip() or not isinstance(job["output"], str) or not os.path.isabs(job["output"]):
+            parser.error("Explicit nonempty text and absolute output required")
+        if not isinstance(job["voice"], str):
+            parser.error("Explicit speech voice required")
+        if not isinstance(job["speed"], (int, float)) or not 0.25 <= job["speed"] <= 4:
+            parser.error("Invalid speech speed")
+        speaker = voice_alias_map.get(job["voice"].lower().strip(), job["voice"].lower().strip())
+        if speaker not in available_voices or not speaker.startswith(("a", "b")):
+            parser.error("Unsupported requested English voice; no substitution")
+        validated.append((job, speaker))
+    results = []
+    for job, speaker in validated:
+        lang = "en-gb" if speaker.startswith("b") else "en-us"
+        os.makedirs(os.path.dirname(job["output"]), exist_ok=True)
+        samples, sample_rate = kokoro.create(text=job["text"], voice=speaker, speed=job["speed"], lang=lang)
+        sf.write(job["output"], samples, sample_rate)
+        if os.path.getsize(job["output"]) <= 100:
+            raise RuntimeError("No usable speech output")
+        results.append({"engine":"kokoro-tts", "resolved_voice":speaker, "requested_voice":job["voice"],
+                        "model":os.path.basename(model_path), "language":lang, "speed":job["speed"], "sample_rate":sample_rate})
+    print(json.dumps(results if args.batch_json else results[0]))
 
 if __name__ == "__main__":
     main()

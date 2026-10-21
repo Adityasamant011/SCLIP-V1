@@ -1,11 +1,15 @@
-import { validateOutputState, sourceFingerprint, deliveryProofValid, outputRequirements, type OutputRequirements, type DeliveryProof } from './finalOutput.js'
-import { explicitOutputDuration, type DurationRequirement } from './editingBrief.js'
+import type { SourceInspectionBudget } from './sourceInspectionBudget.js'
+import { validateOutputState, sourceFingerprint, deliveryProofValid, followupRequirements, type OutputRequirements, type DeliveryProof } from './finalOutput.js'
+import { explicitOutputDuration, revisesOutputDuration, type DurationRequirement } from './editingBrief.js'
 import type { Project } from '../state/model.js'
 import { RevisionLoopGuard } from './revisionLoopGuard.js'
 import { reviewState } from './evidenceCoordinates.js'
 
 /** Host-scoped existing guards survive MCP transport reconnects. No creative state. */
 export interface CompletionReview {
+  alignmentState?: string
+  alignmentWindows?: {state:string;ranges:number[][]}
+  sourceInspectionBudget?: SourceInspectionBudget
   originalBrief?: string
   requestSerial?: number
   requirements?: OutputRequirements
@@ -48,7 +52,7 @@ export function hasAuthoredOutput(project: Project) {
 /** Imports and labels alone do not change authored output. Locks affect native audio gates. Guard freshness still uses full reviewState. */
 export function outputState(project: Project): string {
   const used = new Set(Object.values(project.compositions).flatMap(c => c.tracks.flatMap(t => t.layers.flatMap(l => 'media' in l.params ? [l.params.media] : []))))
-  return JSON.stringify({ compositions: project.compositions, audio_roles: project.audio_roles, settings: project.settings,
+  return JSON.stringify({ compositions: Object.fromEntries(Object.entries(project.compositions).map(([id,c])=>[id,{...c,tracks:c.tracks.filter(t=>t.layers.length>0)}])), audio_roles: project.audio_roles, settings: project.settings,
     media: Object.values(project.media_pool).filter(m => used.has(m.id)).map(m => ({id:m.id,hash:m.file_hash_blake3,metadata:m.metadata})) },
     (key, value) => ['label', 'markers'].includes(key) ? undefined : value)
 }
@@ -75,15 +79,19 @@ export function completionDisposition(project: Project, sessions: Map<string, Co
 export function setEditingBrief(project: Project, sessions: Map<string, CompletionReview>, brief: string | null) {
   const entry=completionReview(project,sessions)
   entry.requestSerial=(entry.requestSerial??0)+1
+  delete entry.alignmentState
+  delete entry.alignmentWindows
+  delete entry.sourceInspectionBudget
+  const revised=brief?followupRequirements(brief,project,entry.requirements):undefined
   const fresh=brief?explicitOutputDuration(brief):undefined
-  if(brief!==null && !/^\s*continue\b/i.test(brief))entry.requirements=outputRequirements(brief,project)
-  if(brief!==null && !/^\s*continue\b/i.test(brief))entry.originalBrief=brief.slice(0,8000)
+  if(brief!==null && !/^\s*continue\b/i.test(brief))entry.requirements=revised?.requirements
+  if(brief!==null && !/^\s*continue\b/i.test(brief))entry.originalBrief=revised?.followup&&entry.originalBrief?entry.originalBrief.slice(0,5900)+'\nLatest creator update overrides conflicting earlier requirements:\n'+brief.slice(0,2000):brief.slice(0,8000)
   if(brief===null)delete entry.requirements
   if(brief===null)delete entry.originalBrief
   const stopped=!!entry.lifecycle&&['response_only','cancelled','interrupted','incomplete'].includes(entry.lifecycle.status)
   delete entry.lifecycle;delete entry.delivery
   const finished=stopped||entry.guard.status.phase==='done'||!!entry.limitation
-  entry.requirement=brief===null?undefined:fresh??(finished?undefined:entry.requirement)
+  entry.requirement=brief===null?undefined:fresh??(brief&&revisesOutputDuration(brief)?undefined:revised?.followup?entry.requirement:finished?undefined:entry.requirement)
   if(fresh||finished)entry.correctionRequests=0
   if(finished){
     delete entry.deliveryRequested

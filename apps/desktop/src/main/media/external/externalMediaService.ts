@@ -1,3 +1,4 @@
+import { runtimeScheduler } from '../../sclip/runtimeScheduler.js'
 import type {
   BatchVisualIntentItem,
   BatchVisualIntentResult,
@@ -466,7 +467,7 @@ export class ExternalMediaService {
             telemetry.providers_queried++
             let timeoutId: NodeJS.Timeout | undefined
             const candidates = await Promise.race([
-              provider.search(searchOptions),
+              runtimeScheduler.run('stock_search',['network'],()=>provider.search(searchOptions)),
               new Promise<ExternalMediaCandidate[]>((_, reject) => {
                 timeoutId = setTimeout(
                   () => reject(new Error(`${provider.name} search timed out after 8000ms`)),
@@ -502,7 +503,7 @@ export class ExternalMediaService {
             const fallbackPromises = filteredProviders.map(async (provider) => {
               const release = await this.searchSemaphore.acquire()
               try {
-                return await provider.search({ ...searchOptions, query: simplified })
+                return await runtimeScheduler.run('stock_search',['network'],()=>provider.search({ ...searchOptions, query: simplified }))
               } catch {
                 return []
               } finally {

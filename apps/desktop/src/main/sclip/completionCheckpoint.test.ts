@@ -38,7 +38,7 @@ describe('Structured native termination and authoritative completion checkpoint'
   const f=fixture(true);try{f.start('t1','Make a video.');const r=await f.controller.finish(f.binding,f.normal(),true);expect(r.status).toBe('review_required');expect(r.followup).toContain('EMPTY_OUTPUT')}finally{f.close()}
  })
  it('a new actual edit after conversation cannot inherit response-only completion',async()=>{
-  const f=fixture();try{f.start('t1','hi',false);await f.controller.finish(f.binding,f.normal(),true);f.start('t2');const r=await f.controller.finish(f.binding,f.normal('t2'),true);expect(r.status).toBe('review_required');expect(f.verify).toHaveBeenCalledOnce()}finally{f.close()}
+  const f=fixture();try{f.start('t1','hi',false);await f.controller.finish(f.binding,f.normal(),true);f.start('t2');const r=await f.controller.finish(f.binding,f.normal('t2'),true);expect(r.status).toBe('review_required');expect(f.verify).not.toHaveBeenCalled()}finally{f.close()}
  })
  it('cancellation and unknown background work never become response-only success',async()=>{
   const f=fixture(true);try{f.start('t1','hi',false);expect((await f.controller.finish(f.binding,{...f.normal(),background_jobs_pending:true},true)).status).toBe('incomplete')}finally{f.close()}
@@ -85,9 +85,9 @@ describe('Structured native termination and authoritative completion checkpoint'
    expect(completionDisposition(f.actor.snapshot(),f.sessions).status).toBe('cancelled')
   }finally{f.close()}
  })
- it('normal final answer without explicit end cannot certify a skipped review; gives bounded feedback to Hermes',async()=>{const f=fixture();try{f.start();const r=await f.controller.finish(f.binding,f.normal(),true);expect(r.status).toBe('review_required');expect(r.followup).toContain('CURRENT_HERMES_RENDERED_REVIEW_REQUIRED');expect(f.verify).toHaveBeenCalledOnce();expect(f.end).not.toHaveBeenCalled()}finally{f.close()}})
+ it('normal final answer without explicit end cannot certify a skipped review; gives bounded feedback to Hermes',async()=>{const f=fixture();try{f.start();const r=await f.controller.finish(f.binding,f.normal(),true);expect(r.status).toBe('review_required');expect(r.followup).toContain('CURRENT_HERMES_RENDERED_REVIEW_REQUIRED');expect(f.verify).not.toHaveBeenCalled();expect(f.end).not.toHaveBeenCalled()}finally{f.close()}})
  it('allows a current legitimate no-repair decision and decoded output',async()=>{const f=fixture();try{f.start();f.reviewed();const r=await f.controller.finish(f.binding,f.normal(),true);expect(r.status).toBe('completed');expect(r.decision.action).toBe('conclude_no_repair');expect(f.end).toHaveBeenCalledOnce()}finally{f.close()}})
- it('duplicate finalization is idempotent and gives no duplicate continuation',async()=>{const f=fixture();try{f.start();const [a,b]=await Promise.all([f.controller.finish(f.binding,f.normal(),true),f.controller.finish(f.binding,f.normal(),true)]);expect(a.followup).toBeTruthy();expect(b.followup).toBeUndefined();expect(f.verify).toHaveBeenCalledOnce()}finally{f.close()}})
+ it('duplicate finalization is idempotent and gives no duplicate continuation',async()=>{const f=fixture();try{f.start();const [a,b]=await Promise.all([f.controller.finish(f.binding,f.normal(),true),f.controller.finish(f.binding,f.normal(),true)]);expect(a.followup).toBeTruthy();expect(b.followup).toBeUndefined();expect(f.verify).not.toHaveBeenCalled()}finally{f.close()}})
  it('waits for pending MCP operations after a genuine task end',async()=>{const f=fixture();try{f.start();f.reviewed();f.setPending(true);const done=f.controller.finish(f.binding,f.normal(),true);expect(f.verify).not.toHaveBeenCalled();setTimeout(()=>f.setPending(false),30);expect((await done).status).toBe('completed')}finally{f.close()}})
  it('never confuses active provider silence with completion',()=>{const f=fixture();try{f.start();expect(completionDisposition(f.actor.snapshot(),f.sessions).status).toBe('running');expect(f.verify).not.toHaveBeenCalled()}finally{f.close()}})
  it('rejects stale render evidence after mutation and after returning to equal content',async()=>{const f=fixture();try{f.start();f.reviewed();const old=f.actor.snapshot();expect(f.actor.dispatch('add_layer',{track:old.compositions[old.root_id].tracks[0].id,kind:'color',t_start_us:30e6,t_end_us:31e6,color:{r:0,g:0,b:0,a:255}}).ok).toBe(true);f.actor.replaceState(old);expect((await f.controller.finish(f.binding,f.normal(),true)).status).toBe('review_required')}finally{f.close()}})
@@ -104,4 +104,26 @@ describe('Structured native termination and authoritative completion checkpoint'
  it('pending native background work prevents a finished claim or automatic continuation',async()=>{const f=fixture();try{f.start();f.reviewed();const r=await f.controller.finish(f.binding,{...f.normal(),background_jobs_pending:true},true);expect(r.status).toBe('incomplete');expect(r.followup).toBeUndefined();expect(f.verify).not.toHaveBeenCalled()}finally{f.close()}})
  it('a newer user submission supersedes late validation',async()=>{const f=fixture();try{f.start();f.reviewed();f.verify.mockImplementationOnce(async()=>{f.start('new','Make a 20-second video.');return {valid:true,decoded:true,has_video:true,duration_us:30e6,reason:undefined}});expect((await f.controller.finish(f.binding,f.normal(),true)).status).toBe('running');expect(f.end).not.toHaveBeenCalled()}finally{f.close()}})
  it('process crash is interruption; an already completed task is not downgraded on CLI exit',async()=>{const f=fixture();try{f.start();f.controller.interrupt(f.binding,'crash');expect(completionDisposition(f.actor.snapshot(),f.sessions).status).toBe('interrupted')}finally{f.close()}const g=fixture();try{g.start();g.reviewed();await g.controller.finish(g.binding,g.normal(),true);g.controller.interrupt(g.binding,'exit:0');expect(completionDisposition(g.actor.snapshot(),g.sessions).status).toBe('completed')}finally{g.close()}})
+})
+
+it('latest maximum overrides the original exact target while retaining the actual creator brief',()=>{
+ const f=fixture();try{
+  f.start('t1','Make a 1-minute tutorial video with narration about Paris.')
+  f.start('t2','make it max3min actually')
+  const e=completionReview(f.actor.snapshot(),f.sessions)
+  expect(e.requirement?.kind).toBe('maximum');expect(e.requirements?.duration?.kind).toBe('maximum')
+  expect(e.requirements?.requiresSpeech).toBe(true);expect(e.originalBrief).toContain('about Paris');expect(e.originalBrief).toContain('max3min')
+ }finally{f.close()}
+})
+it('empty-track setup retains factual receipts until real output changes',()=>{
+ const f=fixture();try{
+  f.start();const e=completionReview(f.actor.snapshot(),f.sessions),state=reviewState(f.actor.snapshot());e.guard.begin()
+  const receipt=e.guard.recordEvidence('inspect_timeline_frame','timeline',[0,0],state,['visual'])
+  const added=f.actor.dispatch('add_track',{label:'Setup only'});expect(added.ok).toBe(true)
+  e.guard.rebaseUnchangedOutput(state,reviewState(f.actor.snapshot()))
+  expect(e.guard.status.evidence_ids).toContain(receipt.id)
+  const comp=f.actor.snapshot().compositions[f.actor.snapshot().root_id]
+  f.actor.dispatch('add_layer',{track:comp.tracks[comp.tracks.length-1].id,kind:'color',color:{r:1,g:2,b:3,a:255},t_start_us:0,t_end_us:1000000})
+  expect(e.guard.status.evidence_ids).not.toContain(receipt.id)
+ }finally{f.close()}
 })

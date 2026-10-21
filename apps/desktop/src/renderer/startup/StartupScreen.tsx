@@ -18,6 +18,7 @@ import {
 } from "../shortcuts/useShortcuts";
 import { wireDecodeComponent } from "../settings/decodeComponentStore";
 import { SettingsPanel } from "../settings/SettingsPanel";
+import { AccountButton } from '../settings/AccountSection';
 import { AppDialog } from "../components/AppDialog";
 import { Menu, MenuItem, MenuSeparator } from "../menu/Menu";
 import { AppInput } from "../components/AppInput";
@@ -272,6 +273,7 @@ export function StartupScreen({ onWorkspaceReady }: Props) {
             <h1>{t("app.title")}</h1>
             <p className="startup-subtitle">{t("startup.subtitle")}</p>
           </div>
+          <div className="startup-account"><AccountButton /></div>
         </header>
 
         <div className="startup-actions">

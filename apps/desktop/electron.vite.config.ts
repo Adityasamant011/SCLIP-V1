@@ -69,6 +69,10 @@ export default defineConfig({
       // the regex keeps those subpaths external too, so Node resolves them from
       // node_modules at runtime rather than the bundler choking on the subpaths.
       rollupOptions: {
+        // The main bundle is ESM. Several bundled native/media adapters use
+        // Node path globals. Use global bindings so chunks that already declare
+        // their own local path bindings do not receive duplicate declarations.
+        output: { banner: 'globalThis.__dirname ??= import.meta.dirname; globalThis.__filename ??= import.meta.filename;' },
         external: ['@weftcut/core', 'express', 'electron-updater', 'node-pty', /^@modelcontextprotocol\/sdk(\/.*)?$/],
       },
     },

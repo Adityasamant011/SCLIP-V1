@@ -7,14 +7,14 @@ import {stageHermesEditorToolContracts,HERMES_EDITOR_TOOL_CONTRACT_PLUGIN,GENERA
 import {CreatorStyleStore} from './creatorStyle'
 import {spawnSync} from 'node:child_process'
 
-it('stages an idempotent native memory jurisdiction contract without changing inference or memory files',()=>{
+it('stages an idempotent native memory jurisdiction contract while preserving explicit inference choices and memory files',()=>{
  const home=fs.mkdtempSync(path.join(os.tmpdir(),'sclip-tool-contract-'))
  try {
   fs.writeFileSync(path.join(home,'config.yaml'),'plugins:\n  enabled: [custom-local]\n  disabled: [custom-disabled]\nmodel:\n  default: preserved-model\n')
   fs.mkdirSync(path.join(home,'memories'));fs.writeFileSync(path.join(home,'memories','MEMORY.md'),'Existing creator-owned bytes')
   expect(stageHermesEditorToolContracts(home)).toBe(true);expect(stageHermesEditorToolContracts(home)).toBe(true)
   const c=parse(fs.readFileSync(path.join(home,'config.yaml'),'utf8'))
-  expect(c.plugins.enabled).toEqual(['custom-local','sclip-editor-tool-contracts']);expect(c.plugins.disabled).toEqual(['custom-disabled']);expect(c.model.default).toBe('preserved-model')
+  expect(c.plugins.enabled).toEqual(['custom-local','sclip-editor-tool-contracts']);expect(c.plugins.disabled).toEqual(['custom-disabled']);expect(c.model.default).toBe('preserved-model');expect(c.agent.reasoning_effort).toBe('low')
   expect(fs.readFileSync(path.join(home,'memories','MEMORY.md'),'utf8')).toBe('Existing creator-owned bytes')
   expect(fs.readFileSync(path.join(home,'plugins','sclip-editor-tool-contracts','__init__.py'),'utf8')).toBe(HERMES_EDITOR_TOOL_CONTRACT_PLUGIN)
   expect(HERMES_EDITOR_TOOL_CONTRACT_PLUGIN).not.toContain('register_tool');expect(HERMES_EDITOR_TOOL_CONTRACT_PLUGIN).not.toContain('write_text')
@@ -88,6 +88,10 @@ assert store.user_entries==['Use clear explanations'],store.user_entries
 result=execute({'action':'remove','target':'user','old_text':'Use clear explanations'})
 assert not result.blocked and json.loads(result.result)['success'],result
 assert store.user_entries==[]
+os.environ['SCLIP_LEARNING_ONLY']='1'
+result=execute({'action':'add','target':'user','content':'A generic write is outside this learning-only pass','memory_domain':'general'})
+assert result.blocked and store.user_entries==[]
+os.environ['SCLIP_LEARNING_ONLY']='0'
 print(json.dumps({'blocked_before_dispatch':5,'general_add_replace_remove':'PASS','native_alias':'PASS'}))
 `
   const result=spawnSync(path.resolve('resources/hermes/arm64/python/bin/python3'),['-I','-B','-c',script,path.resolve('resources/hermes/arm64/app'),path.join(home,'contract.py')],{encoding:'utf8',timeout:60000,env:{...process.env,HERMES_HOME:home,SCLIP_ACTIVE_PROJECT_ID:'synthetic-project',SCLIP_CREATOR_PROVENANCE_IDS:JSON.stringify(['00000000-0000-0000-0000-000000000001'])}})
@@ -95,3 +99,45 @@ print(json.dumps({'blocked_before_dispatch':5,'general_add_replace_remove':'PASS
   expect(result.stdout).toContain('"blocked_before_dispatch": 5')
  } finally {fs.rmSync(home,{recursive:true,force:true})}
 },65000)
+
+it('bounds native image fallback per real turn, including concurrent calls, without blocking timeline verification tools',()=>{
+ const script=String.raw`
+import sys,os,types,concurrent.futures
+from types import SimpleNamespace
+os.environ['SCLIP_ACTIVE_PROJECT_ID']='synthetic-budget'
+os.environ.pop('SCLIP_LEARNING_ONLY',None)
+schema={'parameters':{'properties':{}}}
+memory=types.ModuleType('tools.memory_tool');memory.MEMORY_SCHEMA=schema
+exec('def original(args,**kwargs): return args',memory.__dict__)
+entry=SimpleNamespace(schema=schema,handler=memory.original)
+registry=types.ModuleType('tools.registry');registry.registry=SimpleNamespace(get_entry=lambda name:entry)
+sys.modules['tools']=types.ModuleType('tools');sys.modules['tools.memory_tool']=memory;sys.modules['tools.registry']=registry
+hooks={};scope={};exec(sys.stdin.read(),scope)
+scope['register'](SimpleNamespace(register_hook=lambda name,fn:hooks.update({name:fn})))
+hook=hooks['pre_tool_call']
+def call(i):return hook(tool_name='vision_analyze',args={},session_id='fixture',turn_id='one')
+with concurrent.futures.ThreadPoolExecutor(max_workers=12) as pool: results=list(pool.map(call,range(12)))
+assert sum(r is None for r in results)==6,results
+assert sum(r and r['action']=='block' for r in results if r)==6
+assert hook(tool_name='vision_analyze',args={},session_id='fixture',turn_id='two') is None
+assert hook(tool_name='tool_call',args={'name':'mcp__weftcut__vision_inspect','arguments':{'timeline_t_us':1000}},session_id='fixture',turn_id='one') is None
+scope['time'].monotonic=lambda:0
+assert hook(tool_name='tool_call',args={'name':'mcp__weftcut__get_media_context'},session_id='fixture',turn_id='three') is None
+scope['time'].monotonic=lambda:91
+assert hook(tool_name='vision_analyze',args={},session_id='fixture',turn_id='three') is None
+print('PASS')
+`
+ const result=spawnSync('python3',['-B','-c',script],{input:HERMES_EDITOR_TOOL_CONTRACT_PLUGIN,encoding:'utf8'})
+ expect(result.status,result.stderr).toBe(0);expect(result.stdout.trim()).toBe('PASS')
+})
+
+it('preserves an explicit reasoning override, including disabled reasoning',()=>{
+ for(const value of ['high',false]){
+  const home=fs.mkdtempSync(path.join(os.tmpdir(),'sclip-reasoning-default-'))
+  try{
+   fs.writeFileSync(path.join(home,'config.yaml'),JSON.stringify({agent:{reasoning_effort:value,reasoning_overrides:{'a-model':'high'}}}))
+   stageHermesEditorToolContracts(home)
+   expect(parse(fs.readFileSync(path.join(home,'config.yaml'),'utf8')).agent).toEqual({reasoning_effort:value,reasoning_overrides:{'a-model':'high'}})
+  }finally{fs.rmSync(home,{recursive:true,force:true})}
+ }
+})

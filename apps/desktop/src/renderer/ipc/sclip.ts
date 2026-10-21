@@ -54,8 +54,8 @@ export async function sclipApproveRun(runId: string, choice: 'once' | 'session' 
   return invoke<{ ok: boolean; error?: string }>('sclip_approve_hermes_run', { runId, choice })
 }
 
-export async function sclipListProjectSessions(projectId: string): Promise<HermesProjectSessions> {
-  return invoke<HermesProjectSessions>('sclip_list_project_sessions', { projectId })
+export async function sclipListProjectSessions(projectId: string, includeMessages = true): Promise<HermesProjectSessions> {
+  return invoke<HermesProjectSessions>('sclip_list_project_sessions', { projectId, includeMessages })
 }
 
 export async function sclipCreateProjectSession(projectId: string, name: string): Promise<HermesSession> {

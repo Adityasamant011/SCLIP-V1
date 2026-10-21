@@ -153,10 +153,10 @@ describe('HermesTerminalRuntime', () => {
     ])
   })
 
-  it('uses structured native task ends, waits for prompt readiness, and sends at most labelled same-conversation feedback', async () => {
+  it('returns native stop-boundary feedback without terminal-pasted continuations', async () => {
     let handler: any
     const finish=vi.fn(async()=>({status:'review_required',followup:'[Sclip completion checkpoint] Inspect actual current output.'}))
-    const lease={url:'http://127.0.0.1:44555/mcp/terminal/native-launch',token:'private-hook-token',start:vi.fn(),finish,interrupt:vi.fn(),close:vi.fn()}
+    const lease={url:'http://127.0.0.1:44555/mcp/terminal/native-launch',token:'private-hook-token',start:vi.fn(),check:finish,finish,interrupt:vi.fn(),close:vi.fn()}
     const runtime=new HermesTerminalRuntime({isPackaged:false,resourcesPath:'',userDataPath:tmpDir,executableOverride:'/usr/bin/python3',getMcpInfo:()=>({url:'http://127.0.0.1:44555/mcp',bearer_token:'synthetic'}),getProviderEnvironment:()=>({}),assertSession:async()=>{},registerLifecycle:(_p,_s,h)=>{handler=h;return lease},onOutput:e=>outputEvents.push(e),onExit:()=>{}})
     await runtime.ensure('project','session')
     expect(spawnedEnv.SCLIP_MCP_URL).toContain('native_terminal=native-launch')
@@ -165,12 +165,13 @@ describe('HermesTerminalRuntime', () => {
     handler({kind:'start',turn_id:'t1'})
     onDataCallback!('Temporary provider silence')
     expect(finish).not.toHaveBeenCalled()
-    handler({kind:'end',turn_id:'t1',completed:true,turn_exit_reason:'text_response(stop)'})
+    expect(await handler({kind:'check',turn_id:'t1',completed:true,turn_exit_reason:'text_response(stop)'})).toEqual({action:'continue',message:'[Sclip completion checkpoint] Inspect actual current output.'})
+    await handler({kind:'end',turn_id:'t1',completed:true,turn_exit_reason:'text_response(stop)'})
     await new Promise(r=>setTimeout(r,0))
     expect(ptyWriteMock.mock.calls.some(c=>c[0].includes('[Sclip completion checkpoint]'))).toBe(false)
     onDataCallback!('\x1b[?2004h'+'large terminal redraw '.repeat(1000))
-    expect(ptyWriteMock.mock.calls.some(c=>c[0].includes('[Sclip completion checkpoint]'))).toBe(true)
-    expect(outputEvents.map(e=>e.data).join('')).toContain('Completion checkpoint: review_required')
+    expect(ptyWriteMock.mock.calls.some(c=>c[0].includes('[Sclip completion checkpoint]'))).toBe(false)
+    expect(outputEvents.map(e=>e.data).join('')).toContain('Delivery: INCOMPLETE / UNVERIFIED (review_required)')
     runtime.stopAll()
   })
   it('cancellation prevents automatic feedback and notifies process interruption', async () => {
@@ -181,6 +182,24 @@ describe('HermesTerminalRuntime', () => {
     await runtime.input('project','session','\x03');handler({kind:'end',turn_id:'t1',interrupted:true})
     await new Promise(r=>setTimeout(r,0));expect(lease.finish).toHaveBeenCalledWith(expect.anything(),false,true)
     onExitCallback!({exitCode:1});expect(lease.interrupt).toHaveBeenCalledWith('process_exit:1',true)
+  })
+
+  it('refreshes attributed learning context on accepted turns without injecting a post-delivery learning task',async()=>{
+    let handler:any
+    const prepare=vi.fn(()=> 'Fresh creator evidence')
+    const lease={url:'http://127.0.0.1/mcp/terminal/learning',token:'synthetic',start:vi.fn(),finish:vi.fn(async()=>({status:'response_only'})),interrupt:vi.fn(),close:vi.fn()}
+    const runtime=new HermesTerminalRuntime({isPackaged:false,resourcesPath:'',userDataPath:tmpDir,executableOverride:'/usr/bin/python3',getMcpInfo:()=>({url:'http://127.0.0.1/mcp',bearer_token:'synthetic'}),getProviderEnvironment:()=>({}),assertSession:async()=>{},registerLifecycle:(_p,_s,h)=>{handler=h;return lease},prepareCreatorTurn:prepare,onOutput:()=>{},onExit:()=>{}})
+    await runtime.ensure('project','session')
+    await runtime.input('project','session','no\r')
+    const accepted=await handler({kind:'start',turn_id:'t1',user_message:'no'});expect(accepted.context).toContain('Fresh creator evidence');expect(accepted.context).toContain('Fresh accepted-turn project/media context');expect(accepted.context).toContain('synthetic')
+    expect(prepare).toHaveBeenCalledWith('project','session','t1','no')
+    await handler({kind:'end',turn_id:'t1',completed:true,background_jobs_pending:false})
+    onDataCallback!('\x1b[?2004h')
+    expect(ptyWriteMock.mock.calls.some(c=>c[0].includes('[Sclip creator learning]'))).toBe(false)
+    await runtime.input('project','session','Keep this current request.\r')
+    await handler({kind:'start',turn_id:'t2',user_message:'Keep this current request.'})
+    expect(prepare).toHaveBeenLastCalledWith('project','session','t2','Keep this current request.')
+    runtime.stopAll()
   })
 
   it('enforces session assertion before spawning or sending input', async () => {

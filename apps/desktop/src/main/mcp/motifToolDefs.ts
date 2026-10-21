@@ -33,7 +33,7 @@ export const MOTIF_TOOL_DEFS: ReadonlyArray<MotifToolDef> = [
   },
   {
     name: 'write_hyperframes_draft',
-    description: 'Create editable explanatory B-roll or motion graphics through HyperFrames. Two modes: (1) recipe + props with exact width/height and duration_s builds an original tested graphic WITHOUT copying HTML. Read get_hyperframes_recipe to discover ids and prop definitions; supplied prop values become editable draft defaults. Process recipe includes connected stages and a moving marker with second_at/third_at narration beats. (2) Custom manifest + html supports designs beyond recipes. Supply metadata {name,size:[w,h],default_duration_s,props_schema} and one data-composition-id root; register a paused GSAP timeline at window.__timelines[compositionId]. GSAP is bundled: no external scripts. Use window.__sclipProps; optional window.__sclipReady awaits embedded-image/font layout. No audio/video, external assets or nested/timed primitives; use normal media tools. Returns a draft id; preview_motif_draft, then add_motif. Reusable installation needs user approval. Rendering is local; authoring-model costs depend on provider.',
+    description: 'Create editable explanatory B-roll or motion graphics through HyperFrames. Custom semantic graphics are first-class: get_hyperframes_authoring_context supplies current canvas, existing intentions and composable motion primitives. scene_intent can record your visual purpose/beats; asset_bindings/font_bindings embed local assets by handle. Two modes: (1) recipe + props with exact width/height and duration_s builds an original tested graphic WITHOUT copying HTML. Read get_hyperframes_recipe to discover ids and prop definitions; supplied prop values become editable draft defaults. Process recipe includes connected stages and a moving marker with second_at/third_at narration beats. (2) Custom manifest + html supports designs beyond recipes. Supply metadata {name,size:[w,h],default_duration_s,props_schema} and one data-composition-id root; register a paused GSAP timeline at window.__timelines[compositionId]. GSAP is bundled: no external scripts. Use window.__sclipProps; optional window.__sclipReady awaits embedded-image/font layout. No audio/video, external assets or nested/timed primitives; use normal media tools. Returns a draft id; preview_motif_draft, then add_motif. Reusable installation needs user approval. Rendering is local; authoring-model costs depend on provider.',
     inputSchema: { type: 'object', properties: {
       recipe: { type: 'string', enum: ['comparison', 'numbers', 'process', 'timeline', 'key-point', 'annotation'], description: 'Optional shortcut: create a tested recipe with props rather than resending source. Omit manifest and html in this mode.' },
       props: { type: 'object', description: 'Recipe mode only: grounded instance values matching the recipe props_schema; unknown/invalid props reject.' },
@@ -53,6 +53,9 @@ export const MOTIF_TOOL_DEFS: ReadonlyArray<MotifToolDef> = [
         required: ['name', 'size', 'default_duration_s', 'props_schema'],
       },
       html: { type: 'string', description: 'Self-contained HyperFrames HTML/CSS/inline GSAP script.' },
+      scene_intent:{type:'object',description:'Optional agent-authored purpose and visual concept with actual content-time beats. A planning aid, not proof the motion was rendered.',properties:{purpose:{type:'string',maxLength:500},visual_concept:{type:'string',maxLength:500},entities:{type:'array',maxItems:12,items:{type:'string',maxLength:100}},beats:{type:'array',maxItems:12,items:{type:'object',properties:{at_s:{type:'number',minimum:0},description:{type:'string',maxLength:200}},required:['at_s','description'],additionalProperties:false}}},required:['purpose','visual_concept'],additionalProperties:false},
+      asset_bindings:{type:'array',maxItems:4,description:'Imported PNG/JPEG/WebP IDs bound immutably into HTML. Use src="sclip-asset:NAME" or CSS url(sclip-asset:NAME); the host embeds bytes without sending base64 through your prompt.',items:{type:'object',properties:{name:{type:'string'},media_id:{type:'string'}},required:['name','media_id'],additionalProperties:false}},
+      font_bindings:{type:'array',maxItems:2,description:'Explicit local font files embedded immutably; no network fonts. Use the supplied family in CSS. Entire source stays within 2MiB.',items:{type:'object',properties:{family:{type:'string'},path:{type:'string'},weight:{type:'integer',minimum:100,maximum:900}},required:['family','path'],additionalProperties:false}},
       from: { type: 'string', description: 'Optional existing Motif id to update after preview.' },
     }, oneOf: [{ required: ['recipe'], not: { anyOf: [{ required: ['manifest'] }, { required: ['html'] }] } }, { required: ['manifest', 'html'], not: { anyOf: [{ required: ['recipe'] }, { required: ['props'] }, { required: ['aspect'] }, { required: ['width'] }, { required: ['height'] }, { required: ['duration_s'] }] } }], additionalProperties: false },
   },
@@ -134,13 +137,16 @@ export const MOTIF_TOOL_DEFS: ReadonlyArray<MotifToolDef> = [
     name: 'preview_motif_draft',
     description:
       'Render one frame of a Motif (draft / installed / built-in) and return it as a ' +
-      'base64-encoded PNG, so you can SEE your output and self-correct. Args: `id`, ' +
+      'base64-encoded PNG plus a short local vision observation of those exact pixels (inspect=false returns image only). This is draft evidence, not current-timeline verification. Place a working first scene before polishing every draft. Args: `id`, ' +
       '`t_sec` (content time), optional `width`/`height` (default = the motif\'s size), ' +
       'optional `props`. Requires the app\'s preview runtime to be live; returns an error ' +
       '(rather than hanging) if it isn\'t ready.',
     inputSchema: {
       $schema: 'http://json-schema.org/draft-07/schema#',
       properties: {
+        t_secs:{type:'array',minItems:2,maxItems:4,items:{type:'number',minimum:0},description:'Optional increasing meaningful content times for one bounded motion preview. Omit t_sec in this mode; returns labelled images and observations for each. Draft evidence only.'},
+        inspect: {type:'boolean',description:'Default true: include local vision facts with the preview, avoiding a separate image-analysis call. False requests image only.'},
+        question: {type:'string',description:'Optional focused visual question for the local observer. Motion requires comparing actual frames.'},
         height: {
           description: 'Optional render height (default = the motif\'s manifest height).',
           format: 'uint32',
@@ -167,7 +173,7 @@ export const MOTIF_TOOL_DEFS: ReadonlyArray<MotifToolDef> = [
           type: ['integer', 'null'],
         },
       },
-      required: ['id', 'props', 't_sec'],
+      required: ['id'],
       title: 'PreviewMotifDraftArgs',
       type: 'object',
     },

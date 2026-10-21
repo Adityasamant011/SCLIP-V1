@@ -1544,6 +1544,7 @@ const zhCN: Resources = {
     cat_speech: "语音转录",
     cat_vlm: "视频理解",
     cat_stock: "素材库",
+    cat_account: "账户与账单",
     cat_agent: "代理",
     project_scope_blurb: "本页设置仅作用于当前项目，随工程文件保存。",
     startup_heading: "启动",

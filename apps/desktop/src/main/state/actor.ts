@@ -1,3 +1,4 @@
+import {applyReplaceSource} from './replaceSource'
 import { applyRippleCutRange, rangeCutLayerChanges } from './mutations/rangeCut'
 // apps/desktop/src/main/state/actor.ts
 import { createHash } from 'node:crypto'
@@ -144,6 +145,8 @@ export function createActor(opts: ActorOptions): ActorHandle {
   let mutationActor: Actor = actor
   const history = new History(opts.initial, actor, idGen(), clock()) // consumes the Initial op_id
   const subs = new Set<(e: ChangeEvent) => void>()
+  const repairReceipts=new Map<string,{input:string;result:McpCallResult;bytes:number}>()
+  let repairReceiptBytes=0
   const motifCatalog: MotifCatalog = opts.motifCatalog ?? new MotifCatalog()
 
   function current(): Project { return history.current() }
@@ -764,6 +767,7 @@ export function createActor(opts: ActorOptions): ActorHandle {
   //    (reset op_id + broadcast event id); a caller that built `next` via
   //    blankProject already spent its 4 ids → 6 total. ──
   function replaceState(next: Project): void {
+    repairReceipts.clear();repairReceiptBytes=0
     runValidate(next)                              // throws CommandFailure(ValidationFailed); no id spent
     history.reset(next, actor, idGen(), clock())   // +1 id (the 'Initial' op_id)
     broadcastUnrecorded('Replaced project state', current())  // +1 id (the event op_id)
@@ -2064,7 +2068,15 @@ export function createActor(opts: ActorOptions): ActorHandle {
           return {ok:true,result:toolJson({...receipt,starting_state_version:version(before),resulting_state_version:version(current()),
             ...rangeCutLayerChanges(before,current()),relationship_changes:changedAVRelationships(before,current()),geometry:transactionGeometry(current(),[...receipt.resulting_layer_ids,...receipt.moved]),evidence_origin:'AUTHORITATIVE_PROJECT_ACTOR'})}
         }
+        case 'get_transaction_receipt': {
+          const p=mcpDef('get_transaction_receipt').parseDedicated!(a),entry=repairReceipts.get(String(p.request_id))
+          return {ok:true,result:toolJson({known:!!entry,request_id:p.request_id,receipt:entry?.result,current_state_version:createHash('sha256').update(reviewState(current())).digest('hex'),scope:'Current ProjectActor lifetime only. Unknown is not proof that an earlier process did not commit; inspect current state before retrying.'})}
+        }
         case 'apply_repair_transaction': {
+          const replayKey=typeof a.request_id==='string'?a.request_id:undefined
+          const replayInput=createHash('sha256').update(JSON.stringify(a)).digest('hex')
+          const prior=replayKey?repairReceipts.get(replayKey):undefined
+          if(prior){if(prior.input!==replayInput)throw new McpArgError('REQUEST_ID_REUSED: an existing transaction ID cannot name a different edit');return prior.result}
           const before = current()
           const stateVersion = (p: Project) => createHash('sha256').update(reviewState(p)).digest('hex')
           const startingState = stateVersion(before)
@@ -2077,15 +2089,63 @@ export function createActor(opts: ActorOptions): ActorHandle {
             if (a.expected_state_version !== startingState) throw new McpArgError('STALE_TRANSACTION_STATE: reacquire current evidence and decide again')
             mcpDef('apply_repair_transaction').parseDedicated!(a)
             const specs = a.operations as Array<Record<string, unknown>>
-            const ops = specs.map(specToDryRunOp)
+            const references:Record<string,string>={}
             // The existing apply primitives execute only the named layer. No
             // linked sibling expansion or inferred creative operation is used.
             const operationResults: Array<Record<string, unknown>> = []
             const next = produce(before, draft => {
-              for (const [index, op] of ops.entries()) {
+              const resolveArgs=(input:Record<string,unknown>)=>Object.fromEntries(Object.entries(input).map(([key,value])=>{
+                if(['layer_id','track_id'].includes(key)&&typeof value==='string'&&value.startsWith('@')){
+                  const id=references[value.slice(1)];if(!id)throw new McpArgError(`Unknown or forward transaction reference ${value}`);return [key,id]
+                }return [key,value]
+              }))
+              for (const [index, raw] of specs.entries()) {
+                const spec=resolveArgs(raw)
+                if(['create_track','add_media_layer','add_text_layer','add_motif','set_param_track'].includes(String(spec.kind))){
+                  const args=resolveArgs(spec.arguments as Record<string,unknown>)
+                  let created:string|undefined,extra:string|undefined
+                  if(spec.kind==='create_track'){
+                    const comp=scopeComposition(draft,typeof args.composition_id==='string'?args.composition_id:null)
+                    if(args.label!==undefined&&(typeof args.label!=='string'||args.label.length>100))throw new McpArgError('Track label must be at most 100 characters')
+                    created=applyAddTrack(draft,idGen,args.label as string??null,undefined,comp.id)
+                  }else {
+                    const p=mcpDef(String(spec.kind)).parseDedicated!(spec.after_layer_id?{...args,t_start_us:0}:args)
+                    if(spec.kind==='set_param_track'){
+                      const id=String(p.layer),{tStartUs}=readLayerTrack(draft,id,String(p.param_key)),track=p.track as Animated<TrackValue>
+                      const shifted=track.mode==='Keyframed'?{...track,value:track.value.map(k=>({...k,t_us:k.t_us-tStartUs}))}:track
+                      applyUpdateLayerParamTrack(draft,id,String(p.param_key),shifted);enforceScaleLinkInvariant(draft,id)
+                      operationResults.push({requested_operation:raw,committed:true,affected_layer_ids:[id]});continue
+                    }
+                    if(typeof p.track_id!=='string')throw new McpArgError('Batch insertion requires an explicit track_id or a preceding @track reference')
+                    const track=String(p.track_id),comp=requireTrack(draft,track).comp
+                    if(p.composition_id&&p.composition_id!==comp.id)throw new McpArgError('Track is outside the requested composition')
+                    let start=Number(p.t_start_us)
+                    if(spec.after_layer_id){const requested=String(spec.after_layer_id),anchorId=requested.startsWith('@')?references[requested.slice(1)]:requested;const anchor=comp.tracks.flatMap(t=>t.layers).find(l=>l.id===anchorId);if(!anchor)throw new McpArgError('after_layer_id must reference a current layer in the insert composition');start=anchor.t_end_us+Number(spec.gap_us??0)}
+                    if(spec.kind==='add_media_layer'){
+                      const media=prodMediaLayer({mediaId:p.media_id},draft,comp)
+                      created=applyAddLayer(draft,idGen,track,media.params,start,start+media.durationUs)
+                      if(media.autoPairAudio){extra=applyAddLayer(draft,idGen,track,media.autoPairAudio,start,start+media.durationUs);applyLinksCreate(draft,idGen,[created,extra],null,false)}
+                    }else if(spec.kind==='add_text_layer'){
+                      const params=prodTextParams({content:p.content,x:p.x,y:p.y,fontFamily:p.font_family,fontSizePx:p.font_size_px,fontWeight:p.font_weight,fillColor:p.fill_color,outlineWidth:p.outline_width,outlineColor:p.outline_color,shadow:p.shadow,align:p.align,boxW:p.box_w},comp)
+                      created=applyAddLayer(draft,idGen,track,params,start,start+resolveDurationUs(p.duration_us as number))
+                    }else {
+                      const manifest=motifCatalog.get(String(p.motif_id));if(!manifest)throw new McpArgError('Unknown motif_id')
+                      const props=canonicalizeProps(manifest,p.props??null),end=resolveMotifTEndUs(start,p.t_end_us as number??null,manifest.default_duration_s,resolveMotifMaxDurUs(manifest,props))
+                      created=applyAddLayer(draft,idGen,track,motifLayerParams(manifest.id,manifest.version,props),start,end)
+                    }
+                  }
+                  if(typeof spec.ref==='string'&&created){if(references[spec.ref]||extra&&references[`${spec.ref}_audio`])throw new McpArgError('Transaction reference already bound');references[spec.ref]=created;if(extra)references[`${spec.ref}_audio`]=extra}
+                  operationResults.push({requested_operation:raw,committed:true,created_id:created,affected_layer_ids:spec.kind==='create_track'?[]:[created,...(extra?[extra]:[])]});continue
+                }
+                if(spec.kind==='delete_layer'){
+                  const id=parseUuid(spec.layer_id,'layer_id'),memberBefore=JSON.parse(JSON.stringify(requireLayer(draft,id).layer));applyDeleteLayer(draft,id)
+                  operationResults.push({requested_operation:raw,committed:true,affected_layer_ids:[id],before:memberBefore,after:null});continue
+                }
+                const op=spec.kind==='replace_source'?{kind:'ReplaceSource' as const,id:String(spec.layer_id),patch:spec.patch as Record<string,unknown>}:specToDryRunOp(spec)
                 if (!('id' in op)) throw new McpArgError('Unsupported transaction operation')
                 const memberBefore = JSON.parse(JSON.stringify(requireLayer(draft, op.id).layer))
-                if (op.kind === 'UpdateLayer') applyUpdateLayer(draft, op.id, op.patch)
+                if (op.kind === 'ReplaceSource') applyReplaceSource(draft,op.id,op.patch,McpArgError)
+                else if (op.kind === 'UpdateLayer') applyUpdateLayer(draft, op.id, op.patch)
                 else if (op.kind === 'UpdateLayerParams') {
                   applyUpdateLayerParams(draft, op.id, op.patch, motifCatalog)
                   enforceScaleLinkInvariant(draft, op.id)
@@ -2099,19 +2159,25 @@ export function createActor(opts: ActorOptions): ActorHandle {
             })
             runValidate(next) // Entire final batch, before checkpoint/publication.
             prepared = true
-            const ids = [...new Set(specs.map(op => String(op.layer_id)))]
+            const ids = [...new Set(operationResults.flatMap(op => (op.affected_layer_ids??[]) as string[]))]
             const observations = { operations: operationResults, relationship_changes: changedAVRelationships(before, next), geometry: transactionGeometry(next, ids) }
             checkpointId = checkpoint(String(a.reason), MCP_ACTOR)
             // Serialize the receipt before publishing; no fallible observer or
             // per-operation work runs after the single authoritative commit.
             const result = toolJson({ transaction_id: transactionId, status: 'success', checkpoint_id: checkpointId,
               starting_state_version: startingState, resulting_state_version: stateVersion(next), changed: JSON.stringify(next) !== JSON.stringify(before),
-              ...observations,
+              request_id:replayKey,references,...observations,
               evidence_origin: 'AUTHORITATIVE_PROJECT_ACTOR', verification: 'Reacquire fresh evidence for the selected issue modalities; Hermes judges the result.' })
             commit(HISTORY_SUMMARY.repairTransaction, layerRefs(ids), { kind: 'Coarse' }, draft => {
               Object.assign(draft, next)
             }, true)
-            return { ok: true, result }
+            const receipt:McpCallResult={ok:true,result}
+            if(replayKey){
+              const bytes=Buffer.byteLength(JSON.stringify(receipt))
+              if(bytes<=1024*1024){repairReceipts.set(replayKey,{input:replayInput,result:receipt,bytes});repairReceiptBytes+=bytes
+                while(repairReceipts.size>64||repairReceiptBytes>4*1024*1024){const id=repairReceipts.keys().next().value!;repairReceiptBytes-=repairReceipts.get(id)!.bytes;repairReceipts.delete(id)}}
+            }
+            return receipt
           } catch (e) {
             // No member ever publishes independently: a discarded draft or a
             // failure before history.record leaves the original snapshot intact.

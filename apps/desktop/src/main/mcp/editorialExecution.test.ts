@@ -53,7 +53,7 @@ describe('Phase 4B MCP schemas and revision agency',()=>{
     const issueId=JSON.parse(issue.content[0].text).issue.id
     await call('revision_control',{action:'select_issue',issue_id:issueId});await call('checkpoint',{label:'Hermes-selected checkpoint'})
     const version=createHash('sha256').update(reviewState(f.actor.snapshot())).digest('hex')
-    const result=await call('ripple_cut_range',{layer_ids:[id],start_us:2000000,end_us:4000000,expected_state_version:version})
+    const result=await call('ripple_cut_range',{layer_ids:[{item:[id]}],start_us:'2000000',end_us:'4000000',expected_state_version:version})
     expect(result.isError).not.toBe(true);expect(JSON.parse(result.content[0].text).downstream_shift_us).toBe(-2000000)
     expect((await call('revision_control',{action:'finish_issue',status:'resolved'})).isError).toBe(true)
     await call('get_timeline_context',{start_us:0,end_us:18000000})

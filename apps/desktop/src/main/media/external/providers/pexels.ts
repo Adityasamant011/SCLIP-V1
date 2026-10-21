@@ -1,9 +1,11 @@
+import {chooseVideoRendition} from '../videoRendition.js'
 import type {
   ExternalMediaCandidate,
   ExternalMediaProvider,
   ExternalMediaSearchOptions,
 } from '../types.js'
 import { getProviderKey } from '../credentials.js'
+import { sharedStockAvailable, stockSearchRequest } from '../sharedStock.js'
 
 export class PexelsProvider implements ExternalMediaProvider {
   readonly name = 'pexels' as const
@@ -14,7 +16,7 @@ export class PexelsProvider implements ExternalMediaProvider {
     const limit = Math.max(1, Math.min(80, options.limit ?? 10))
     const apiKey = getProviderKey('pexels')
 
-    if (!apiKey) {
+    if (!apiKey && !sharedStockAvailable()) {
       throw new Error('PROVIDER_NOT_CONFIGURED: Pexels API key is not configured.')
     }
 
@@ -24,24 +26,21 @@ export class PexelsProvider implements ExternalMediaProvider {
 
     if (media_type === 'either' || media_type === 'video') {
       try {
-        const videoRes = await fetch(
+        const videoRes = await stockSearchRequest('pexels',
           `https://api.pexels.com/videos/search?query=${encodeURIComponent(query)}&per_page=${limit}${orientationParam}`,
           {
-            headers: { Authorization: apiKey },
+            headers: { Authorization: apiKey ?? '' },
             signal: AbortSignal.timeout(8000),
-          },
+          }, !!apiKey,
         )
         if (videoRes.ok) {
           const data = (await videoRes.json()) as any
           for (const v of data.videos || []) {
-            const bestFile =
-              (v.video_files || []).find((f: any) => f.quality === 'hd') ||
-              (v.video_files || []).find((f: any) => f.width && f.width >= 1280) ||
-              v.video_files?.[0]
+            const bestFile = chooseVideoRendition(v.video_files || [])
 
             const directUrl = bestFile?.link
-            const width = v.width || bestFile?.width
-            const height = v.height || bestFile?.height
+            const width = bestFile?.width
+            const height = bestFile?.height
             const orient = width && height
               ? (width > height ? 'landscape' : width < height ? 'portrait' : 'square')
               : undefined
@@ -84,12 +83,12 @@ export class PexelsProvider implements ExternalMediaProvider {
 
     if (media_type === 'either' || media_type === 'image') {
       try {
-        const photoRes = await fetch(
+        const photoRes = await stockSearchRequest('pexels',
           `https://api.pexels.com/v1/search?query=${encodeURIComponent(query)}&per_page=${limit}${orientationParam}`,
           {
-            headers: { Authorization: apiKey },
+            headers: { Authorization: apiKey ?? '' },
             signal: AbortSignal.timeout(8000),
-          },
+          }, !!apiKey,
         )
         if (photoRes.ok) {
           const data = (await photoRes.json()) as any

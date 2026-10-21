@@ -890,3 +890,16 @@
 .settings-model-inline-editor { border-top: 1px solid var(--border); padding-top: 16px; }
 .settings-model-candidate > strong { font-size: var(--font-size-label); }
 .settings-model-swap { display: flex; justify-content: center; color: var(--muted-foreground); }
+
+.sclip-account-form { display: grid; gap: 12px; max-width: 24rem; }
+.sclip-account-form label { display: grid; gap: 8px; }
+.sclip-account-plans { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); gap: 16px; margin-block: 16px; }
+.sclip-account-plans .settings-card { display: flex; flex-direction: column; gap: 12px; padding: 16px; }
+.sclip-account-plans .settings-card button { margin-top: auto; }
+.startup-account { margin-left: auto; flex-shrink: 0; }
+.sclip-account { display: flex; flex-direction: column; gap: 12px; }
+.sclip-account > h3, .sclip-account > p { margin: 0; }
+.sclip-account > p { font-size: var(--font-size-body); line-height: 1.5; }
+.sclip-account-button, .sclip-account-refresh { align-self: flex-start; }
+.sclip-account-dialog { width: min(720px, calc(100vw - 32px)); }
+.sclip-account-dialog .settings-body > .sclip-account { padding: 24px; }

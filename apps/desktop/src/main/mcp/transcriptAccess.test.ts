@@ -156,3 +156,15 @@ describe('MCP transcript access and user-only export', () => {
     }
   })
 })
+
+it('reads a long cached transcript in one public call while keeping native reads bounded and exact',async()=>{
+ const {actor}=setup()
+ const spy=vi.fn(async (_name:string,json:string)=>{const a=JSON.parse(json);return envelope({media:{id:mediaId},range:{start_us:a.start_us,end_us:a.end_us},transcript:{status:'available',segments:[{text:'Exact text '+a.start_us,t_start_us:a.start_us,t_end_us:a.end_us}]}})})
+ const before=actor.snapshot()
+ const r:any=await handleCallTool({mcpCallTool:spy} as any,()=>({actor}) as any,'get_media_context',{media_id:mediaId,detail:'segments',start_us:0,end_us:180000000})
+ expect(r.isError).not.toBe(true);const b=JSON.parse(r.content[0].text)
+ expect(spy).toHaveBeenCalledTimes(3);expect(b.transcript.segments).toHaveLength(3)
+ expect(b.range).toEqual({start_us:0,end_us:180000000});expect(b.coordinate_space).toBe('source')
+ expect(b.detail_reference).toMatchObject({tool:'get_media_context',detail:'range',max_window_us:60000000})
+ expect(actor.snapshot()).toBe(before)
+})

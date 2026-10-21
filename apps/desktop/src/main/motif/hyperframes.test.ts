@@ -26,3 +26,8 @@ describe('HyperFrames graphics import', () => {
     expect(() => hyperframesToMotif(manifest, html)).toThrow()
   })
 })
+
+it('stamps omitted upstream canvas metadata without changing authored layout',()=>{
+ const html=hyperframesToMotif(manifest,source.replace(' data-width="320" data-height="180"','')).html
+ const markup=JSON.parse(html.match(/document\.body\.innerHTML = (.*);/)![1]); expect(markup).toContain('data-width="320"');expect(markup).toContain('data-height="180"')
+})

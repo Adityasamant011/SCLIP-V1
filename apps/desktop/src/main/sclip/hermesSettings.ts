@@ -1,6 +1,6 @@
 import type { HermesProfileConfig } from './hermesRuntime.js'
 
-export type HermesProvider = 'openrouter' | 'openai-api' | 'anthropic' | 'deepseek' | 'groq' | 'gemini' | 'ollama' | 'lmstudio' | 'custom'
+export type HermesProvider = 'sclip-managed' | 'openrouter' | 'openai-api' | 'anthropic' | 'deepseek' | 'groq' | 'gemini' | 'ollama' | 'lmstudio' | 'custom'
 
 interface ProviderCredential {
   tags: readonly string[]
@@ -17,7 +17,7 @@ const CREDENTIALS: Partial<Record<HermesProvider, ProviderCredential>> = {
   gemini: { tags: ['gemini'], env: 'GEMINI_API_KEY', required: true },
   custom: { tags: ['sclip_hermes_custom'], env: 'OPENAI_API_KEY', required: false },
 }
-export const HERMES_PROVIDERS: readonly HermesProvider[] = ['openrouter', 'openai-api', 'anthropic', 'deepseek', 'groq', 'gemini', 'ollama', 'lmstudio', 'custom']
+export const HERMES_PROVIDERS: readonly HermesProvider[] = ['sclip-managed', 'openrouter', 'openai-api', 'anthropic', 'deepseek', 'groq', 'gemini', 'ollama', 'lmstudio', 'custom']
 
 export function validateHermesProfile(update: Partial<HermesProfileConfig>): void {
   if (update.provider !== undefined && !HERMES_PROVIDERS.includes(update.provider as HermesProvider)) throw new Error('Unsupported Hermes provider')

@@ -1,16 +1,16 @@
+import { ownedCommand } from './ownedCommand.js'
+import { resolveFfmpegPath } from './rangeRender.js'
+import { runtimeScheduler, runtimeScope } from './runtimeScheduler.js'
 import { createHash } from 'node:crypto'
-import { execFile } from 'node:child_process'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { promisify } from 'node:util'
 import { buildSourceUnderstanding, sourceSpeechContext, SOURCE_MAP_LIMITS } from './sourceUnderstanding.js'
 import type { CachedTranscriptData } from './timelineContext.js'
 import type { MediaItem } from '../state/model.js'
 import type { AnalyzeResult, VisionSidecarManager } from './visionSidecar.js'
 
-const execFileAsync = promisify(execFile)
-export const SOURCE_OBSERVATION_ANALYSIS_VERSION = 3
+export const SOURCE_OBSERVATION_ANALYSIS_VERSION = 4
 const SOURCE_OBSERVATION_ANALYSIS_MODEL = 'vision-sidecar+audio-analyzer+transcript-cache'
 
 export interface SourceObservation {
@@ -83,14 +83,14 @@ function sourceHash(media: MediaItem): string {
 }
 
 async function extractFrame(sourcePath: string, timeUs: number, outputPath: string): Promise<void> {
-  await execFileAsync('ffmpeg', [
+  await ownedCommand(resolveFfmpegPath(process.resourcesPath), [
     '-hide_banner', '-loglevel', 'error', '-y',
     '-ss', (timeUs / 1_000_000).toFixed(3),
     '-i', sourcePath,
     '-frames:v', '1',
     '-q:v', '3',
     outputPath,
-  ])
+  ],runtimeScope.getStore()?.signal)
 }
 
 function sampleTimes(startUs: number, endUs: number): number[] {
@@ -102,13 +102,14 @@ function sampleTimes(startUs: number, endUs: number): number[] {
 }
 
 export class SourceObservationIndex {
+  private get analysisIdentity(): string {return SOURCE_OBSERVATION_ANALYSIS_MODEL+'-'+createHash('sha256').update(this.options.visionSidecar.modelIdentity??'unreported').digest('hex').slice(0,20)}
   private readonly frameExtractor: typeof extractFrame
   private readonly audioExtractor: (sourcePath: string, startUs: number, endUs: number, outputPath: string) => Promise<void>
 
   constructor(private readonly options: SourceObservationIndexOptions) {
     this.frameExtractor = options.frameExtractor ?? extractFrame
     this.audioExtractor = options.audioExtractor ?? (async (sourcePath, startUs, endUs, outputPath) => {
-      await execFileAsync('ffmpeg', [
+      await ownedCommand(resolveFfmpegPath(process.resourcesPath), [
         '-hide_banner', '-loglevel', 'error', '-y',
         '-ss', (startUs / 1_000_000).toFixed(3),
         '-t', ((endUs - startUs) / 1_000_000).toFixed(3),
@@ -121,17 +122,22 @@ export class SourceObservationIndex {
     return path.join(
       this.options.cacheDir,
       'source-observations',
-      `${sourceHash(media)}-v${SOURCE_OBSERVATION_ANALYSIS_VERSION}-${SOURCE_OBSERVATION_ANALYSIS_MODEL}-${startUs}-${endUs}${single ? "-coarse" : ""}.json`,
+      `${sourceHash(media)}-v${SOURCE_OBSERVATION_ANALYSIS_VERSION}-${this.analysisIdentity}-${startUs}-${endUs}${single ? "-coarse" : ""}.json`,
     )
   }
 
-  async retrieve(
+  async retrieve(media:MediaItem,startUs=0,endUs?:number,limit=8,singleSample=false):Promise<SourceObservationIndexResult> {
+    const key=JSON.stringify([sourceHash(media),media.path_abs,startUs,endUs,limit,singleSample,this.analysisIdentity])
+    return runtimeScheduler.run('source_observations',[],()=>this.retrieveUncached(media,startUs,endUs,limit,singleSample),{coalesce_key:key})
+  }
+  private async retrieveUncached(
     media: MediaItem,
     startUs = 0,
     endUs?: number,
     limit = 8,
     singleSample = false,
   ): Promise<SourceObservationIndexResult> {
+    runtimeScope.getStore()?.signal?.throwIfAborted()
     const durationUs = media.metadata.duration_us ?? null
     const requestedEnd = Math.min(endUs ?? startUs + 120_000_000, durationUs ?? Number.MAX_SAFE_INTEGER)
     if (!Number.isSafeInteger(startUs) || startUs < 0 || !Number.isSafeInteger(requestedEnd) || requestedEnd <= startUs) {
@@ -146,7 +152,7 @@ export class SourceObservationIndex {
       const persisted = JSON.parse(await fs.readFile(cache, 'utf8')) as PersistedIndex
       if (persisted.source_hash === sourceHash(media) &&
           persisted.analysis_version === SOURCE_OBSERVATION_ANALYSIS_VERSION &&
-      persisted.analysis_model === SOURCE_OBSERVATION_ANALYSIS_MODEL &&
+      persisted.analysis_model === this.analysisIdentity &&
       persisted.source_path === media.path_abs &&
       // A transient missing model must not become permanent cached absence.
       (media.kind !== 'Video' || persisted.observations.some(o => o.kind === 'visual'))) {
@@ -166,7 +172,7 @@ export class SourceObservationIndex {
       for (const timeUs of times) {
         const framePath = path.join(tempDir, `${timeUs}.jpg`)
         try {
-          await this.frameExtractor(media.path_abs, timeUs, framePath)
+          await runtimeScheduler.run('source_frame',['ffmpeg'],()=>this.frameExtractor(media.path_abs, timeUs, framePath))
           const result: AnalyzeResult = await this.options.visionSidecar.analyze({
             imagePath: framePath,
             question: 'Describe only the visible scene, people, objects, actions, and meaningful visual changes. Do not infer sound or unseen events. Give concise factual evidence.',
@@ -252,7 +258,7 @@ export class SourceObservationIndex {
       media_id: media.id,
       source_hash: sourceHash(media),
       analysis_version: SOURCE_OBSERVATION_ANALYSIS_VERSION,
-      analysis_model: SOURCE_OBSERVATION_ANALYSIS_MODEL,
+      analysis_model: this.analysisIdentity,
       source_duration_us: durationUs,
       analysis_range_us: [startUs,requestedEnd],
       verified_metadata: {
@@ -278,7 +284,7 @@ export class SourceObservationIndex {
       source_path: media.path_abs,
     }
     await fs.mkdir(path.dirname(cache), { recursive: true })
-    const tempCache = `${cache}.${this.options.now?.() ?? Date.now()}.tmp`
+    const tempCache = `${cache}.${this.options.now?.() ?? Date.now()}.${Math.random().toString(36).slice(2)}.tmp`
     await fs.writeFile(tempCache, JSON.stringify(persisted, null, 2), 'utf8')
     await fs.rename(tempCache, cache)
     return this.select(persisted, startUs, requestedEnd, limit, false)
@@ -295,7 +301,7 @@ export class SourceObservationIndex {
       for (const file of files) {
         try {
           const data = JSON.parse(await fs.readFile(path.join(dir,file),'utf8')) as PersistedIndex
-          if(data.source_hash===sourceHash(media) && data.source_path===media.path_abs && data.analysis_model===SOURCE_OBSERVATION_ANALYSIS_MODEL) indexes.push({...data,media_id:media.id,cached:true})
+          if(data.source_hash===sourceHash(media) && data.source_path===media.path_abs && data.analysis_model===this.analysisIdentity) indexes.push({...data,media_id:media.id,cached:true})
         } catch {}
       }
     } catch {}

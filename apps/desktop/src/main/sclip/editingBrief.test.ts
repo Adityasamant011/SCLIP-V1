@@ -39,3 +39,13 @@ describe('explicit output requirements, without editorial decisions',()=>{
   expect(prompt.feed('text\x1b[D\r')).toEqual([null])
  })
 })
+
+it('distinguishes maximum/minimum/range from exact targets without prescribing padding',()=>{
+ const project=blankProject(uuidV7Gen(),'synthetic');project.compositions[project.root_id].duration_us=149583333
+ const max=explicitOutputDuration('make it max3min actually')!
+ expect(max.kind).toBe('maximum');expect(currentOutput(project,max).duration_requirement?.met).toBe(true)
+ expect(currentOutput(project,explicitOutputDuration('Make it at least 3 minutes')).duration_requirement?.met).toBe(false)
+ expect(currentOutput(project,explicitOutputDuration('Make a video between 2 and 3 minutes')).duration_requirement?.met).toBe(true)
+ expect(explicitOutputDuration('Keep it 3 min max')?.kind).toBe('maximum')
+ expect(explicitOutputDuration('Make it 3 minutes')?.target_us).toBe(180000000)
+})

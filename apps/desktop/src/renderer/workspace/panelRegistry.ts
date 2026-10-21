@@ -112,7 +112,7 @@ export const PANEL_REGISTRY: Readonly<Record<PanelKind, PanelDefinition>> = {
     kind: "caption",
     titleKey: "dock_workspace.panels.caption",
     ...TOOL_MINIMUM,
-    initiallyOpen: false,
+    initiallyOpen: true,
   },
   // Closed by default, and the one Panel whose absence LOSES something: a
   // hibernating marker is painted on no lane, so this is the only surface that
@@ -146,7 +146,7 @@ export const PANEL_REGISTRY: Readonly<Record<PanelKind, PanelDefinition>> = {
     kind: "agent",
     titleKey: "dock_workspace.panels.agent",
     ...TOOL_MINIMUM,
-    initiallyOpen: false,
+    initiallyOpen: true,
   },
   // Closed by default like the other on-demand tool Panels: the edit stack is
   // pulled over its own IPC channel (`project_history_view`), so a closed

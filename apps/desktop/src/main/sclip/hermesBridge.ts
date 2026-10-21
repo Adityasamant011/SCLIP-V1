@@ -31,6 +31,7 @@ interface BridgeConfig {
   getMcpStatus: () => { port?: number; tools: number; resources: number }
   getProfileConfig?: () => { provider: string; model: string }
   getCreatorContext?: (projectId: string, request?: string) => string
+  prepareCreatorRequest?: (projectId: string, sessionId: string, turnId: string, text: string) => string
   assertCreatorGateway?: (projectId: string) => void
   getCreatorSessionKey?: (projectId: string) => string
   redactForRenderer?: (text: string) => string
@@ -109,9 +110,10 @@ export async function getHermesStatus(): Promise<HermesStatus> {
   }
 }
 
-export async function listProjectSessions(projectId: string): Promise<{ activeSessionId: string | null; sessions: HermesSessionView[] }> {
+export async function listProjectSessions(projectId: string, includeMessages = true): Promise<{ activeSessionId: string | null; sessions: HermesSessionView[] }> {
   const local = bridge().sessions.list(projectId)
-  const sessions = await Promise.all(local.sessions.map(async session => ({ ...session, messages: await sessionMessages(remoteSessionId(projectId, session.id)) })))
+  const sessions = includeMessages ? await Promise.all(local.sessions.map(async session => ({ ...session, messages: await sessionMessages(remoteSessionId(projectId, session.id)) })))
+    : local.sessions.map(session => ({ ...session, messages: [] }))
   return { activeSessionId: local.activeSessionId, sessions }
 }
 
@@ -168,7 +170,8 @@ export async function startHermesRun(input: { prompt: string; projectId: string;
   try {
     // Hermes owns conversation identity. WeftCut remains the authority for all video state via MCP.
     bridge().assertCreatorGateway?.(input.projectId)
-    const creatorContext = bridge().getCreatorContext?.(input.projectId, input.prompt) ?? ''
+    const creatorContext = bridge().prepareCreatorRequest?.(input.projectId,input.sessionId,randomUUID(),input.prompt)
+      ?? bridge().getCreatorContext?.(input.projectId, input.prompt) ?? ''
     const profile = bridge().getProfileConfig?.()
     const response = await request('/v1/runs', {
       method: 'POST', headers: headers(true), body: JSON.stringify({

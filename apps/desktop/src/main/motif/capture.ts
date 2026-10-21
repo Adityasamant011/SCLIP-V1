@@ -1,9 +1,12 @@
+import { CaptureQueue } from './captureQueue.js'
 import { BrowserWindow } from 'electron'
 import { hardenWindow, markInternalWindow } from '../windows'
 import { BUILTIN_MANIFESTS, canonicalizeProps, motifCtxDurationS, type Manifest } from '../../shared/motifs/catalog.js'
 import type { UserMotifStore } from './store.js'
 
 interface CaptureArgs {
+  priority?: 'inspection' | 'interactive' | 'background'
+  owner?: string
   motifId: string
   tSec: number
   propsJson: string
@@ -43,7 +46,7 @@ let host: Host | null = null
 
 // Serialize ALL captures (on-demand sprite / prewarmer / baker / MCP) on the one
 // host — single-threaded but await-interleaved.
-let chain: Promise<unknown> = Promise.resolve()
+const captureQueue=new CaptureQueue<string>()
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms))
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
@@ -186,8 +189,7 @@ async function doCapture(a: CaptureArgs): Promise<string> {
 }
 
 export function captureMotifFrameB64(a: CaptureArgs): Promise<string> {
-  const run = chain.then(() => doCapture(a))
-  // Keep the chain alive even if this capture rejects.
-  chain = run.then(() => undefined, () => undefined)
-  return run
+  const priority=a.priority==='background'?0:a.priority==='interactive'?10:20
+  const key=JSON.stringify([a.motifId,a.contentHash,a.tSec,a.propsJson,a.width,a.height,a.settleRafs])
+  return captureQueue.run(key,()=>doCapture(a),priority,a.priority==='interactive'?a.owner:undefined)
 }
